@@ -49,9 +49,11 @@ function pruneHistory() {
 
 // ── Runtime ──────────────────────────────────────────────────────────────────
 const sessions = new Map<string, pty.IPty>();
+const oscBuffers = new Map<string, string>();
 let mainWindow: BrowserWindow | null = null;
 let dashboardPort = 0;
 let zdotdir = "";
+let focusedSessionId: string | null = null;
 let state = loadState();
 
 pruneHistory();
@@ -93,19 +95,45 @@ function createSession(
   });
 
   const histStream = fs.createWriteStream(historyPath(num), { flags: "a" });
+  oscBuffers.set(sessionId, "");
 
-  ptyProcess.onData((data) => {
-    histStream.write(data);
-    send(`terminal:output:${sessionId}`, data);
+  ptyProcess.onData((rawData) => {
+    // Prepend any previously buffered partial OSC sequence
+    let buf = (oscBuffers.get(sessionId) ?? "") + rawData;
+
+    // Process all complete OSC 9999 sequences (CWD+git updates), strip them
+    const oscRe = /\x1b\]9999;([^\x1c]*)\x1c([^\x07]*)\x07/;
+    let m: RegExpMatchArray | null;
+    while ((m = oscRe.exec(buf)) !== null) {
+      send("terminal:cwd-update", sessionId, m[1], m[2]);
+      buf = buf.slice(0, m.index) + buf.slice(m.index! + m[0].length);
+    }
+
+    // If a partial OSC sequence starts near the end, hold it back for the next chunk
+    const partialIdx = buf.lastIndexOf("\x1b]9999;");
+    if (partialIdx !== -1) {
+      oscBuffers.set(sessionId, buf.slice(partialIdx));
+      buf = buf.slice(0, partialIdx);
+    } else {
+      oscBuffers.set(sessionId, "");
+    }
+
+    histStream.write(buf);
+    send(`terminal:output:${sessionId}`, buf);
   });
 
   ptyProcess.onExit(() => {
+    oscBuffers.delete(sessionId);
     histStream.end();
     send(`terminal:exit:${sessionId}`);
     sessions.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);
+
+  // Send initial CWD immediately so the panel title bar shows it before precmd fires
+  setTimeout(() => send("terminal:cwd-update", sessionId, os.homedir(), ""), 300);
+
   return { sessionId, number: num };
 }
 
@@ -124,8 +152,22 @@ function startHttpServer() {
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         try {
-          const { sessionId, cwd } = JSON.parse(body);
-          send("terminal:cwd-update", sessionId, cwd);
+          const { sessionId, cwd, gitBranch } = JSON.parse(body);
+          send("terminal:cwd-update", sessionId, cwd, gitBranch ?? "");
+        } catch {}
+        res.writeHead(200);
+        res.end();
+      });
+    } else if (req.method === "POST" && req.url === "/cd") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          const { cwd } = JSON.parse(body);
+          const target = focusedSessionId ?? [...sessions.keys()].at(-1);
+          if (target && cwd) {
+            sessions.get(target)?.write(`cd ${JSON.stringify(cwd)}\r`);
+          }
         } catch {}
         res.writeHead(200);
         res.end();
@@ -138,6 +180,7 @@ function startHttpServer() {
 
   server.listen(0, "127.0.0.1", () => {
     dashboardPort = (server.address() as AddressInfo).port;
+    fs.writeFileSync(join(dataDir, "port"), String(dashboardPort));
     setupZdotdir();
   });
 }
@@ -156,7 +199,30 @@ function setupZdotdir() {
   fs.writeFileSync(
     join(zdotdir, ".zshrc"),
     `
+# Per-session compdump to avoid locking conflicts across panels
+export ZSH_COMPDUMP="/tmp/.zcompdump-\${TERMINAL_SESSION_ID}"
+
+# Stub out uninstalled version managers to prevent command-not-found errors
+command -v rbenv  &>/dev/null || rbenv()  { : }
+command -v pyenv  &>/dev/null || pyenv()  { : }
+command -v nodenv &>/dev/null || nodenv() { : }
+command -v nvm    &>/dev/null || nvm()    { : }
+
+# Ensure history is shared with other sessions
+export HISTFILE="$HOME/.zsh_history"
+export HISTSIZE=50000
+export SAVEHIST=50000
+
 [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
+
+# Force-load zsh-autosuggestions if not already active (in case .zshrc failed to load it)
+(( ! \${+functions[_zsh_autosuggest_start]} )) && \
+  [[ -f /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && \
+  source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+
+# Disable async mode (can cause issues in pty environments) and set visible color
+ZSH_AUTOSUGGEST_USE_ASYNC=0
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#5c6773"
 
 _td_new_panel() {
   curl -s -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/new-terminal" > /dev/null
@@ -176,13 +242,20 @@ open() {
   fi
 }
 
-# Report CWD to dashboard on every prompt
+# Friendly exit message
+exit() {
+  echo "\\033[36mBye! 👋\\033[0m"
+  builtin exit "$@"
+}
+
+# Report CWD + git branch via OSC escape sequence (real-time, no curl needed)
 _td_update_cwd() {
-  curl -s -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/update-cwd" \
-    -H "Content-Type: application/json" \
-    -d "{\"sessionId\":\"$TERMINAL_SESSION_ID\",\"cwd\":\"$PWD\"}" > /dev/null &!
+  local _git_branch=""
+  _git_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+  printf "\\033]9999;%s\\034%s\\007" "$PWD" "$_git_branch"
 }
 precmd_functions+=(_td_update_cwd)
+chpwd_functions+=(_td_update_cwd)
 
 # cd <partial-name> → fuzzy-match ~/Documents/GitHub/*
 cd() {
@@ -220,6 +293,13 @@ function createWindow() {
     mainWindow.loadFile(join(__dirname, "../../out/renderer/index.html"));
   }
 }
+
+app.setAboutPanelOptions({
+  applicationName: "Terminal Dashboard",
+  applicationVersion: "0.1.0",
+  copyright: "© 2026 Tung Tran <tranthaitung.inbox@gmail.com>",
+  iconPath: join(__dirname, "../../build/icons/icon.icns"),
+});
 
 app.whenReady().then(() => {
   startHttpServer();
@@ -298,4 +378,8 @@ ipcMain.on("terminal:close", (_, id: string) => {
 
 ipcMain.on("terminal:delete-history", (_, num: number) => {
   try { fs.unlinkSync(historyPath(num)); } catch {}
+});
+
+ipcMain.on("terminal:set-focused", (_, sessionId: string) => {
+  focusedSessionId = sessionId;
 });

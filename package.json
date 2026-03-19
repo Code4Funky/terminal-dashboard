@@ -1,6 +1,7 @@
 {
   "name": "terminal-dashboard",
   "version": "0.1.0",
+  "author": "Tung Tran <tranthaitung.inbox@gmail.com>",
   "description": "Multi-panel terminal dashboard",
   "main": "out/main/index.js",
   "scripts": {
@@ -32,7 +33,8 @@
     "productName": "Terminal Dashboard",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icons/icon.icns"
     },
     "files": ["out/**/*"],
     "extraResources": []

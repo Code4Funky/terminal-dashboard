@@ -7,6 +7,7 @@ interface Props {
   panelNumber: number | null;
   title: string;
   cwd?: string;
+  gitBranch?: string;
   onClose: () => void;
   focused: boolean;
   onFocus: () => void;
@@ -14,10 +15,7 @@ interface Props {
 
 function formatCwd(cwd: string): string {
   const home = "/Users/" + (cwd.split("/")[2] ?? "");
-  const shortened = cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
-  const parts = shortened.split("/").filter(Boolean);
-  if (parts.length <= 2) return shortened;
-  return "~/" + parts.slice(-2).join("/");
+  return cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
 }
 
 export function TerminalPanel({
@@ -25,6 +23,7 @@ export function TerminalPanel({
   panelNumber,
   title,
   cwd,
+  gitBranch,
   onClose,
   focused,
   onFocus,
@@ -65,7 +64,14 @@ export function TerminalPanel({
         <span style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "monospace", fontSize: 12 }}>
           <span style={{ color: focused ? "#58a6ff" : "#8b949e" }}>{title}</span>
           {cwd && (
-            <span style={{ color: "#484f58" }}>{formatCwd(cwd)}</span>
+            <span style={{ color: "#6e7681" }}>{formatCwd(cwd)}</span>
+          )}
+          {gitBranch && (
+            <span style={{ color: "#6e7681" }}>
+              {"git:("}
+              <span style={{ color: "#e06c75" }}>{gitBranch}</span>
+              {")"}
+            </span>
           )}
         </span>
         <button

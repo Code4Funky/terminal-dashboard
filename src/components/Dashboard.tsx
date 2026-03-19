@@ -8,6 +8,7 @@ interface PanelState {
   number: number;
   title: string;
   cwd?: string;
+  gitBranch?: string;
 }
 
 type Columns = 1 | 2 | 3 | 4;
@@ -52,7 +53,8 @@ export function Dashboard() {
           });
         }
         setPanels(restored);
-        setFocusedId(restored.at(-1)?.id ?? null);
+        const last = restored.at(-1);
+        if (last) { setFocusedId(last.id); window.terminal.setFocused(last.sessionId); }
       } else {
         const { sessionId, number } = await window.terminal.create(220, 50);
         const panel: PanelState = {
@@ -63,6 +65,7 @@ export function Dashboard() {
         };
         setPanels([panel]);
         setFocusedId(panel.id);
+        window.terminal.setFocused(panel.sessionId);
         savePanels([panel]);
       }
     });
@@ -77,9 +80,9 @@ export function Dashboard() {
 
   // ── Listen for CWD updates from shell ────────────────────────────────────
   useEffect(() => {
-    const cleanup = window.terminal.onCwdUpdate((sessionId, cwd) => {
+    const cleanup = window.terminal.onCwdUpdate((sessionId, cwd, gitBranch) => {
       setPanels((prev) =>
-        prev.map((p) => (p.sessionId === sessionId ? { ...p, cwd } : p))
+        prev.map((p) => (p.sessionId === sessionId ? { ...p, cwd, gitBranch: gitBranch || undefined } : p))
       );
     });
     return cleanup;
@@ -258,8 +261,9 @@ export function Dashboard() {
             panelNumber={panel.number}
             title={panel.title}
             cwd={panel.cwd}
+            gitBranch={panel.gitBranch}
             focused={panel.id === focusedId}
-            onFocus={() => setFocusedId(panel.id)}
+            onFocus={() => { setFocusedId(panel.id); window.terminal.setFocused(panel.sessionId); }}
             onClose={() => handleClose(panel.id)}
           />
         ))}

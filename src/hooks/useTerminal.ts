@@ -27,7 +27,8 @@ declare global {
       onNewPanel: (
         cb: (sessionId: string, number: number) => void
       ) => () => void;
-      onCwdUpdate: (cb: (sessionId: string, cwd: string) => void) => () => void;
+      onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void) => () => void;
+      setFocused: (sessionId: string) => void;
     };
   }
 }
@@ -56,7 +57,7 @@ export function useTerminal(
         magenta: "#bf3fbd",
         cyan: "#00c5c7",
         white: "#c7c7c7",
-        brightBlack: "#676767",
+        brightBlack: "#5c6773",
         brightRed: "#dc7974",
         brightGreen: "#57e690",
         brightYellow: "#ece100",
@@ -98,7 +99,7 @@ export function useTerminal(
       });
 
       const removeExit = window.terminal.onExit(sessionId, () => {
-        term.write("\r\n\x1b[31m[session closed]\x1b[0m\r\n");
+        term.write("\r\n\x1b[2m[session ended]\x1b[0m\r\n");
       });
 
       term.onData((data) => {

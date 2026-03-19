@@ -58,10 +58,13 @@ contextBridge.exposeInMainWorld("terminal", {
     return () => ipcRenderer.removeListener("terminal:new-panel", handler);
   },
 
-  onCwdUpdate: (cb: (sessionId: string, cwd: string) => void): (() => void) => {
-    const handler = (_: Electron.IpcRendererEvent, sessionId: string, cwd: string) =>
-      cb(sessionId, cwd);
+  onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, sessionId: string, cwd: string, gitBranch: string) =>
+      cb(sessionId, cwd, gitBranch);
     ipcRenderer.on("terminal:cwd-update", handler);
     return () => ipcRenderer.removeListener("terminal:cwd-update", handler);
   },
+
+  setFocused: (sessionId: string): void =>
+    ipcRenderer.send("terminal:set-focused", sessionId),
 });

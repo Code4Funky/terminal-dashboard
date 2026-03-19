@@ -1,0 +1,301 @@
+import { app, BrowserWindow, ipcMain } from "electron";
+import { join } from "path";
+import { createServer } from "http";
+import { AddressInfo } from "net";
+import * as fs from "fs";
+import * as pty from "node-pty";
+import os from "os";
+
+app.name = "Terminal Dashboard";
+
+// ── Paths ────────────────────────────────────────────────────────────────────
+const dataDir = join(os.homedir(), ".terminal-dashboard");
+const stateFile = join(dataDir, "state.json");
+const historyDir = join(dataDir, "history");
+
+fs.mkdirSync(historyDir, { recursive: true });
+
+// ── State ────────────────────────────────────────────────────────────────────
+interface SavedPanel {
+  number: number;
+  title: string;
+}
+interface AppState {
+  terminalCounter: number;
+  lastPanels: SavedPanel[];
+}
+
+function loadState(): AppState {
+  try {
+    return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  } catch {
+    return { terminalCounter: 0, lastPanels: [] };
+  }
+}
+
+function saveState(state: AppState) {
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+}
+
+function pruneHistory() {
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  try {
+    for (const f of fs.readdirSync(historyDir)) {
+      const p = join(historyDir, f);
+      if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+    }
+  } catch {}
+}
+
+// ── Runtime ──────────────────────────────────────────────────────────────────
+const sessions = new Map<string, pty.IPty>();
+let mainWindow: BrowserWindow | null = null;
+let dashboardPort = 0;
+let zdotdir = "";
+let state = loadState();
+
+pruneHistory();
+
+function send(channel: string, ...args: unknown[]) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, ...args);
+  }
+}
+
+function historyPath(num: number) {
+  return join(historyDir, `terminal-${num}.log`);
+}
+
+function createSession(
+  cols: number,
+  rows: number,
+  panelNumber?: number
+): { sessionId: string; number: number } {
+  const num = panelNumber ?? ++state.terminalCounter;
+  if (!panelNumber) saveState(state);
+
+  const sessionId = crypto.randomUUID();
+  const shell =
+    process.env.SHELL ||
+    (process.platform === "win32" ? "cmd.exe" : "/bin/zsh");
+
+  const ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd: os.homedir(),
+    env: {
+      ...process.env,
+      ZDOTDIR: zdotdir,
+      TERMINAL_DASHBOARD_PORT: String(dashboardPort),
+      TERMINAL_SESSION_ID: sessionId,
+    } as Record<string, string>,
+  });
+
+  const histStream = fs.createWriteStream(historyPath(num), { flags: "a" });
+
+  ptyProcess.onData((data) => {
+    histStream.write(data);
+    send(`terminal:output:${sessionId}`, data);
+  });
+
+  ptyProcess.onExit(() => {
+    histStream.end();
+    send(`terminal:exit:${sessionId}`);
+    sessions.delete(sessionId);
+  });
+
+  sessions.set(sessionId, ptyProcess);
+  return { sessionId, number: num };
+}
+
+// ── HTTP server (new_terminal / nt shell command) ─────────────────────────────
+function startHttpServer() {
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/new-terminal") {
+      const { sessionId, number } = createSession(220, 50);
+      state.lastPanels.push({ number, title: `terminal ${number}` });
+      saveState(state);
+      send("terminal:new-panel", sessionId, number);
+      res.writeHead(200);
+      res.end(sessionId);
+    } else if (req.method === "POST" && req.url === "/update-cwd") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          const { sessionId, cwd } = JSON.parse(body);
+          send("terminal:cwd-update", sessionId, cwd);
+        } catch {}
+        res.writeHead(200);
+        res.end();
+      });
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  server.listen(0, "127.0.0.1", () => {
+    dashboardPort = (server.address() as AddressInfo).port;
+    setupZdotdir();
+  });
+}
+
+// ── Shell injection ───────────────────────────────────────────────────────────
+function setupZdotdir() {
+  zdotdir = fs.mkdtempSync(join(os.tmpdir(), "terminal-dashboard-"));
+
+  const scriptPath = join(zdotdir, "new-terminal");
+  fs.writeFileSync(
+    scriptPath,
+    `#!/bin/zsh\ncurl -s -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/new-terminal" > /dev/null\n`
+  );
+  fs.chmodSync(scriptPath, 0o755);
+
+  fs.writeFileSync(
+    join(zdotdir, ".zshrc"),
+    `
+[[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
+
+_td_new_panel() {
+  curl -s -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/new-terminal" > /dev/null
+  echo "\\033[32m[dashboard] new panel opened\\033[0m"
+}
+alias new_terminal=_td_new_panel
+alias nt=_td_new_panel
+
+export TERMINAL="${scriptPath}"
+
+open() {
+  local joined="\${*}"
+  if [[ "$joined" =~ "-a (Terminal|iTerm|iTerm2|Hyper|Warp|Alacritty)" ]]; then
+    _td_new_panel
+  else
+    command open "$@"
+  fi
+}
+
+# Report CWD to dashboard on every prompt
+_td_update_cwd() {
+  curl -s -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/update-cwd" \
+    -H "Content-Type: application/json" \
+    -d "{\"sessionId\":\"$TERMINAL_SESSION_ID\",\"cwd\":\"$PWD\"}" > /dev/null &!
+}
+precmd_functions+=(_td_update_cwd)
+
+# cd <partial-name> → fuzzy-match ~/Documents/GitHub/*
+cd() {
+  local github_dir="$HOME/Documents/GitHub"
+  if [[ $# -eq 1 && "$1" != /* && "$1" != ~* && "$1" != .* && "$1" != - ]]; then
+    local matches=("$github_dir"/*"$1"*(N/) "$github_dir"/"$1"*(N/))
+    if [[ \${#matches[@]} -gt 0 ]]; then
+      builtin cd "\${matches[1]}"
+      return
+    fi
+  fi
+  builtin cd "$@"
+}
+`
+  );
+}
+
+// ── Window ────────────────────────────────────────────────────────────────────
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    titleBarStyle: "hiddenInset",
+    backgroundColor: "#0d1117",
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  if (process.env["ELECTRON_RENDERER_URL"]) {
+    mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+  } else {
+    mainWindow.loadFile(join(__dirname, "../../out/renderer/index.html"));
+  }
+}
+
+app.whenReady().then(() => {
+  startHttpServer();
+  createWindow();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on("window-all-closed", () => {
+  sessions.forEach((p) => p.kill());
+  sessions.clear();
+  if (zdotdir) fs.rmSync(zdotdir, { recursive: true, force: true });
+  mainWindow = null;
+  if (process.platform !== "darwin") app.quit();
+});
+
+// ── IPC ───────────────────────────────────────────────────────────────────────
+ipcMain.handle("terminal:get-state", () => state);
+
+ipcMain.handle(
+  "terminal:create",
+  (_, cols: number, rows: number, panelNumber?: number) => {
+    return createSession(cols, rows, panelNumber);
+  }
+);
+
+ipcMain.handle("terminal:get-history", (_, num: number): string => {
+  const file = historyPath(num);
+  if (!fs.existsSync(file)) return "";
+  const stat = fs.statSync(file);
+  const readSize = Math.min(stat.size, 200 * 1024); // last 200 KB
+  const buf = Buffer.alloc(readSize);
+  const fd = fs.openSync(file, "r");
+  fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
+  fs.closeSync(fd);
+  return buf.toString();
+});
+
+ipcMain.on(
+  "terminal:save-panels",
+  (_, panels: { number: number; title: string }[]) => {
+    state.lastPanels = panels;
+    saveState(state);
+  }
+);
+
+ipcMain.handle("terminal:list-history", () => {
+  try {
+    return fs
+      .readdirSync(historyDir)
+      .filter((f) => f.startsWith("terminal-") && f.endsWith(".log"))
+      .map((f) => {
+        const num = parseInt(f.replace("terminal-", "").replace(".log", ""));
+        const stat = fs.statSync(join(historyDir, f));
+        return { number: num, size: stat.size, lastModified: stat.mtimeMs };
+      })
+      .sort((a, b) => b.number - a.number);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.on("terminal:write", (_, id: string, data: string) => {
+  sessions.get(id)?.write(data);
+});
+
+ipcMain.on("terminal:resize", (_, id: string, cols: number, rows: number) => {
+  sessions.get(id)?.resize(cols, rows);
+});
+
+ipcMain.on("terminal:close", (_, id: string) => {
+  sessions.get(id)?.kill();
+  sessions.delete(id);
+});
+
+ipcMain.on("terminal:delete-history", (_, num: number) => {
+  try { fs.unlinkSync(historyPath(num)); } catch {}
+});

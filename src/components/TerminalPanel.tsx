@@ -8,6 +8,8 @@ interface Props {
   title: string;
   cwd?: string;
   gitBranch?: string;
+  fontFamily?: string;
+  fontSize?: number;
   onClose: () => void;
   focused: boolean;
   onFocus: () => void;
@@ -24,12 +26,14 @@ export function TerminalPanel({
   title,
   cwd,
   gitBranch,
+  fontFamily,
+  fontSize,
   onClose,
   focused,
   onFocus,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { focus } = useTerminal(containerRef, sessionId, panelNumber);
+  const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize);
 
   useEffect(() => {
     if (focused) focus();
@@ -95,10 +99,9 @@ export function TerminalPanel({
       </div>
 
       {/* Terminal area */}
-      <div
-        ref={containerRef}
-        style={{ flex: 1, padding: "4px", minHeight: 0, overflow: "hidden" }}
-      />
+      <div style={{ flex: 1, padding: "4px 4px 32px 4px", minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
+      </div>
     </div>
   );
 }

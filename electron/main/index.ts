@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { join } from "path";
+import { join, basename } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
+import { execSync } from "child_process";
 import * as fs from "fs";
 import * as pty from "node-pty";
 import os from "os";
@@ -12,6 +13,7 @@ app.name = "Terminal Dashboard";
 const dataDir = join(os.homedir(), ".terminal-dashboard");
 const stateFile = join(dataDir, "state.json");
 const historyDir = join(dataDir, "history");
+const claudeSessionsDir = join(os.homedir(), ".claude", "sessions");
 
 fs.mkdirSync(historyDir, { recursive: true });
 
@@ -88,7 +90,7 @@ function createSession(
     cwd: os.homedir(),
     env: {
       ...process.env,
-      ZDOTDIR: zdotdir,
+      ZDOTDIR: zdotdir || undefined,
       TERMINAL_DASHBOARD_PORT: String(dashboardPort),
       TERMINAL_SESSION_ID: sessionId,
     } as Record<string, string>,
@@ -182,6 +184,7 @@ function startHttpServer() {
     dashboardPort = (server.address() as AddressInfo).port;
     fs.writeFileSync(join(dataDir, "port"), String(dashboardPort));
     setupZdotdir();
+    createWindow();
   });
 }
 
@@ -302,19 +305,29 @@ app.setAboutPanelOptions({
 });
 
 app.whenReady().then(() => {
-  startHttpServer();
-  createWindow();
+  startHttpServer(); // createWindow() is called inside once zdotdir is ready
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      // zdotdir was deleted when the window closed — recreate it before opening
+      setupZdotdir();
+      createWindow();
+    }
   });
 });
 
 app.on("window-all-closed", () => {
   sessions.forEach((p) => p.kill());
   sessions.clear();
-  if (zdotdir) fs.rmSync(zdotdir, { recursive: true, force: true });
+  // On macOS the app stays alive in the dock — clean up zdotdir only on full quit
+  if (process.platform !== "darwin") {
+    if (zdotdir) fs.rmSync(zdotdir, { recursive: true, force: true });
+    app.quit();
+  }
   mainWindow = null;
-  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  if (zdotdir) fs.rmSync(zdotdir, { recursive: true, force: true });
 });
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
@@ -382,4 +395,105 @@ ipcMain.on("terminal:delete-history", (_, num: number) => {
 
 ipcMain.on("terminal:set-focused", (_, sessionId: string) => {
   focusedSessionId = sessionId;
+});
+
+// ── iTerm2 Font IPC ───────────────────────────────────────────────────────────
+ipcMain.handle("iterm2:get-font", () => {
+  try {
+    const plistPath = join(os.homedir(), "Library/Preferences/com.googlecode.iterm2.plist");
+    const tmpPath = join(os.tmpdir(), "td_iterm2_font.plist");
+
+    // xml1 works reliably; json conversion fails on plist types iTerm2 uses
+    execSync(`plutil -convert xml1 -o "${tmpPath}" "${plistPath}"`);
+    const pyScript = join(os.tmpdir(), "td_iterm2_font.py");
+    fs.writeFileSync(pyScript, [
+      `import plistlib`,
+      `with open(${JSON.stringify(tmpPath)}, 'rb') as f:`,
+      `    data = plistlib.load(f)`,
+      `profiles = data.get('New Bookmarks', [])`,
+      `print(profiles[0].get('Normal Font', '') if profiles else '')`,
+    ].join("\n"));
+    const fontStr = execSync(`python3 ${pyScript}`, { timeout: 5000 }).toString().trim();
+    try { fs.unlinkSync(tmpPath); } catch {}
+    try { fs.unlinkSync(pyScript); } catch {}
+
+    if (!fontStr) return null;
+
+    // Format: "PostScriptName Size" e.g. "MesloLGSDZNFM-Regular 12"
+    const lastSpace = fontStr.lastIndexOf(" ");
+    const postScriptName = fontStr.slice(0, lastSpace);
+    const size = parseInt(fontStr.slice(lastSpace + 1), 10);
+
+    // Resolve PostScript name → CSS family name via fc-list (available via Homebrew on macOS).
+    // We only need the family name — system fonts are accessible to Electron's renderer
+    // directly by CSS family name without @font-face.
+    const fcLines = execSync(`fc-list --format="%{postscriptname}\t%{family}\t%{file}\n"`, { timeout: 5000 })
+      .toString().split("\n");
+
+    const match = fcLines.find((l) => l.startsWith(postScriptName + "\t"));
+    if (!match) return null;
+
+    const [, family] = match.split("\t");
+
+    return { family, size: isNaN(size) ? 12 : size, files: [] };
+  } catch {
+    return null;
+  }
+});
+
+// ── Claude Sessions IPC ───────────────────────────────────────────────────────
+ipcMain.handle("claude:list-sessions", () => {
+  try {
+    if (!fs.existsSync(claudeSessionsDir)) return [];
+    return fs
+      .readdirSync(claudeSessionsDir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => {
+        const stat = fs.statSync(join(claudeSessionsDir, f));
+        return { filename: f, size: stat.size, lastModified: stat.mtimeMs };
+      })
+      .sort((a, b) => b.lastModified - a.lastModified);
+  } catch {
+    return [];
+  }
+});
+
+interface ClaudeMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp?: string;
+}
+
+
+ipcMain.handle("claude:read-session", (_, filename: string): ClaudeMessage[] => {
+  const safe = basename(filename);
+  const file = join(claudeSessionsDir, safe);
+  try {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const messages: ClaudeMessage[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== "user" && entry.type !== "assistant") continue;
+        const msg = entry.message;
+        if (!msg) continue;
+        let text = "";
+        if (typeof msg.content === "string") {
+          text = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          text = msg.content
+            .filter((b: { type: string }) => b.type === "text")
+            .map((b: { text: string }) => b.text)
+            .join("");
+        }
+        if (text.trim()) {
+          messages.push({ role: entry.type, content: text, timestamp: entry.timestamp });
+        }
+      } catch {}
+    }
+    return messages;
+  } catch {
+    return [];
+  }
 });

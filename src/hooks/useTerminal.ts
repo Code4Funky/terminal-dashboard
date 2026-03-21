@@ -29,6 +29,9 @@ declare global {
       ) => () => void;
       onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void) => () => void;
       setFocused: (sessionId: string) => void;
+      getIterm2Font: () => Promise<{ family: string; size: number } | null>;
+      listClaudeSessions: () => Promise<{ filename: string; size: number; lastModified: number }[]>;
+      readClaudeSession: (filename: string) => Promise<{ role: string; content: string; timestamp?: string }[]>;
     };
   }
 }
@@ -36,7 +39,9 @@ declare global {
 export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   sessionId: string | null,
-  panelNumber: number | null
+  panelNumber: number | null,
+  fontFamily = "MesloLGS NF, Monaco, monospace",
+  fontSize = 12
 ) {
   const termRef = useRef<Terminal | null>(null);
 
@@ -66,8 +71,8 @@ export function useTerminal(
         brightCyan: "#5ffdff",
         brightWhite: "#feffff",
       },
-      fontFamily: "Monaco, monospace",
-      fontSize: 12,
+      fontFamily,
+      fontSize,
       lineHeight: 1,
       cursorBlink: true,
       cursorStyle: "bar",
@@ -84,42 +89,61 @@ export function useTerminal(
 
     termRef.current = term;
 
-    // Replay history then connect live output
+    // Register output listener immediately — PTY starts producing output right
+    // away, and the getHistory IPC roundtrip would otherwise drop zsh's startup.
+    // Buffer live output during history replay, flush once xterm finishes parsing.
+    const liveBuffer: string[] = [];
+    let historyDone = false;
+
+    const removeOutput = window.terminal.onOutput(sessionId, (data) => {
+      if (!historyDone) {
+        liveBuffer.push(data);
+      } else {
+        term.write(data, () => term.scrollToBottom());
+      }
+    });
+
+    const removeExit = window.terminal.onExit(sessionId, () => {
+      term.write("\r\n\x1b[2m[session ended]\x1b[0m\r\n");
+    });
+
+    // Gate onData forwarding until history is fully parsed by xterm.
+    // xterm.write() is async/batched — DA responses triggered by history
+    // escape sequences would otherwise be sent to the new shell's stdin.
+    term.onData((data) => {
+      if (!historyDone) return;
+      window.terminal.write(sessionId, data);
+    });
+
+    const cleanupRef = { current: () => {} };
+    cleanupRef.current = () => {
+      removeOutput();
+      removeExit();
+    };
+
+    const flushBuffer = () => {
+      historyDone = true;
+      for (const chunk of liveBuffer) term.write(chunk);
+      liveBuffer.length = 0;
+      term.scrollToBottom();
+    };
+
     window.terminal.getHistory(panelNumber).then((history) => {
       if (history) {
         term.write(history);
         term.write("\x18"); // CAN: cancel any partial escape sequence left by history
         term.write(
-          "\r\n\x1b[90m─── restored ───────────────────────────────────\x1b[0m\r\n"
+          "\r\n\x1b[90m─── restored ───────────────────────────────────\x1b[0m\r\n",
+          () => {
+            flushBuffer();
+            // Clear any DA garbage that reached the shell before gating
+            window.terminal.write(sessionId, "\x15");
+          }
         );
+      } else {
+        flushBuffer();
       }
-
-      const removeOutput = window.terminal.onOutput(sessionId, (data) => {
-        term.write(data);
-      });
-
-      const removeExit = window.terminal.onExit(sessionId, () => {
-        term.write("\r\n\x1b[2m[session ended]\x1b[0m\r\n");
-      });
-
-      term.onData((data) => {
-        window.terminal.write(sessionId, data);
-      });
-
-      // xterm may have responded to DA queries in the history via onData, sending
-      // e.g. \033[?1;2c to the new shell's stdin. Clear the shell input line.
-      if (history) {
-        setTimeout(() => window.terminal.write(sessionId, "\x15"), 100);
-      }
-
-      // Store cleanup fns so the effect cleanup can call them
-      cleanupRef.current = () => {
-        removeOutput();
-        removeExit();
-      };
     });
-
-    const cleanupRef = { current: () => {} };
 
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();

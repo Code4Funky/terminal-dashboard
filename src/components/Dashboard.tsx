@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { TerminalPanel } from "./TerminalPanel";
 import { HistoryDrawer } from "./HistoryDrawer";
+import { ClaudeSessionsDrawer } from "./ClaudeSessionsDrawer";
 
 interface PanelState {
   id: string;
@@ -31,13 +32,22 @@ export function Dashboard() {
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showClaudeSessions, setShowClaudeSessions] = useState(false);
+  const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
   const initialized = useRef(false);
 
-  // ── Init: restore last panels or create one fresh ───────────────────────
+  // ── Load iTerm2 font, then restore panels ────────────────────────────────
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
 
+    window.terminal.getIterm2Font().then((font) => {
+      setTermFont(font);
+      initPanels();
+    });
+  }, []);
+
+  async function initPanels() {
     window.terminal.getState().then(async ({ lastPanels }) => {
       const toRestore = lastPanels.length > 0 ? lastPanels : null;
 
@@ -69,7 +79,7 @@ export function Dashboard() {
         savePanels([panel]);
       }
     });
-  }, []);
+  }
 
   // ── Save panels on unload ────────────────────────────────────────────────
   useEffect(() => {
@@ -212,7 +222,24 @@ export function Dashboard() {
         <div style={{ flex: 1 }} />
 
         <button
-          onClick={() => setShowHistory((v) => !v)}
+          onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); }}
+          style={{
+            background: showClaudeSessions ? "#388bfd26" : "none",
+            border: showClaudeSessions ? "1px solid #58a6ff" : "1px solid #30363d",
+            borderRadius: 6,
+            color: showClaudeSessions ? "#58a6ff" : "#8b949e",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 600,
+            padding: "4px 12px",
+            WebkitAppRegion: "no-drag" as const,
+          }}
+        >
+          Claude Sessions
+        </button>
+
+        <button
+          onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); }}
           style={{
             background: showHistory ? "#388bfd26" : "none",
             border: showHistory ? "1px solid #58a6ff" : "1px solid #30363d",
@@ -241,6 +268,10 @@ export function Dashboard() {
         />
       )}
 
+      {showClaudeSessions && (
+        <ClaudeSessionsDrawer onClose={() => setShowClaudeSessions(false)} />
+      )}
+
       {/* Panel grid */}
       <div
         style={{
@@ -263,6 +294,8 @@ export function Dashboard() {
             cwd={panel.cwd}
             gitBranch={panel.gitBranch}
             focused={panel.id === focusedId}
+            fontFamily={termFont?.family}
+            fontSize={termFont?.size}
             onFocus={() => { setFocusedId(panel.id); window.terminal.setFocused(panel.sessionId); }}
             onClose={() => handleClose(panel.id)}
           />

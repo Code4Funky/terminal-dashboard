@@ -67,4 +67,16 @@ contextBridge.exposeInMainWorld("terminal", {
 
   setFocused: (sessionId: string): void =>
     ipcRenderer.send("terminal:set-focused", sessionId),
+
+  getIterm2Font: (): Promise<{ family: string; size: number; files: string[] } | null> =>
+    ipcRenderer.invoke("iterm2:get-font"),
+
+  listClaudeSessions: (): Promise<
+    { filename: string; size: number; lastModified: number }[]
+  > => ipcRenderer.invoke("claude:list-sessions"),
+
+  readClaudeSession: (
+    filename: string
+  ): Promise<{ role: string; content: string; timestamp?: string }[]> =>
+    ipcRenderer.invoke("claude:read-session", filename),
 });

@@ -30,6 +30,28 @@ declare global {
       onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void) => () => void;
       setFocused: (sessionId: string) => void;
       getIterm2Font: () => Promise<{ family: string; size: number } | null>;
+      getStats: (month?: string) => Promise<{
+        claude: {
+          currentMonth: string;
+          totalSessions: number;
+          monthSessions: number;
+          totalMessages: number;
+          monthMessages: number;
+          totalInputTokens: number;
+          totalOutputTokens: number;
+          totalCacheReadTokens: number;
+          totalCacheCreationTokens: number;
+          monthInputTokens: number;
+          monthOutputTokens: number;
+          monthCacheReadTokens: number;
+          monthCacheCreationTokens: number;
+          estimatedCost: number;
+          modelBreakdown: { model: string; cost: number; costContent: number; costCache: number; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }[];
+          dailyCounts: { date: string; count: number }[];
+          dailyTokens: { date: string; tokens: number }[];
+        };
+        repos: { name: string; visits: number; lastSeen: number }[];
+      }>;
       listClaudeSessions: () => Promise<{ filename: string; size: number; lastModified: number }[]>;
       readClaudeSession: (filename: string) => Promise<{ role: string; content: string; timestamp?: string }[]>;
     };

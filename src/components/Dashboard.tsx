@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { TerminalPanel } from "./TerminalPanel";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { ClaudeSessionsDrawer } from "./ClaudeSessionsDrawer";
+import { StatsDrawer } from "./StatsDrawer";
 
 interface PanelState {
   id: string;
@@ -33,6 +34,7 @@ export function Dashboard() {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showClaudeSessions, setShowClaudeSessions] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
   const initialized = useRef(false);
 
@@ -222,7 +224,24 @@ export function Dashboard() {
         <div style={{ flex: 1 }} />
 
         <button
-          onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); }}
+          onClick={() => { setShowStats((v) => !v); setShowHistory(false); setShowClaudeSessions(false); }}
+          style={{
+            background: showStats ? "#3fb95026" : "none",
+            border: showStats ? "1px solid #3fb950" : "1px solid #30363d",
+            borderRadius: 6,
+            color: showStats ? "#3fb950" : "#8b949e",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 600,
+            padding: "4px 12px",
+            WebkitAppRegion: "no-drag" as const,
+          }}
+        >
+          Stats
+        </button>
+
+        <button
+          onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); setShowStats(false); }}
           style={{
             background: showClaudeSessions ? "#388bfd26" : "none",
             border: showClaudeSessions ? "1px solid #58a6ff" : "1px solid #30363d",
@@ -239,7 +258,7 @@ export function Dashboard() {
         </button>
 
         <button
-          onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); }}
+          onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); setShowStats(false); }}
           style={{
             background: showHistory ? "#388bfd26" : "none",
             border: showHistory ? "1px solid #58a6ff" : "1px solid #30363d",
@@ -259,6 +278,10 @@ export function Dashboard() {
           {panels.length} session{panels.length !== 1 ? "s" : ""}
         </span>
       </div>
+
+      {showStats && (
+        <StatsDrawer onClose={() => setShowStats(false)} />
+      )}
 
       {showHistory && (
         <HistoryDrawer

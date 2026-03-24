@@ -71,6 +71,29 @@ contextBridge.exposeInMainWorld("terminal", {
   getIterm2Font: (): Promise<{ family: string; size: number; files: string[] } | null> =>
     ipcRenderer.invoke("iterm2:get-font"),
 
+  getStats: (month?: string): Promise<{
+    claude: {
+      currentMonth: string;
+      totalSessions: number;
+      monthSessions: number;
+      totalMessages: number;
+      monthMessages: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalCacheReadTokens: number;
+      totalCacheCreationTokens: number;
+      monthInputTokens: number;
+      monthOutputTokens: number;
+      monthCacheReadTokens: number;
+      monthCacheCreationTokens: number;
+      estimatedCost: number;
+      modelBreakdown: { model: string; cost: number; costContent: number; costCache: number; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }[];
+      dailyCounts: { date: string; count: number }[];
+      dailyTokens: { date: string; tokens: number }[];
+    };
+    repos: { name: string; visits: number; lastSeen: number }[];
+  }> => ipcRenderer.invoke("stats:get-data", month),
+
   listClaudeSessions: (): Promise<
     { filename: string; size: number; lastModified: number }[]
   > => ipcRenderer.invoke("claude:list-sessions"),

@@ -45,17 +45,17 @@ export function TerminalPanel({
         display: "flex",
         flexDirection: "column",
         border: focused
-          ? "1px solid rgba(139, 92, 246, 0.55)"
-          : "1px solid rgba(139, 92, 246, 0.1)",
+          ? "1px solid rgba(0, 255, 135, 0.45)"
+          : "1px solid rgba(0, 255, 135, 0.1)",
         borderRadius: 8,
         overflow: "hidden",
-        background: "rgba(7, 5, 18, 0.45)",
+        background: "rgba(0, 255, 135, 0.04)",
         backdropFilter: "blur(12px)",
         WebkitBackdropFilter: "blur(12px)",
         minHeight: 0,
         boxShadow: focused
-          ? "0 0 0 1px rgba(20,184,166,0.12), 0 4px 32px rgba(124,58,237,0.18), inset 0 1px 0 rgba(139,92,246,0.06)"
-          : "0 2px 16px rgba(0,0,0,0.4)",
+          ? "0 0 0 1px rgba(0,255,135,0.08), 0 4px 28px rgba(0,0,0,0.35)"
+          : "0 2px 14px rgba(0,0,0,0.3)",
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
       onClick={onFocus}
@@ -67,37 +67,30 @@ export function TerminalPanel({
           alignItems: "center",
           justifyContent: "space-between",
           padding: "4px 10px",
-          background: focused ? "rgba(10, 7, 28, 0.7)" : "rgba(5, 3, 14, 0.6)",
+          background: focused ? "rgba(10, 26, 15, 0.75)" : "rgba(7, 18, 10, 0.65)",
           borderBottom: focused
-            ? "1px solid rgba(139, 92, 246, 0.18)"
-            : "1px solid rgba(139, 92, 246, 0.07)",
+            ? "1px solid rgba(0, 255, 135, 0.14)"
+            : "1px solid rgba(0, 255, 135, 0.06)",
           userSelect: "none",
           flexShrink: 0,
         }}
       >
         <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-          <span style={{ color: focused ? "#a78bfa" : "#475569" }}>{title}</span>
+          <span style={{ color: focused ? "#00f080" : "rgba(0,240,128,0.45)" }}>{title}</span>
           {cwd && (
-            <span style={{ color: "#334155" }}>{formatCwd(cwd)}</span>
+            <span style={{ color: "rgba(0,210,120,0.28)" }}>{formatCwd(cwd)}</span>
           )}
         </span>
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
           style={{
-            background: "none",
-            border: "none",
-            color: "#475569",
-            cursor: "pointer",
-            fontSize: 14,
-            lineHeight: 1,
-            padding: "0 2px",
+            background: "none", border: "none",
+            color: "rgba(0,210,120,0.28)",
+            cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px",
             transition: "color 0.15s",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#475569")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,210,120,0.28)")}
           title="Close"
         >
           ×

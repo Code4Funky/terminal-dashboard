@@ -24,10 +24,7 @@ function formatSize(bytes: number): string {
 
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
 
@@ -58,72 +55,55 @@ export function ClaudeSessionsDrawer({ onClose }: Props) {
     setLoading(false);
   };
 
-  const glassStyle: React.CSSProperties = {
-    width: selected ? 520 : 300,
-    flexShrink: 0,
-    background: "rgba(7, 5, 20, 0.84)",
-    backdropFilter: "blur(28px) saturate(160%)",
-    WebkitBackdropFilter: "blur(28px) saturate(160%)",
-    borderLeft: "1px solid rgba(139, 92, 246, 0.15)",
-    display: "flex",
-    flexDirection: "column",
-    boxShadow: "-4px 0 32px rgba(0,0,0,0.5)",
-    transition: "width 0.15s ease",
-  };
-
   return (
-    <div style={glassStyle}>
+    <div style={{
+      width: selected ? 520 : 300, flexShrink: 0,
+      background: "rgba(10, 26, 15, 0.84)",
+      backdropFilter: "blur(28px) saturate(150%)",
+      WebkitBackdropFilter: "blur(28px) saturate(150%)",
+      borderLeft: "1px solid rgba(0, 255, 135, 0.12)",
+      display: "flex", flexDirection: "column",
+      boxShadow: "-4px 0 28px rgba(0,0,0,0.4)",
+      transition: "width 0.15s ease",
+    }}>
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 14px",
-          borderBottom: "1px solid rgba(139, 92, 246, 0.1)",
-          flexShrink: 0,
-          background: "rgba(10, 8, 28, 0.5)",
-          gap: 8,
-        }}
-      >
+      <div style={{
+        display: "flex", alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 14px",
+        borderBottom: "1px solid rgba(0, 255, 135, 0.1)",
+        flexShrink: 0,
+        background: "rgba(8, 20, 12, 0.5)",
+        gap: 8,
+      }}>
         {selected && (
           <button
             onClick={() => { setSelected(null); setMessages([]); }}
             style={{
-              background: "none",
-              border: "none",
-              color: "#64748b",
-              cursor: "pointer",
-              fontSize: 14,
-              lineHeight: 1,
-              padding: 0,
-              flexShrink: 0,
-              transition: "color 0.15s",
+              background: "none", border: "none",
+              color: "rgba(0,210,120,0.28)",
+              cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
+              flexShrink: 0, transition: "color 0.15s",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "#a78bfa")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "#64748b")}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#00f080")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,210,120,0.28)")}
             title="Back to list"
           >
             ←
           </button>
         )}
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", flex: 1, fontFamily: "'Syne', sans-serif" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#e2fff3", flex: 1, fontFamily: "'Syne', sans-serif" }}>
           {selected ? formatSessionLabel(selected.filename) : "Claude Sessions"}
         </span>
         <button
           onClick={onClose}
           style={{
-            background: "none",
-            border: "none",
-            color: "#475569",
-            cursor: "pointer",
-            fontSize: 16,
-            lineHeight: 1,
-            padding: 0,
-            transition: "color 0.15s",
+            background: "none", border: "none",
+            color: "rgba(0,210,120,0.28)",
+            cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, transition: "color 0.15s",
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#475569")}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#e2fff3")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,210,120,0.28)")}
         >
           ×
         </button>
@@ -133,7 +113,7 @@ export function ClaudeSessionsDrawer({ onClose }: Props) {
       {!selected ? (
         <div style={{ flex: 1, overflowY: "auto" }}>
           {sessions.length === 0 ? (
-            <div style={{ padding: 16, color: "#334155", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
+            <div style={{ padding: 16, color: "rgba(0,210,120,0.28)", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
               No sessions found in ~/.claude/sessions/
             </div>
           ) : (
@@ -142,31 +122,23 @@ export function ClaudeSessionsDrawer({ onClose }: Props) {
                 key={s.filename}
                 onClick={() => handleSelect(s)}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
                   padding: "8px 14px",
-                  borderBottom: "1px solid rgba(139, 92, 246, 0.07)",
-                  cursor: "pointer",
-                  gap: 8,
-                  transition: "background 0.12s",
+                  borderBottom: "1px solid rgba(0, 255, 135, 0.06)",
+                  cursor: "pointer", gap: 8, transition: "background 0.12s",
                 }}
-                onMouseEnter={(e) =>
-                  ((e.currentTarget as HTMLDivElement).style.background = "rgba(139, 92, 246, 0.07)")
-                }
-                onMouseLeave={(e) =>
-                  ((e.currentTarget as HTMLDivElement).style.background = "")
-                }
+                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = "rgba(0, 255, 135, 0.05)")}
+                onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "")}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: "#c4b5fd", fontFamily: "'DM Mono', monospace" }}>
+                  <div style={{ fontSize: 12, color: "#d4ffee", fontFamily: "'DM Mono', monospace" }}>
                     {formatSessionLabel(s.filename)}
                   </div>
-                  <div style={{ fontSize: 10, color: "#334155", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>
+                  <div style={{ fontSize: 10, color: "rgba(0,210,120,0.28)", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>
                     {formatDate(s.lastModified)} · {formatSize(s.size)}
                   </div>
                 </div>
-                <span style={{ fontSize: 11, color: "#475569", flexShrink: 0 }}>›</span>
+                <span style={{ fontSize: 11, color: "rgba(0,240,128,0.45)", flexShrink: 0 }}>›</span>
               </div>
             ))
           )}
@@ -174,45 +146,32 @@ export function ClaudeSessionsDrawer({ onClose }: Props) {
       ) : (
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
           {loading ? (
-            <div style={{ padding: 16, color: "#334155", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
+            <div style={{ padding: 16, color: "rgba(0,210,120,0.28)", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
               Loading…
             </div>
           ) : messages.length === 0 ? (
-            <div style={{ padding: 16, color: "#334155", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
+            <div style={{ padding: 16, color: "rgba(0,210,120,0.28)", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
               No messages found.
             </div>
           ) : (
             messages.map((msg, i) => (
               <div
                 key={i}
-                style={{
-                  padding: "8px 14px",
-                  borderBottom: "1px solid rgba(139, 92, 246, 0.06)",
-                }}
+                style={{ padding: "8px 14px", borderBottom: "1px solid rgba(0, 255, 135, 0.05)" }}
               >
-                <div
-                  style={{
-                    fontSize: 9,
-                    fontWeight: 700,
-                    color: msg.role === "user" ? "#60a5fa" : "#a78bfa",
-                    textTransform: "uppercase",
-                    letterSpacing: 0.8,
-                    marginBottom: 4,
-                    fontFamily: "'Syne', sans-serif",
-                  }}
-                >
+                <div style={{
+                  fontSize: 9, fontWeight: 700,
+                  color: msg.role === "user" ? "#00f080" : "rgba(0,240,128,0.45)",
+                  textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4,
+                  fontFamily: "'Syne', sans-serif",
+                }}>
                   {msg.role}
                 </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "#94a3b8",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    lineHeight: 1.6,
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
+                <div style={{
+                  fontSize: 12, color: "#d4ffee",
+                  whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6,
+                  fontFamily: "'DM Mono', monospace",
+                }}>
                   {msg.content}
                 </div>
               </div>

@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
     <style>
       *, *::before, *::after { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; height: 100%; background: #070714; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #112b1c; }
       #root { height: 100%; }
 
       @keyframes gradientShift {
@@ -20,27 +20,28 @@
 
       @keyframes orbFloat1 {
         0%, 100% { transform: translate(0, 0) scale(1); }
-        33%  { transform: translate(28px, -38px) scale(1.04); }
-        66%  { transform: translate(-18px, 18px) scale(0.97); }
+        33%  { transform: translate(24px, -32px) scale(1.04); }
+        66%  { transform: translate(-16px, 16px) scale(0.97); }
       }
 
       @keyframes orbFloat2 {
         0%, 100% { transform: translate(0, 0) scale(1); }
-        40%  { transform: translate(-36px, 28px) scale(1.07); }
-        70%  { transform: translate(22px, -18px) scale(0.96); }
+        40%  { transform: translate(-30px, 24px) scale(1.06); }
+        70%  { transform: translate(20px, -14px) scale(0.96); }
       }
 
       .btn-animated-gradient {
-        background: linear-gradient(-45deg, #7c3aed, #8b5cf6, #0d9488, #14b8a6) !important;
-        background-size: 400% 400% !important;
+        background: linear-gradient(-45deg, #00ff87, #00d4aa, #00b4d8, #00d4aa, #00ff87) !important;
+        background-size: 300% 300% !important;
         animation: gradientShift 5s ease infinite;
         border: none !important;
+        color: #071a0e !important;
         transition: transform 0.15s ease, box-shadow 0.15s ease !important;
       }
 
       .btn-animated-gradient:hover {
         transform: translateY(-1px);
-        box-shadow: 0 6px 28px rgba(124, 58, 237, 0.5) !important;
+        box-shadow: 0 5px 22px rgba(0, 255, 135, 0.32) !important;
       }
 
       .btn-animated-gradient:active {

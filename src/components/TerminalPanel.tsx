@@ -36,7 +36,7 @@ export function TerminalPanel({
       style={{
         display: "flex", flexDirection: "column",
         border: focused
-          ? "1px solid rgba(255,255,255,0.18)"
+          ? "1px solid rgba(34,197,94,0.55)"
           : "1px solid rgba(255,255,255,0.07)",
         borderRadius: 8, overflow: "hidden",
         background: "rgba(255,255,255,0.02)",
@@ -44,11 +44,13 @@ export function TerminalPanel({
         WebkitBackdropFilter: "blur(12px)",
         minHeight: 0,
         boxShadow: focused
-          ? "0 0 0 1px rgba(96,165,250,0.1), 0 4px 28px rgba(0,0,0,0.4)"
+          ? "0 0 0 1px rgba(34,197,94,0.15), 0 4px 28px rgba(0,0,0,0.4)"
           : "0 2px 14px rgba(0,0,0,0.3)",
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
       onClick={onFocus}
+      onMouseEnter={(e) => { if (!focused) e.currentTarget.style.borderColor = "rgba(34,197,94,0.28)"; }}
+      onMouseLeave={(e) => { if (!focused) e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"; }}
     >
       {/* Title bar */}
       <div style={{

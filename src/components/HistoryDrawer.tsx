@@ -63,8 +63,8 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
               opacity: clearing ? 0.5 : 1, transition: "all 0.15s",
               flexShrink: 0, fontFamily: "'Syne', sans-serif",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.13)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.07)"; }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.2)"; e.currentTarget.style.borderColor = "rgba(248,113,113,0.4)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.07)"; e.currentTarget.style.borderColor = "rgba(248,113,113,0.22)"; }}
           >
             🗑 Clear closed ({closedCount})
           </button>

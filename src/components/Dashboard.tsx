@@ -210,7 +210,7 @@ export function Dashboard() {
   return (
     <div style={{
       display: "flex", flexDirection: "column", height: "100%",
-      background: "linear-gradient(135deg, #0d1117 0%, #111827 50%, #0f172a 100%)",
+      background: "linear-gradient(135deg, #0f1923 0%, #131f2e 50%, #111827 100%)",
       position: "relative", overflow: "hidden",
     }}>
       {/* Ambient orbs — very subtle tints matching the button palette */}
@@ -261,7 +261,11 @@ export function Dashboard() {
 
         <div style={{ display: "flex", gap: 4, marginRight: 8, WebkitAppRegion: "no-drag" as const }}>
           {COLUMN_OPTIONS.map(({ cols, icon, label }) => (
-            <button key={cols} onClick={() => setColumns(cols)} title={label} style={colBtnStyle(columns === cols)}>
+            <button
+              key={cols} onClick={() => setColumns(cols)} title={label} style={colBtnStyle(columns === cols)}
+              onMouseEnter={(e) => { if (columns !== cols) { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"; e.currentTarget.style.color = "#94a3b8"; }}}
+              onMouseLeave={(e) => { if (columns !== cols) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"; e.currentTarget.style.color = "#475569"; }}}
+            >
               {icon}
             </button>
           ))}
@@ -289,6 +293,8 @@ export function Dashboard() {
         <button
           onClick={() => { setShowPRs((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowStats(false); }}
           style={drawerBtnStyle(showPRs, "#60a5fa", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.38)")}
+          onMouseEnter={(e) => { if (!showPRs) { e.currentTarget.style.background = "rgba(96,165,250,0.08)"; e.currentTarget.style.borderColor = "rgba(96,165,250,0.28)"; e.currentTarget.style.color = "#60a5fa"; }}}
+          onMouseLeave={(e) => { if (!showPRs) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#475569"; }}}
         >
           PRs
         </button>
@@ -296,6 +302,8 @@ export function Dashboard() {
         <button
           onClick={() => { setShowStats((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowPRs(false); }}
           style={drawerBtnStyle(showStats, "#fbbf24", "rgba(251,191,36,0.1)", "rgba(251,191,36,0.35)")}
+          onMouseEnter={(e) => { if (!showStats) { e.currentTarget.style.background = "rgba(251,191,36,0.07)"; e.currentTarget.style.borderColor = "rgba(251,191,36,0.28)"; e.currentTarget.style.color = "#fbbf24"; }}}
+          onMouseLeave={(e) => { if (!showStats) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#475569"; }}}
         >
           Stats
         </button>
@@ -303,6 +311,8 @@ export function Dashboard() {
         <button
           onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); setShowStats(false); setShowPRs(false); }}
           style={drawerBtnStyle(showClaudeSessions, "#c084fc", "rgba(192,132,252,0.1)", "rgba(192,132,252,0.35)")}
+          onMouseEnter={(e) => { if (!showClaudeSessions) { e.currentTarget.style.background = "rgba(192,132,252,0.08)"; e.currentTarget.style.borderColor = "rgba(192,132,252,0.28)"; e.currentTarget.style.color = "#c084fc"; }}}
+          onMouseLeave={(e) => { if (!showClaudeSessions) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#475569"; }}}
         >
           Claude Sessions
         </button>
@@ -310,6 +320,8 @@ export function Dashboard() {
         <button
           onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); setShowStats(false); setShowPRs(false); }}
           style={drawerBtnStyle(showHistory, "#22d3ee", "rgba(34,211,238,0.1)", "rgba(34,211,238,0.35)")}
+          onMouseEnter={(e) => { if (!showHistory) { e.currentTarget.style.background = "rgba(34,211,238,0.07)"; e.currentTarget.style.borderColor = "rgba(34,211,238,0.28)"; e.currentTarget.style.color = "#22d3ee"; }}}
+          onMouseLeave={(e) => { if (!showHistory) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#475569"; }}}
         >
           History
         </button>

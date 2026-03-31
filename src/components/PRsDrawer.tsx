@@ -41,7 +41,7 @@ function ReviewPill({ decision }: { decision: string | null }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 5,
-      fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+      fontSize: 12, fontWeight: 600, letterSpacing: 0.3,
       color: cfg.color, background: cfg.bg,
       border: `1px solid ${cfg.dot}28`,
       borderRadius: 20, padding: "2px 8px",
@@ -65,10 +65,13 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   return (
     <button onClick={copy} title={`Copy ${label}`} style={{
       background: "none", border: "none", cursor: "pointer",
-      color: copied ? "#22d3ee" : "#334155",
-      fontSize: 11, padding: "1px 3px", borderRadius: 3,
+      color: copied ? "#22d3ee" : "#64748b",
+      fontSize: 13, padding: "1px 3px", borderRadius: 3,
       lineHeight: 1, transition: "color 0.15s", flexShrink: 0,
-    }}>
+    }}
+      onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "#e2e8f0"; }}
+      onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "#64748b"; }}
+    >
       {copied ? "✓" : "⎘"}
     </button>
   );
@@ -84,17 +87,17 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
       onMouseLeave={() => setHovered(false)}
       style={{
         margin: "0 12px 8px", padding: "13px 14px",
-        background: hovered ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.03)",
-        border: `1px solid ${hovered ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.07)"}`,
+        background: hovered ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.03)",
+        border: `1px solid ${hovered ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.07)"}`,
         borderRadius: 12,
-        boxShadow: hovered ? "0 4px 20px rgba(0,0,0,0.3)" : "0 2px 8px rgba(0,0,0,0.2)",
+        boxShadow: hovered ? "0 6px 24px rgba(0,0,0,0.4)" : "0 2px 8px rgba(0,0,0,0.2)",
         transition: "all 0.18s",
       }}
     >
       {/* Title row */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
         <span style={{
-          fontSize: 10, fontWeight: 700, color: "#60a5fa",
+          fontSize: 12, fontWeight: 700, color: "#60a5fa",
           background: "rgba(96,165,250,0.1)",
           border: "1px solid rgba(96,165,250,0.2)",
           borderRadius: 5, padding: "2px 6px",
@@ -112,7 +115,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         {pr.isDraft && (
           <span style={{
-            fontSize: 10, fontWeight: 600, color: "#64748b",
+            fontSize: 12, fontWeight: 600, color: "#64748b",
             background: "rgba(100,116,139,0.1)",
             border: "1px solid rgba(100,116,139,0.15)",
             borderRadius: 20, padding: "2px 8px",
@@ -122,7 +125,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
           </span>
         )}
         <ReviewPill decision={pr.reviewDecision} />
-        <span style={{ fontSize: 10, color: "#334155", marginLeft: "auto", fontFamily: "'DM Mono', monospace" }}>
+        <span style={{ fontSize: 12, color: "#4ade80", marginLeft: "auto", fontFamily: "'DM Mono', monospace" }}>
           {timeAgo(pr.createdAt)}
         </span>
       </div>
@@ -135,9 +138,9 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
           border: "1px solid rgba(96,165,250,0.2)",
           borderRadius: 7, padding: "4px 8px", flex: 1, minWidth: 0,
         }}>
-          <span style={{ color: "#60a5fa", fontSize: 10, flexShrink: 0 }}>⎇</span>
+          <span style={{ color: "#60a5fa", fontSize: 12, flexShrink: 0 }}>⎇</span>
           <span style={{
-            fontSize: 10, color: "#bfdbfe", fontFamily: "'DM Mono', monospace",
+            fontSize: 12, color: "#bfdbfe", fontFamily: "'DM Mono', monospace",
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}>
             {pr.headRefName}
@@ -152,8 +155,8 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
           border: "1px solid rgba(251,191,36,0.2)",
           borderRadius: 7, padding: "4px 8px", flexShrink: 0,
         }}>
-          <span style={{ color: "#fbbf24", fontSize: 10 }}>◉</span>
-          <span style={{ fontSize: 10, color: "#fde68a", fontFamily: "'DM Mono', monospace" }}>
+          <span style={{ color: "#fbbf24", fontSize: 12 }}>◉</span>
+          <span style={{ fontSize: 12, color: "#fde68a", fontFamily: "'DM Mono', monospace" }}>
             {shortSha}
           </span>
           <CopyButton text={pr.headRefOid} label="commit SHA" />
@@ -172,7 +175,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
             transition: "all 0.18s", fontFamily: "'Syne', sans-serif",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(96,165,250,0.15)"; b.style.borderColor = "rgba(96,165,250,0.45)"; b.style.color = "#60a5fa"; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(96,165,250,0.22)"; b.style.borderColor = "rgba(96,165,250,0.6)"; b.style.color = "#93c5fd"; }}
           onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(96,165,250,0.08)"; b.style.borderColor = "rgba(96,165,250,0.22)"; b.style.color = "#93c5fd"; }}
         >
           <span style={{ fontSize: 12 }}>↗</span> Open PR
@@ -187,7 +190,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
             transition: "all 0.18s", fontFamily: "'Syne', sans-serif",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(34,211,238,0.13)"; b.style.borderColor = "rgba(34,211,238,0.42)"; b.style.color = "#22d3ee"; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(34,211,238,0.22)"; b.style.borderColor = "rgba(34,211,238,0.6)"; b.style.color = "#22d3ee"; }}
           onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(34,211,238,0.07)"; b.style.borderColor = "rgba(34,211,238,0.2)"; b.style.color = "#67e8f9"; }}
         >
           <span style={{ fontSize: 12 }}>⌨</span> Open Terminal
@@ -209,8 +212,8 @@ function LocalBranchCard({
       onMouseLeave={() => setHovered(false)}
       style={{
         margin: "0 12px 5px", padding: "8px 12px",
-        background: selected ? "rgba(96,165,250,0.08)" : hovered ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.02)",
-        border: `1px solid ${selected ? "rgba(96,165,250,0.25)" : hovered ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.06)"}`,
+        background: selected ? "rgba(96,165,250,0.08)" : hovered ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)",
+        border: `1px solid ${selected ? "rgba(96,165,250,0.25)" : hovered ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)"}`,
         borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
         transition: "all 0.15s", cursor: "default",
       }}
@@ -357,7 +360,7 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
             Pull Requests
           </div>
           {!loading && (
-            <div style={{ color: "#334155", fontSize: 11, marginTop: 3, fontFamily: "'DM Mono', monospace" }}>
+            <div style={{ color: "#4ade80", fontSize: 11, marginTop: 3, fontFamily: "'DM Mono', monospace" }}>
               {prs.length} open PRs · {!localLoading ? `${localOnly.length} local` : "loading…"}
             </div>
           )}
@@ -401,11 +404,11 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
         {!loading && !error && Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length).map(([repoFullName, repoPRs]) => (
           <div key={repoFullName} style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", fontFamily: "'Syne', sans-serif" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />
-              <span style={{ color: "#64748b", fontSize: 11, fontWeight: 600, letterSpacing: 0.5 }}>{repoFullName}</span>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
+              <span style={{ color: "#4ade80", fontSize: 13, fontWeight: 600, letterSpacing: 0.5 }}>{repoFullName}</span>
               <span style={{
-                color: "#475569", fontSize: 10,
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+                color: "#86efac", fontSize: 10,
+                background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
                 borderRadius: 10, padding: "1px 6px", marginLeft: 2,
                 fontFamily: "'DM Mono', monospace",
               }}>
@@ -439,15 +442,15 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
                 style={{
                   display: "flex", alignItems: "center", gap: 6, flex: 1,
                   background: "none", border: "none", cursor: "pointer", padding: 0,
-                  color: "#64748b", fontSize: 11, fontWeight: 600, letterSpacing: 0.4,
+                  color: "#64748b", fontSize: 13, fontWeight: 600, letterSpacing: 0.4,
                   textAlign: "left", fontFamily: "'Syne', sans-serif",
                 }}
               >
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22d3ee", flexShrink: 0 }} />
-                Local branches
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
+                <span style={{ color: "#4ade80" }}>Local branches</span>
                 <span style={{
-                  color: "#475569", fontSize: 10,
-                  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+                  color: "#86efac", fontSize: 10,
+                  background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
                   borderRadius: 10, padding: "1px 6px", fontFamily: "'DM Mono', monospace",
                 }}>
                   {localOnly.length}
@@ -474,7 +477,7 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
             {showLocal && Object.entries(localByRepo).sort((a, b) => b[1].length - a[1].length).map(([repo, branches]) => (
               <div key={repo} style={{ marginBottom: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px 4px 26px" }}>
-                  <span style={{ color: "#334155", fontSize: 10, fontWeight: 600, flex: 1, fontFamily: "'Syne', sans-serif" }}>{repo}</span>
+                  <span style={{ color: "#4ade80", fontSize: 12, fontWeight: 600, flex: 1, fontFamily: "'Syne', sans-serif" }}>{repo}</span>
                   <button
                     onClick={() => handleCleanMerged(repo)} disabled={deleting}
                     title="Delete branches already merged into main"

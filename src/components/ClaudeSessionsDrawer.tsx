@@ -85,7 +85,7 @@ export function ClaudeSessionsDrawer({ onClose }: Props) {
               <div
                 key={s.filename} onClick={() => handleSelect(s)}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.05)", cursor: "pointer", gap: 8, transition: "background 0.12s" }}
-                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = "rgba(192,132,252,0.06)")}
+                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = "rgba(192,132,252,0.14)")}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "")}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>

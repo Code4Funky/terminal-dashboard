@@ -182,26 +182,22 @@ export function Dashboard() {
   };
 
   const colBtnStyle = (active: boolean) => ({
-    background: active ? "rgba(0, 255, 135, 0.1)" : "none",
-    border: active ? "1px solid rgba(0, 255, 135, 0.4)" : "1px solid rgba(0, 255, 135, 0.12)",
+    background: active ? "rgba(255,255,255,0.07)" : "none",
+    border: active ? "1px solid rgba(255,255,255,0.18)" : "1px solid rgba(255,255,255,0.07)",
     borderRadius: 4,
-    color: active ? "#00f080" : "rgba(0, 240, 128, 0.45)",
+    color: active ? "#e2e8f0" : "#475569",
     cursor: "pointer" as const,
     fontSize: 14,
     padding: "2px 8px",
     transition: "all 0.15s",
   });
 
-  const drawerBtnStyle = (
-    active: boolean,
-    activeColor: string,
-    activeBg: string,
-    activeBorder: string,
-  ) => ({
+  // Each drawer button has its own accent color
+  const drawerBtnStyle = (active: boolean, activeColor: string, activeBg: string, activeBorder: string) => ({
     background: active ? activeBg : "none",
-    border: active ? `1px solid ${activeBorder}` : "1px solid rgba(0, 255, 135, 0.1)",
+    border: active ? `1px solid ${activeBorder}` : "1px solid rgba(255,255,255,0.08)",
     borderRadius: 6,
-    color: active ? activeColor : "rgba(0, 240, 128, 0.35)",
+    color: active ? activeColor : "#475569",
     cursor: "pointer" as const,
     fontSize: 12,
     fontWeight: 600 as const,
@@ -214,50 +210,49 @@ export function Dashboard() {
   return (
     <div style={{
       display: "flex", flexDirection: "column", height: "100%",
-      background: "linear-gradient(145deg, #112b1c, #163a24, #12301e, #0f2619)",
+      background: "linear-gradient(135deg, #0d1117 0%, #111827 50%, #0f172a 100%)",
       position: "relative", overflow: "hidden",
     }}>
-      {/* Ambient orbs */}
+      {/* Ambient orbs — very subtle tints matching the button palette */}
       <div style={{
-        position: "fixed", top: "-18%", left: "-10%",
-        width: 580, height: 580, borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(0,255,135,0.18) 0%, transparent 68%)",
+        position: "fixed", top: "-15%", left: "-8%",
+        width: 560, height: 560, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(59,130,246,0.09) 0%, transparent 65%)",
         filter: "blur(60px)",
         pointerEvents: "none", zIndex: 0,
-        animation: "orbFloat1 13s ease-in-out infinite",
+        animation: "orbFloat1 14s ease-in-out infinite",
       }} />
       <div style={{
-        position: "fixed", bottom: "-22%", right: "-6%",
-        width: 660, height: 660, borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(0,200,160,0.20) 0%, transparent 68%)",
+        position: "fixed", bottom: "-18%", right: "-6%",
+        width: 640, height: 640, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(34,211,238,0.07) 0%, transparent 65%)",
         filter: "blur(72px)",
         pointerEvents: "none", zIndex: 0,
-        animation: "orbFloat2 17s ease-in-out infinite",
+        animation: "orbFloat2 18s ease-in-out infinite",
       }} />
       <div style={{
-        position: "fixed", top: "38%", left: "40%",
-        width: 380, height: 380, borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(0,220,100,0.13) 0%, transparent 70%)",
-        filter: "blur(68px)",
+        position: "fixed", top: "40%", left: "35%",
+        width: 360, height: 360, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%)",
+        filter: "blur(64px)",
         pointerEvents: "none", zIndex: 0,
       }} />
 
       {/* Toolbar */}
       <div style={{
         display: "flex", alignItems: "center",
-        gap: 8,
-        padding: "6px 12px 6px 80px",
-        background: "rgba(12, 30, 18, 0.80)",
+        gap: 8, padding: "6px 12px 6px 80px",
+        background: "rgba(8, 10, 18, 0.84)",
         backdropFilter: "blur(24px) saturate(160%)",
         WebkitBackdropFilter: "blur(24px) saturate(160%)",
-        borderBottom: "1px solid rgba(0, 255, 135, 0.1)",
+        borderBottom: "1px solid rgba(255,255,255,0.07)",
         flexShrink: 0,
         WebkitAppRegion: "drag" as const,
-        boxShadow: "0 1px 0 rgba(0, 255, 135, 0.05), 0 2px 14px rgba(0,0,0,0.3)",
+        boxShadow: "0 1px 0 rgba(255,255,255,0.04), 0 2px 16px rgba(0,0,0,0.4)",
         position: "relative", zIndex: 10,
       }}>
         <span style={{
-          fontSize: 13, fontWeight: 700, color: "#e2fff3",
+          fontSize: 13, fontWeight: 700, color: "#e2e8f0",
           marginRight: 8, letterSpacing: 0.4,
           fontFamily: "'Syne', sans-serif",
         }}>
@@ -278,8 +273,7 @@ export function Dashboard() {
           style={{
             borderRadius: 6,
             cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 700,
+            fontSize: 12, fontWeight: 700,
             padding: "4px 14px",
             WebkitAppRegion: "no-drag" as const,
             fontFamily: "'Syne', sans-serif",
@@ -320,7 +314,7 @@ export function Dashboard() {
           History
         </button>
 
-        <span style={{ fontSize: 11, color: "rgba(0,210,120,0.28)", marginLeft: 8, fontFamily: "'DM Mono', monospace" }}>
+        <span style={{ fontSize: 11, color: "#334155", marginLeft: 8, fontFamily: "'DM Mono', monospace" }}>
           {panels.length} session{panels.length !== 1 ? "s" : ""}
         </span>
       </div>
@@ -329,35 +323,32 @@ export function Dashboard() {
       {worktreeConfirm && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 200,
-          background: "rgba(5, 15, 9, 0.72)",
+          background: "rgba(0, 0, 0, 0.65)",
           backdropFilter: "blur(8px)",
           WebkitBackdropFilter: "blur(8px)",
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>
           <div style={{
-            background: "rgba(12, 30, 18, 0.92)",
-            backdropFilter: "blur(28px)",
-            WebkitBackdropFilter: "blur(28px)",
-            border: "1px solid rgba(0, 255, 135, 0.18)",
-            borderRadius: 16,
-            padding: "24px 28px",
-            width: 420,
-            boxShadow: "0 8px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,255,135,0.06)",
+            background: "rgba(13, 17, 25, 0.94)",
+            backdropFilter: "blur(32px)",
+            WebkitBackdropFilter: "blur(32px)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 16, padding: "24px 28px", width: 420,
+            boxShadow: "0 8px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)",
           }}>
-            <div style={{ color: "#e2fff3", fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: "'Syne', sans-serif" }}>
+            <div style={{ color: "#e2e8f0", fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: "'Syne', sans-serif" }}>
               Create worktree?
             </div>
-            <div style={{ color: "rgba(0,240,128,0.45)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
+            <div style={{ color: "#475569", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
               No existing worktree found for{" "}
-              <span style={{ color: "#00f080", fontFamily: "'DM Mono', monospace" }}>{worktreeConfirm.branchName}</span>
+              <span style={{ color: "#c084fc", fontFamily: "'DM Mono', monospace" }}>{worktreeConfirm.branchName}</span>
               {". A new one will be created at:"}
             </div>
             <div style={{
-              background: "rgba(0, 255, 135, 0.05)",
-              border: "1px solid rgba(0, 255, 135, 0.14)",
-              borderRadius: 8,
-              padding: "8px 12px", marginBottom: 20,
-              color: "#00f080", fontSize: 11, fontFamily: "'DM Mono', monospace", wordBreak: "break-all",
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 8, padding: "8px 12px", marginBottom: 20,
+              color: "#22d3ee", fontSize: 11, fontFamily: "'DM Mono', monospace", wordBreak: "break-all",
             }}>
               {worktreeConfirm.wtPath}
             </div>
@@ -365,10 +356,10 @@ export function Dashboard() {
               <button
                 onClick={() => setWorktreeConfirm(null)}
                 style={{
-                  background: "rgba(0, 255, 135, 0.05)",
-                  border: "1px solid rgba(0, 255, 135, 0.14)",
-                  borderRadius: 8,
-                  color: "rgba(0,240,128,0.45)", cursor: "pointer", fontSize: 12, fontWeight: 600,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 8, color: "#94a3b8",
+                  cursor: "pointer", fontSize: 12, fontWeight: 600,
                   padding: "7px 18px", fontFamily: "'Syne', sans-serif",
                 }}
               >
@@ -378,8 +369,8 @@ export function Dashboard() {
                 onClick={handleConfirmWorktree}
                 className="btn-animated-gradient"
                 style={{
-                  borderRadius: 8,
-                  cursor: "pointer", fontSize: 12, fontWeight: 700,
+                  borderRadius: 8, cursor: "pointer",
+                  fontSize: 12, fontWeight: 700,
                   padding: "7px 20px", fontFamily: "'Syne', sans-serif",
                 }}
               >
@@ -397,10 +388,7 @@ export function Dashboard() {
           display: "grid",
           gridTemplateColumns: `repeat(${columns}, 1fr)`,
           gridAutoRows: `calc((100vh - 41px) / ${Math.ceil(panels.length / columns)})`,
-          gap: 4,
-          padding: 4,
-          minHeight: 0,
-          overflowY: "auto",
+          gap: 4, padding: 4, minHeight: 0, overflowY: "auto",
         }}>
           {panels.map((panel) => (
             <TerminalPanel

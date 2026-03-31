@@ -21,16 +21,8 @@ function formatCwd(cwd: string): string {
 }
 
 export function TerminalPanel({
-  sessionId,
-  panelNumber,
-  title,
-  cwd,
-  gitBranch,
-  fontFamily,
-  fontSize,
-  onClose,
-  focused,
-  onFocus,
+  sessionId, panelNumber, title, cwd, gitBranch,
+  fontFamily, fontSize, onClose, focused, onFocus,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize);
@@ -42,55 +34,45 @@ export function TerminalPanel({
   return (
     <div
       style={{
-        display: "flex",
-        flexDirection: "column",
+        display: "flex", flexDirection: "column",
         border: focused
-          ? "1px solid rgba(0, 255, 135, 0.45)"
-          : "1px solid rgba(0, 255, 135, 0.1)",
-        borderRadius: 8,
-        overflow: "hidden",
-        background: "rgba(0, 255, 135, 0.04)",
+          ? "1px solid rgba(255,255,255,0.18)"
+          : "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 8, overflow: "hidden",
+        background: "rgba(255,255,255,0.02)",
         backdropFilter: "blur(12px)",
         WebkitBackdropFilter: "blur(12px)",
         minHeight: 0,
         boxShadow: focused
-          ? "0 0 0 1px rgba(0,255,135,0.08), 0 4px 28px rgba(0,0,0,0.35)"
+          ? "0 0 0 1px rgba(96,165,250,0.1), 0 4px 28px rgba(0,0,0,0.4)"
           : "0 2px 14px rgba(0,0,0,0.3)",
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
       onClick={onFocus}
     >
       {/* Title bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "4px 10px",
-          background: focused ? "rgba(10, 26, 15, 0.75)" : "rgba(7, 18, 10, 0.65)",
-          borderBottom: focused
-            ? "1px solid rgba(0, 255, 135, 0.14)"
-            : "1px solid rgba(0, 255, 135, 0.06)",
-          userSelect: "none",
-          flexShrink: 0,
-        }}
-      >
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "4px 10px",
+        background: focused ? "rgba(15, 20, 35, 0.75)" : "rgba(10, 12, 20, 0.65)",
+        borderBottom: focused
+          ? "1px solid rgba(255,255,255,0.1)"
+          : "1px solid rgba(255,255,255,0.05)",
+        userSelect: "none", flexShrink: 0,
+      }}>
         <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-          <span style={{ color: focused ? "#00f080" : "rgba(0,240,128,0.45)" }}>{title}</span>
-          {cwd && (
-            <span style={{ color: "rgba(0,210,120,0.28)" }}>{formatCwd(cwd)}</span>
-          )}
+          <span style={{ color: focused ? "#e2e8f0" : "#475569" }}>{title}</span>
+          {cwd && <span style={{ color: "#334155" }}>{formatCwd(cwd)}</span>}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); onClose(); }}
           style={{
-            background: "none", border: "none",
-            color: "rgba(0,210,120,0.28)",
+            background: "none", border: "none", color: "#334155",
             cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px",
             transition: "color 0.15s",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,210,120,0.28)")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}
           title="Close"
         >
           ×

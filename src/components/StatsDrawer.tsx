@@ -81,7 +81,7 @@ function TokenGauge({ label, used, total, color }: { label: string; used: number
           {fmtTokens(used)} / {fmtTokens(total)}
         </span>
       </div>
-      <div style={{ height: 8, background: "rgba(0, 255, 135, 0.07)", borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
         <div style={{
           height: "100%", width: `${pct}%`, borderRadius: 4,
           background: `linear-gradient(90deg, ${barColor}99, ${barColor})`,
@@ -134,7 +134,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
               />
               {/* Empty slot marker */}
               {d.count === 0 && (
-                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(0, 255, 135, 0.1)" />
+                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(255,255,255,0.07)" />
               )}
               {/* Count label on top for non-zero */}
               {d.count > 0 && bh > 14 && (
@@ -166,7 +166,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
           );
         })}
         {/* Baseline */}
-        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(0, 255, 135, 0.1)" strokeWidth={1} />
+        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
       </svg>
     </div>
   );
@@ -200,7 +200,7 @@ function TokenBarChart({ data }: { data: DailyTokens[] }) {
               <rect x={x} y={y} width={barW} height={bh} rx={2}
                 fill={isToday ? "#ffa657" : "url(#tokGrad)"} opacity={d.tokens === 0 ? 0.12 : 1} />
               {d.tokens === 0 && (
-                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(0, 255, 135, 0.1)" />
+                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(255,255,255,0.07)" />
               )}
               {(isToday || i % 2 === 0) && (
                 <text x={x + barW / 2} y={H + 16} textAnchor="middle" fontSize={9}
@@ -211,7 +211,7 @@ function TokenBarChart({ data }: { data: DailyTokens[] }) {
             </g>
           );
         })}
-        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(0, 255, 135, 0.1)" strokeWidth={1} />
+        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
       </svg>
     </div>
   );
@@ -240,7 +240,7 @@ function RepoChart({ repos }: { repos: RepoEntry[] }) {
             <div
               style={{
                 height: 6,
-                background: "rgba(0, 255, 135, 0.07)",
+                background: "rgba(255,255,255,0.05)",
                 borderRadius: 3,
                 overflow: "hidden",
               }}
@@ -268,7 +268,7 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
   return (
     <div
       style={{
-        background: "rgba(0, 255, 135, 0.05)",
+        background: "rgba(255,255,255,0.03)",
         border: `1px solid ${accent}22`,
         backdropFilter: "blur(8px)",
         borderRadius: 8,
@@ -277,7 +277,7 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
         minWidth: 0,
       }}
     >
-      <div style={{ fontSize: 10, color: "rgba(0,210,120,0.28)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontFamily: "'Syne', sans-serif" }}>
+      <div style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontFamily: "'Syne', sans-serif" }}>
         {label}
       </div>
       <div style={{ fontSize: 24, fontWeight: 700, color: accent, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
@@ -294,9 +294,9 @@ const LIMIT_KEY = "td_token_limit";
 
 const navBtnStyle: React.CSSProperties = {
   background: "none",
-  border: "1px solid rgba(0, 255, 135, 0.16)",
+  border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: 4,
-  color: "rgba(0,240,128,0.45)",
+  color: "#64748b",
   cursor: "pointer",
   fontSize: 14,
   padding: "1px 8px",
@@ -370,10 +370,10 @@ export function StatsDrawer({ onClose }: Props) {
       style={{
         width: 480,
         flexShrink: 0,
-        background: "rgba(10, 26, 15, 0.84)",
+        background: "rgba(10, 12, 22, 0.88)",
         backdropFilter: "blur(28px) saturate(160%)",
         WebkitBackdropFilter: "blur(28px) saturate(160%)",
-        borderLeft: "1px solid rgba(0, 255, 135, 0.12)",
+        borderLeft: "1px solid rgba(255,255,255,0.08)",
         display: "flex",
         flexDirection: "column",
         boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
@@ -387,14 +387,14 @@ export function StatsDrawer({ onClose }: Props) {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "12px 16px",
-          borderBottom: "1px solid rgba(0, 255, 135, 0.1)",
-          background: "rgba(8, 20, 12, 0.5)",
+          borderBottom: "1px solid rgba(255,255,255,0.07)",
+          background: "rgba(8, 10, 18, 0.5)",
           flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 16, color: "#00f080" }}>◈</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#e2fff3", fontFamily: "'Syne', sans-serif" }}>Stats</span>
+          <span style={{ fontSize: 16, color: "#22c55e" }}>◈</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Stats</span>
         </div>
 
         {/* Month navigator */}
@@ -441,8 +441,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── Claude Stats ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#00f080", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2fff3", fontFamily: "'Syne', sans-serif" }}>Claude Usage</span>
+                <span style={{ color: "#22c55e", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Claude Usage</span>
                 <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400 }}>· {monthTitle}</span>
               </div>
 
@@ -471,8 +471,8 @@ export function StatsDrawer({ onClose }: Props) {
               {/* Bar chart */}
               <div
                 style={{
-                  background: "rgba(0, 255, 135, 0.05)",
-                  border: "1px solid rgba(0, 255, 135, 0.1)",
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)",
                   borderRadius: 8,
                   padding: "12px 12px 8px",
                 }}
@@ -493,8 +493,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── Token Usage ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#00f080", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2fff3", fontFamily: "'Syne', sans-serif" }}>Token Usage</span>
+                <span style={{ color: "#22c55e", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Token Usage</span>
                 <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400 }}>· {monthTitle}</span>
               </div>
 
@@ -521,7 +521,7 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Estimated cost */}
               <div style={{
-                background: "rgba(0, 255, 135, 0.05)", border: "1px solid rgba(0, 255, 135, 0.1)",
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
                 borderRadius: 8, padding: "12px 14px", marginBottom: 8,
               }}>
                 {/* Header row — always visible */}
@@ -580,7 +580,7 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Token bar chart */}
               <div style={{
-                background: "rgba(0, 255, 135, 0.05)", border: "1px solid rgba(0, 255, 135, 0.1)",
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
                 borderRadius: 8, padding: "12px 12px 8px",
               }}>
                 <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontFamily: "'DM Mono', monospace" }}>
@@ -595,7 +595,7 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Monthly limit gauge */}
               <div style={{
-                background: "rgba(0, 255, 135, 0.05)", border: "1px solid rgba(0, 255, 135, 0.1)",
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
                 borderRadius: 8, padding: "12px 14px", marginTop: 8,
               }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -613,7 +613,7 @@ export function StatsDrawer({ onClose }: Props) {
                         onChange={(e) => setLimitInput(e.target.value)}
                         placeholder="e.g. 50M or 5000000"
                         style={{
-                          background: "rgba(8, 20, 12, 0.85)", border: "1px solid rgba(0, 255, 135, 0.35)", borderRadius: 4,
+                          background: "rgba(8, 10, 18, 0.85)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 4,
                           color: "#e6edf3", fontSize: 11, padding: "2px 6px", width: 130,
                           outline: "none", fontFamily: "'DM Mono', monospace",
                         }}
@@ -654,7 +654,7 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Breakdown */}
               <div style={{
-                background: "rgba(0, 255, 135, 0.05)", border: "1px solid rgba(0, 255, 135, 0.1)",
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
                 borderRadius: 8, padding: "12px 14px", marginTop: 8,
               }}>
                 <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, fontFamily: "'DM Mono', monospace" }}>
@@ -687,8 +687,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── GitHub Repos ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#00f080", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2fff3", fontFamily: "'Syne', sans-serif" }}>GitHub Repos</span>
+                <span style={{ color: "#22c55e", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>GitHub Repos</span>
               </div>
 
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -708,8 +708,8 @@ export function StatsDrawer({ onClose }: Props) {
 
               <div
                 style={{
-                  background: "rgba(0, 255, 135, 0.05)",
-                  border: "1px solid rgba(0, 255, 135, 0.1)",
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)",
                   borderRadius: 8,
                   padding: "12px 14px",
                 }}

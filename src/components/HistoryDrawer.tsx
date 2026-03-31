@@ -146,9 +146,9 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
                   disabled={isOpen}
                   title={isOpen ? "Already open" : "Reopen"}
                   style={{
-                    background: isOpen ? "none" : "rgba(0, 255, 135, 0.07)",
-                    border: `1px solid ${isOpen ? "rgba(0,255,135,0.07)" : "rgba(0,255,135,0.22)"}`,
-                    borderRadius: 4, color: isOpen ? "rgba(0,210,120,0.28)" : "#00f080",
+                    background: isOpen ? "none" : "rgba(96, 165, 250, 0.08)",
+                    border: `1px solid ${isOpen ? "rgba(0,255,135,0.07)" : "rgba(96,165,250,0.28)"}`,
+                    borderRadius: 4, color: isOpen ? "rgba(0,210,120,0.28)" : "#93c5fd",
                     cursor: isOpen ? "default" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "2px 8px",
                     flexShrink: 0, fontFamily: "'Syne', sans-serif", transition: "all 0.15s",

@@ -192,11 +192,16 @@ export function Dashboard() {
     transition: "all 0.15s",
   });
 
-  const drawerBtnStyle = (active: boolean) => ({
-    background: active ? "rgba(0, 255, 135, 0.1)" : "none",
-    border: active ? "1px solid rgba(0, 255, 135, 0.38)" : "1px solid rgba(0, 255, 135, 0.1)",
+  const drawerBtnStyle = (
+    active: boolean,
+    activeColor: string,
+    activeBg: string,
+    activeBorder: string,
+  ) => ({
+    background: active ? activeBg : "none",
+    border: active ? `1px solid ${activeBorder}` : "1px solid rgba(0, 255, 135, 0.1)",
     borderRadius: 6,
-    color: active ? "#00f080" : "rgba(0, 240, 128, 0.45)",
+    color: active ? activeColor : "rgba(0, 240, 128, 0.35)",
     cursor: "pointer" as const,
     fontSize: 12,
     fontWeight: 600 as const,
@@ -286,16 +291,32 @@ export function Dashboard() {
 
         <div style={{ flex: 1 }} />
 
-        <button onClick={() => { setShowPRs((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowStats(false); }} style={drawerBtnStyle(showPRs)}>
+        {/* PRs — blue */}
+        <button
+          onClick={() => { setShowPRs((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowStats(false); }}
+          style={drawerBtnStyle(showPRs, "#60a5fa", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.38)")}
+        >
           PRs
         </button>
-        <button onClick={() => { setShowStats((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowPRs(false); }} style={drawerBtnStyle(showStats)}>
+        {/* Stats — amber */}
+        <button
+          onClick={() => { setShowStats((v) => !v); setShowHistory(false); setShowClaudeSessions(false); setShowPRs(false); }}
+          style={drawerBtnStyle(showStats, "#fbbf24", "rgba(251,191,36,0.1)", "rgba(251,191,36,0.35)")}
+        >
           Stats
         </button>
-        <button onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); setShowStats(false); setShowPRs(false); }} style={drawerBtnStyle(showClaudeSessions)}>
+        {/* Claude Sessions — purple */}
+        <button
+          onClick={() => { setShowClaudeSessions((v) => !v); setShowHistory(false); setShowStats(false); setShowPRs(false); }}
+          style={drawerBtnStyle(showClaudeSessions, "#c084fc", "rgba(192,132,252,0.1)", "rgba(192,132,252,0.35)")}
+        >
           Claude Sessions
         </button>
-        <button onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); setShowStats(false); setShowPRs(false); }} style={drawerBtnStyle(showHistory)}>
+        {/* History — cyan */}
+        <button
+          onClick={() => { setShowHistory((v) => !v); setShowClaudeSessions(false); setShowStats(false); setShowPRs(false); }}
+          style={drawerBtnStyle(showHistory, "#22d3ee", "rgba(34,211,238,0.1)", "rgba(34,211,238,0.35)")}
+        >
           History
         </button>
 

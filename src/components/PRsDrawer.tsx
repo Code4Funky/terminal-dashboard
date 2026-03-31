@@ -137,15 +137,16 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
 
       {/* Branch + commit row */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
+        {/* Branch chip — blue */}
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
-          background: "rgba(0, 255, 135, 0.05)",
-          border: "1px solid rgba(0, 255, 135, 0.12)",
+          background: "rgba(96, 165, 250, 0.07)",
+          border: "1px solid rgba(96, 165, 250, 0.2)",
           borderRadius: 7, padding: "4px 8px", flex: 1, minWidth: 0,
         }}>
-          <span style={{ color: "rgba(0,240,128,0.45)", fontSize: 10, flexShrink: 0 }}>⎇</span>
+          <span style={{ color: "#60a5fa", fontSize: 10, flexShrink: 0 }}>⎇</span>
           <span style={{
-            fontSize: 10, color: "#d4ffee", fontFamily: "'DM Mono', monospace",
+            fontSize: 10, color: "#bfdbfe", fontFamily: "'DM Mono', monospace",
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}>
             {pr.headRefName}
@@ -153,14 +154,15 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
           <CopyButton text={pr.headRefName} label="branch" />
         </div>
 
+        {/* Commit chip — amber */}
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
-          background: "rgba(0, 255, 135, 0.05)",
-          border: "1px solid rgba(0, 255, 135, 0.12)",
+          background: "rgba(251, 191, 36, 0.07)",
+          border: "1px solid rgba(251, 191, 36, 0.2)",
           borderRadius: 7, padding: "4px 8px", flexShrink: 0,
         }}>
-          <span style={{ color: "#00f080", fontSize: 10 }}>◉</span>
-          <span style={{ fontSize: 10, color: "#d4ffee", fontFamily: "'DM Mono', monospace" }}>
+          <span style={{ color: "#fbbf24", fontSize: 10 }}>◉</span>
+          <span style={{ fontSize: 10, color: "#fde68a", fontFamily: "'DM Mono', monospace" }}>
             {shortSha}
           </span>
           <CopyButton text={pr.headRefOid} label="commit SHA" />
@@ -169,56 +171,58 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
 
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8 }}>
+        {/* Open PR — blue */}
         <button
           onClick={() => window.terminal.openExternal(pr.url)}
           style={{
             flex: 1,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-            background: "rgba(0, 255, 135, 0.05)",
-            border: "1px solid rgba(0, 255, 135, 0.16)",
-            borderRadius: 8, color: "rgba(0,240,128,0.6)",
+            background: "rgba(96, 165, 250, 0.08)",
+            border: "1px solid rgba(96, 165, 250, 0.22)",
+            borderRadius: 8, color: "#93c5fd",
             cursor: "pointer", fontSize: 11, fontWeight: 600,
             padding: "7px 10px", transition: "all 0.18s",
             fontFamily: "'Syne', sans-serif",
           }}
           onMouseEnter={(e) => {
             const b = e.currentTarget as HTMLButtonElement;
-            b.style.background = "rgba(0, 255, 135, 0.12)";
-            b.style.borderColor = "rgba(0, 255, 135, 0.32)";
-            b.style.color = "#00f080";
+            b.style.background = "rgba(96, 165, 250, 0.15)";
+            b.style.borderColor = "rgba(96, 165, 250, 0.45)";
+            b.style.color = "#60a5fa";
           }}
           onMouseLeave={(e) => {
             const b = e.currentTarget as HTMLButtonElement;
-            b.style.background = "rgba(0, 255, 135, 0.05)";
-            b.style.borderColor = "rgba(0, 255, 135, 0.16)";
-            b.style.color = "rgba(0,240,128,0.6)";
+            b.style.background = "rgba(96, 165, 250, 0.08)";
+            b.style.borderColor = "rgba(96, 165, 250, 0.22)";
+            b.style.color = "#93c5fd";
           }}
         >
           <span style={{ fontSize: 12 }}>↗</span> Open PR
         </button>
+        {/* Open Terminal — cyan */}
         <button
           onClick={() => onOpenTerminal(pr.repository.name, pr.headRefName)}
           style={{
             flex: 1,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-            background: "rgba(0, 255, 135, 0.05)",
-            border: "1px solid rgba(0, 255, 135, 0.16)",
-            borderRadius: 8, color: "rgba(0,240,128,0.6)",
+            background: "rgba(34, 211, 238, 0.07)",
+            border: "1px solid rgba(34, 211, 238, 0.2)",
+            borderRadius: 8, color: "#67e8f9",
             cursor: "pointer", fontSize: 11, fontWeight: 600,
             padding: "7px 10px", transition: "all 0.18s",
             fontFamily: "'Syne', sans-serif",
           }}
           onMouseEnter={(e) => {
             const b = e.currentTarget as HTMLButtonElement;
-            b.style.background = "rgba(0, 255, 135, 0.12)";
-            b.style.borderColor = "rgba(0, 255, 135, 0.32)";
-            b.style.color = "#00f080";
+            b.style.background = "rgba(34, 211, 238, 0.13)";
+            b.style.borderColor = "rgba(34, 211, 238, 0.42)";
+            b.style.color = "#22d3ee";
           }}
           onMouseLeave={(e) => {
             const b = e.currentTarget as HTMLButtonElement;
-            b.style.background = "rgba(0, 255, 135, 0.05)";
-            b.style.borderColor = "rgba(0, 255, 135, 0.16)";
-            b.style.color = "rgba(0,240,128,0.6)";
+            b.style.background = "rgba(34, 211, 238, 0.07)";
+            b.style.borderColor = "rgba(34, 211, 238, 0.2)";
+            b.style.color = "#67e8f9";
           }}
         >
           <span style={{ fontSize: 12 }}>⌨</span> Open Terminal
@@ -287,7 +291,7 @@ function LocalBranchCard({
           color: "rgba(0,210,120,0.28)", fontSize: 12, padding: "2px 4px",
           borderRadius: 4, transition: "color 0.15s", lineHeight: 1,
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "#00f080")}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "#22d3ee")}
         onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,210,120,0.28)")}
       >
         ⌨

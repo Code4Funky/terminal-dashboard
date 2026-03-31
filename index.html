@@ -4,6 +4,49 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Terminal Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+    <style>
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #070714; }
+      #root { height: 100%; }
+
+      @keyframes gradientShift {
+        0%   { background-position: 0%   50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0%   50%; }
+      }
+
+      @keyframes orbFloat1 {
+        0%, 100% { transform: translate(0, 0) scale(1); }
+        33%  { transform: translate(28px, -38px) scale(1.04); }
+        66%  { transform: translate(-18px, 18px) scale(0.97); }
+      }
+
+      @keyframes orbFloat2 {
+        0%, 100% { transform: translate(0, 0) scale(1); }
+        40%  { transform: translate(-36px, 28px) scale(1.07); }
+        70%  { transform: translate(22px, -18px) scale(0.96); }
+      }
+
+      .btn-animated-gradient {
+        background: linear-gradient(-45deg, #7c3aed, #8b5cf6, #0d9488, #14b8a6) !important;
+        background-size: 400% 400% !important;
+        animation: gradientShift 5s ease infinite;
+        border: none !important;
+        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+      }
+
+      .btn-animated-gradient:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 28px rgba(124, 58, 237, 0.5) !important;
+      }
+
+      .btn-animated-gradient:active {
+        transform: translateY(0);
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

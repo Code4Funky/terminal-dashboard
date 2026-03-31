@@ -13,7 +13,8 @@ declare global {
       create: (
         cols: number,
         rows: number,
-        panelNumber?: number
+        panelNumber?: number,
+        initialCommand?: string
       ) => Promise<{ sessionId: string; number: number }>;
       getHistory: (num: number) => Promise<string>;
       listHistory: () => Promise<{ number: number; size: number; lastModified: number }[]>;
@@ -54,6 +55,22 @@ declare global {
       }>;
       listClaudeSessions: () => Promise<{ filename: string; size: number; lastModified: number }[]>;
       readClaudeSession: (filename: string) => Promise<{ role: string; content: string; timestamp?: string }[]>;
+      checkWorktree: (repoName: string, branchName: string) => Promise<{ exists: boolean; path: string | null }>;
+      listLocalBranches: () => Promise<{ repo: string; branch: string }[]>;
+      deleteBranches: (repo: string, branches: string[]) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
+      cleanupMerged: (repo: string) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
+      listPRs: () => Promise<{
+        number: number;
+        title: string;
+        url: string;
+        headRefName: string;
+        headRefOid: string;
+        isDraft: boolean;
+        createdAt: string;
+        reviewDecision: string | null;
+        repository: { name: string; nameWithOwner: string };
+      }[]>;
+      openExternal: (url: string) => Promise<void>;
     };
   }
 }

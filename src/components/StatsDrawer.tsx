@@ -77,11 +77,11 @@ function TokenGauge({ label, used, total, color }: { label: string; used: number
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span style={{ fontSize: 11, color: "#8b949e" }}>{label}</span>
-        <span style={{ fontSize: 11, color: barColor, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 11, color: barColor, fontFamily: "'DM Mono', monospace" }}>
           {fmtTokens(used)} / {fmtTokens(total)}
         </span>
       </div>
-      <div style={{ height: 8, background: "#21262d", borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ height: 8, background: "rgba(139, 92, 246, 0.08)", borderRadius: 4, overflow: "hidden" }}>
         <div style={{
           height: "100%", width: `${pct}%`, borderRadius: 4,
           background: `linear-gradient(90deg, ${barColor}99, ${barColor})`,
@@ -134,7 +134,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
               />
               {/* Empty slot marker */}
               {d.count === 0 && (
-                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="#30363d" />
+                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(139, 92, 246, 0.1)" />
               )}
               {/* Count label on top for non-zero */}
               {d.count > 0 && bh > 14 && (
@@ -144,7 +144,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
                   textAnchor="middle"
                   fontSize={9}
                   fill="#e6edf3"
-                  fontFamily="monospace"
+                  fontFamily="DM Mono, monospace"
                 >
                   {d.count}
                 </text>
@@ -157,7 +157,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
                   textAnchor="middle"
                   fontSize={9}
                   fill={isToday ? "#58a6ff" : "#8b949e"}
-                  fontFamily="monospace"
+                  fontFamily="DM Mono, monospace"
                 >
                   {isToday ? "today" : formatDate(d.date).replace(" ", "\u00a0")}
                 </text>
@@ -166,7 +166,7 @@ function BarChart({ data }: { data: DailyCount[] }) {
           );
         })}
         {/* Baseline */}
-        <line x1={0} y1={H} x2={W} y2={H} stroke="#30363d" strokeWidth={1} />
+        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(139, 92, 246, 0.1)" strokeWidth={1} />
       </svg>
     </div>
   );
@@ -200,18 +200,18 @@ function TokenBarChart({ data }: { data: DailyTokens[] }) {
               <rect x={x} y={y} width={barW} height={bh} rx={2}
                 fill={isToday ? "#ffa657" : "url(#tokGrad)"} opacity={d.tokens === 0 ? 0.12 : 1} />
               {d.tokens === 0 && (
-                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="#30363d" />
+                <rect x={x} y={H - 2} width={barW} height={2} rx={1} fill="rgba(139, 92, 246, 0.1)" />
               )}
               {(isToday || i % 2 === 0) && (
                 <text x={x + barW / 2} y={H + 16} textAnchor="middle" fontSize={9}
-                  fill={isToday ? "#ffa657" : "#8b949e"} fontFamily="monospace">
+                  fill={isToday ? "#ffa657" : "#8b949e"} fontFamily="DM Mono, monospace">
                   {isToday ? "today" : formatDate(d.date).replace(" ", "\u00a0")}
                 </text>
               )}
             </g>
           );
         })}
-        <line x1={0} y1={H} x2={W} y2={H} stroke="#30363d" strokeWidth={1} />
+        <line x1={0} y1={H} x2={W} y2={H} stroke="rgba(139, 92, 246, 0.1)" strokeWidth={1} />
       </svg>
     </div>
   );
@@ -230,17 +230,17 @@ function RepoChart({ repos }: { repos: RepoEntry[] }) {
         return (
           <div key={r.name}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-              <span style={{ fontSize: 12, color: "#e6edf3", fontFamily: "monospace" }}>
+              <span style={{ fontSize: 12, color: "#e6edf3", fontFamily: "'DM Mono', monospace" }}>
                 {r.name}
               </span>
-              <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+              <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>
                 {r.visits} visit{r.visits !== 1 ? "s" : ""} · {timeAgo(r.lastSeen)}
               </span>
             </div>
             <div
               style={{
                 height: 6,
-                background: "#21262d",
+                background: "rgba(139, 92, 246, 0.08)",
                 borderRadius: 3,
                 overflow: "hidden",
               }}
@@ -268,18 +268,19 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
   return (
     <div
       style={{
-        background: "#161b22",
-        border: `1px solid ${accent}33`,
+        background: "rgba(15, 12, 35, 0.5)",
+        border: `1px solid ${accent}22`,
+        backdropFilter: "blur(8px)",
         borderRadius: 8,
         padding: "12px 16px",
         flex: 1,
         minWidth: 0,
       }}
     >
-      <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
+      <div style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontFamily: "'Syne', sans-serif" }}>
         {label}
       </div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: accent, fontFamily: "monospace", lineHeight: 1 }}>
+      <div style={{ fontSize: 24, fontWeight: 700, color: accent, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
         {value}
       </div>
       {sub && (
@@ -293,13 +294,14 @@ const LIMIT_KEY = "td_token_limit";
 
 const navBtnStyle: React.CSSProperties = {
   background: "none",
-  border: "1px solid #30363d",
+  border: "1px solid rgba(139, 92, 246, 0.2)",
   borderRadius: 4,
-  color: "#8b949e",
+  color: "#64748b",
   cursor: "pointer",
   fontSize: 14,
   padding: "1px 8px",
   lineHeight: 1.4,
+  fontFamily: "'DM Mono', monospace",
 };
 
 function prevMonth(ym: string): string {
@@ -366,17 +368,15 @@ export function StatsDrawer({ onClose }: Props) {
   return (
     <div
       style={{
-        position: "absolute",
-        top: 0,
-        right: 0,
-        bottom: 0,
         width: 480,
-        background: "#0d1117",
-        borderLeft: "1px solid #30363d",
-        zIndex: 100,
+        flexShrink: 0,
+        background: "rgba(7, 5, 20, 0.84)",
+        backdropFilter: "blur(28px) saturate(160%)",
+        WebkitBackdropFilter: "blur(28px) saturate(160%)",
+        borderLeft: "1px solid rgba(139, 92, 246, 0.15)",
         display: "flex",
         flexDirection: "column",
-        boxShadow: "-8px 0 32px #00000088",
+        boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
         WebkitAppRegion: "no-drag" as const,
       }}
     >
@@ -387,20 +387,20 @@ export function StatsDrawer({ onClose }: Props) {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "12px 16px",
-          borderBottom: "1px solid #30363d",
-          background: "#161b22",
+          borderBottom: "1px solid rgba(139, 92, 246, 0.1)",
+          background: "rgba(10, 8, 28, 0.5)",
           flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 16, color: "#58a6ff" }}>◈</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3" }}>Stats</span>
+          <span style={{ fontSize: 16, color: "#a78bfa" }}>◈</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Stats</span>
         </div>
 
         {/* Month navigator */}
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button onClick={() => navigate(prevMonth(selectedMonth))} style={navBtnStyle}>‹</button>
-          <span style={{ fontSize: 12, color: "#8b949e", minWidth: 90, textAlign: "center", fontFamily: "monospace" }}>
+          <span style={{ fontSize: 12, color: "#8b949e", minWidth: 90, textAlign: "center", fontFamily: "'DM Mono', monospace" }}>
             {monthLabel(selectedMonth)}
           </span>
           <button
@@ -441,8 +441,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── Claude Stats ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#bc8cff", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e6edf3" }}>Claude Usage</span>
+                <span style={{ color: "#a78bfa", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Claude Usage</span>
                 <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400 }}>· {monthTitle}</span>
               </div>
 
@@ -471,13 +471,13 @@ export function StatsDrawer({ onClose }: Props) {
               {/* Bar chart */}
               <div
                 style={{
-                  background: "#161b22",
-                  border: "1px solid #21262d",
+                  background: "rgba(15, 12, 35, 0.5)",
+                  border: "1px solid rgba(139, 92, 246, 0.1)",
                   borderRadius: 8,
                   padding: "12px 12px 8px",
                 }}
               >
-                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontFamily: "monospace" }}>
+                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontFamily: "'DM Mono', monospace" }}>
                   messages / day — {monthTitle}
                 </div>
                 {data.claude.dailyCounts.length > 0 ? (
@@ -493,8 +493,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── Token Usage ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#ffa657", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e6edf3" }}>Token Usage</span>
+                <span style={{ color: "#2dd4bf", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>Token Usage</span>
                 <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400 }}>· {monthTitle}</span>
               </div>
 
@@ -521,7 +521,7 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Estimated cost */}
               <div style={{
-                background: "#161b22", border: "1px solid #3fb95033",
+                background: "rgba(15, 12, 35, 0.5)", border: "1px solid rgba(139, 92, 246, 0.12)",
                 borderRadius: 8, padding: "12px 14px", marginBottom: 8,
               }}>
                 {/* Header row — always visible */}
@@ -530,14 +530,14 @@ export function StatsDrawer({ onClose }: Props) {
                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+                    <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>
                       API equivalent value · {monthTitle}
                     </span>
                     <span style={{ fontSize: 10, color: "#8b949e", transition: "transform 0.2s", display: "inline-block", transform: showCostDetails ? "rotate(90deg)" : "rotate(0deg)" }}>
                       ›
                     </span>
                   </div>
-                  <span style={{ fontSize: 22, fontWeight: 700, color: "#3fb950", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 22, fontWeight: 700, color: "#3fb950", fontFamily: "'DM Mono', monospace" }}>
                     {fmtCost(data.claude.estimatedCost)}
                   </span>
                 </div>
@@ -558,18 +558,18 @@ export function StatsDrawer({ onClose }: Props) {
                           }}>
                             {shortModel(m.model)}
                           </span>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3", fontFamily: "monospace" }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3", fontFamily: "'DM Mono', monospace" }}>
                             {fmtCost(m.cost)}
                           </span>
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingLeft: 4 }}>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ fontSize: 10, color: "#8b949e" }}>Input {fmtTokens(m.inputTokens)} + Output {fmtTokens(m.outputTokens)}</span>
-                            <span style={{ fontSize: 10, color: "#ffa657", fontFamily: "monospace" }}>{fmtCost(m.costContent)}</span>
+                            <span style={{ fontSize: 10, color: "#ffa657", fontFamily: "'DM Mono', monospace" }}>{fmtCost(m.costContent)}</span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ fontSize: 10, color: "#8b949e" }}>Cache write {fmtTokens(m.cacheWriteTokens)} + read {fmtTokens(m.cacheReadTokens)}</span>
-                            <span style={{ fontSize: 10, color: "#8b949e", fontFamily: "monospace" }}>{fmtCost(m.costCache)}</span>
+                            <span style={{ fontSize: 10, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>{fmtCost(m.costCache)}</span>
                           </div>
                         </div>
                       </div>
@@ -580,10 +580,10 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Token bar chart */}
               <div style={{
-                background: "#161b22", border: "1px solid #21262d",
+                background: "rgba(15, 12, 35, 0.5)", border: "1px solid rgba(139, 92, 246, 0.1)",
                 borderRadius: 8, padding: "12px 12px 8px",
               }}>
-                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontFamily: "monospace" }}>
+                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontFamily: "'DM Mono', monospace" }}>
                   tokens / day — {monthTitle}
                 </div>
                 {data.claude.dailyTokens.length > 0 ? (
@@ -595,11 +595,11 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Monthly limit gauge */}
               <div style={{
-                background: "#161b22", border: "1px solid #21262d",
+                background: "rgba(15, 12, 35, 0.5)", border: "1px solid rgba(139, 92, 246, 0.1)",
                 borderRadius: 8, padding: "12px 14px", marginTop: 8,
               }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>
                     token limit / month
                   </span>
                   {editingLimit ? (
@@ -613,9 +613,9 @@ export function StatsDrawer({ onClose }: Props) {
                         onChange={(e) => setLimitInput(e.target.value)}
                         placeholder="e.g. 50M or 5000000"
                         style={{
-                          background: "#0d1117", border: "1px solid #58a6ff", borderRadius: 4,
+                          background: "rgba(7, 5, 18, 0.8)", border: "1px solid rgba(139, 92, 246, 0.4)", borderRadius: 4,
                           color: "#e6edf3", fontSize: 11, padding: "2px 6px", width: 130,
-                          outline: "none", fontFamily: "monospace",
+                          outline: "none", fontFamily: "'DM Mono', monospace",
                         }}
                       />
                       <button type="submit" style={{
@@ -654,30 +654,30 @@ export function StatsDrawer({ onClose }: Props) {
 
               {/* Breakdown */}
               <div style={{
-                background: "#161b22", border: "1px solid #21262d",
+                background: "rgba(15, 12, 35, 0.5)", border: "1px solid rgba(139, 92, 246, 0.1)",
                 borderRadius: 8, padding: "12px 14px", marginTop: 8,
               }}>
-                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, fontFamily: "monospace" }}>
+                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, fontFamily: "'DM Mono', monospace" }}>
                   {monthTitle} · real vs overhead breakdown
                 </div>
                 {/* Real usage bar */}
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                     <span style={{ fontSize: 11, color: "#8b949e" }}>Real usage (input + output)</span>
-                    <span style={{ fontSize: 11, color: "#ffa657", fontFamily: "monospace" }}>
+                    <span style={{ fontSize: 11, color: "#ffa657", fontFamily: "'DM Mono', monospace" }}>
                       {fmtTokens(data.claude.monthInputTokens + data.claude.monthOutputTokens)}
                     </span>
                   </div>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 6, borderTop: "1px solid #21262d" }}>
                   <span style={{ fontSize: 11, color: "#8b949e" }}>Cache read (context overhead)</span>
-                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>
                     {fmtTokens(data.claude.monthCacheReadTokens)}
                   </span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
                   <span style={{ fontSize: 11, color: "#8b949e" }}>Cache creation (overhead)</span>
-                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "'DM Mono', monospace" }}>
                     {fmtTokens(data.claude.monthCacheCreationTokens)}
                   </span>
                 </div>
@@ -687,8 +687,8 @@ export function StatsDrawer({ onClose }: Props) {
             {/* ── GitHub Repos ── */}
             <section>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ color: "#3fb950", fontSize: 14 }}>◆</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#e6edf3" }}>GitHub Repos</span>
+                <span style={{ color: "#a78bfa", fontSize: 14 }}>◆</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", fontFamily: "'Syne', sans-serif" }}>GitHub Repos</span>
               </div>
 
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -708,13 +708,13 @@ export function StatsDrawer({ onClose }: Props) {
 
               <div
                 style={{
-                  background: "#161b22",
-                  border: "1px solid #21262d",
+                  background: "rgba(15, 12, 35, 0.5)",
+                  border: "1px solid rgba(139, 92, 246, 0.1)",
                   borderRadius: 8,
                   padding: "12px 14px",
                 }}
               >
-                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, fontFamily: "monospace" }}>
+                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, fontFamily: "'DM Mono', monospace" }}>
                   visits since first launch · ~/Documents/GitHub/
                 </div>
                 {data.repos.length > 0 ? (

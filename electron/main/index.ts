@@ -1,8 +1,11 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join, basename } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
-import { execSync } from "child_process";
+import { execSync, exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 import * as fs from "fs";
 import * as pty from "node-pty";
 import os from "os";
@@ -288,7 +291,8 @@ function historyPath(num: number) {
 function createSession(
   cols: number,
   rows: number,
-  panelNumber?: number
+  panelNumber?: number,
+  initialCommand?: string
 ): { sessionId: string; number: number } {
   const num = panelNumber ?? ++state.terminalCounter;
   if (!panelNumber) saveState(state);
@@ -352,6 +356,10 @@ function createSession(
 
   // Send initial CWD immediately so the panel title bar shows it before precmd fires
   setTimeout(() => send("terminal:cwd-update", sessionId, os.homedir(), ""), 300);
+
+  if (initialCommand) {
+    setTimeout(() => ptyProcess.write(initialCommand + "\r"), 1200);
+  }
 
   return { sessionId, number: num };
 }
@@ -433,6 +441,8 @@ export HISTFILE="$HOME/.zsh_history"
 export HISTSIZE=50000
 export SAVEHIST=50000
 
+# Unset ZDOTDIR before sourcing so child shells don't inherit the temp dir
+unset ZDOTDIR
 [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
 
 # Force-load zsh-autosuggestions if not already active (in case .zshrc failed to load it)
@@ -552,8 +562,8 @@ ipcMain.handle("terminal:get-state", () => state);
 
 ipcMain.handle(
   "terminal:create",
-  (_, cols: number, rows: number, panelNumber?: number) => {
-    return createSession(cols, rows, panelNumber);
+  (_, cols: number, rows: number, panelNumber?: number, initialCommand?: string) => {
+    return createSession(cols, rows, panelNumber, initialCommand);
   }
 );
 
@@ -705,6 +715,128 @@ interface ClaudeMessage {
   timestamp?: string;
 }
 
+
+// ── PRs IPC ───────────────────────────────────────────────────────────────────
+interface PRNode {
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  headRefOid: string;
+  isDraft: boolean;
+  createdAt: string;
+  reviewDecision: string | null;
+  repository: { name: string; nameWithOwner: string };
+}
+
+ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
+  const repoPath = join(githubDir, repo);
+  const deleted: string[] = [];
+  const failed: { branch: string; reason: string }[] = [];
+  const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+  for (const branch of branches) {
+    try {
+      await execAsync(`git branch -D "${branch}"`, { cwd: repoPath, env: ghEnv });
+      deleted.push(branch);
+    } catch (e: unknown) {
+      failed.push({ branch, reason: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { deleted, failed };
+});
+
+ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
+  const repoPath = join(githubDir, repo);
+  const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
+  const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+  const deleted: string[] = [];
+  const failed: { branch: string; reason: string }[] = [];
+  try {
+    // Resolve the remote default branch — try multiple strategies
+    let defaultRef = "";
+    for (const candidate of ["origin/main", "origin/master", "main", "master"]) {
+      try {
+        await execAsync(`git rev-parse --verify "${candidate}"`, { cwd: repoPath, env: ghEnv });
+        defaultRef = candidate;
+        break;
+      } catch {}
+    }
+    if (!defaultRef) return { deleted: [], failed: [{ branch: "", reason: "Could not determine default branch" }] };
+    const { stdout } = await execAsync(`git branch --merged "${defaultRef}"`, { cwd: repoPath, env: ghEnv });
+    const merged = stdout.split("\n")
+      .map((b) => b.trim().replace(/^\*\s*/, ""))
+      .filter((b) => b && !skipBranches.has(b));
+    for (const branch of merged) {
+      try {
+        await execAsync(`git branch -d "${branch}"`, { cwd: repoPath, env: ghEnv });
+        deleted.push(branch);
+      } catch (e: unknown) {
+        failed.push({ branch, reason: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  } catch {}
+  return { deleted, failed };
+});
+
+ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string }[]> => {
+  const results: { repo: string; branch: string }[] = [];
+  const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
+  try {
+    for (const dir of fs.readdirSync(githubDir)) {
+      const repoPath = join(githubDir, dir);
+      try {
+        if (!fs.statSync(repoPath).isDirectory()) continue;
+        const gitEntry = join(repoPath, ".git");
+        if (!fs.existsSync(gitEntry)) continue;
+        // Worktrees have .git as a file pointing back to the main repo — skip them
+        if (!fs.statSync(gitEntry).isDirectory()) continue;
+        const { stdout } = await execAsync(
+          `git branch --format="%(refname:short)"`,
+          { cwd: repoPath, env: { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` } }
+        );
+        for (const b of stdout.trim().split("\n")) {
+          const branch = b.trim();
+          if (branch && !skipBranches.has(branch)) {
+            results.push({ repo: dir, branch });
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return results;
+});
+
+ipcMain.handle("prs:check-worktree", async (_, repoName: string, branchName: string): Promise<{ exists: boolean; path: string | null }> => {
+  try {
+    const repoPath = join(os.homedir(), "Documents", "GitHub", repoName);
+    const { stdout } = await execAsync("git worktree list", { cwd: repoPath });
+    for (const line of stdout.split("\n")) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 3 && parts[2] === `[${branchName}]`) {
+        return { exists: true, path: parts[0] };
+      }
+    }
+    return { exists: false, path: null };
+  } catch {
+    return { exists: false, path: null };
+  }
+});
+
+ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
+  try {
+    const query = `{ viewer { pullRequests(first: 50, states: [OPEN]) { nodes { number title url headRefName headRefOid isDraft createdAt reviewDecision repository { name nameWithOwner } } } } }`;
+    const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+    const { stdout } = await execAsync(`gh api graphql -f query='${query}'`, { env: ghEnv });
+    const data = JSON.parse(stdout);
+    return data.data?.viewer?.pullRequests?.nodes ?? [];
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("shell:open-external", (_, url: string) => {
+  shell.openExternal(url);
+});
 
 ipcMain.handle("claude:read-session", (_, filename: string): ClaudeMessage[] => {
   const safe = basename(filename);

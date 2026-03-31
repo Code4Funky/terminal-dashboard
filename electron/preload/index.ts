@@ -9,9 +9,10 @@ contextBridge.exposeInMainWorld("terminal", {
   create: (
     cols: number,
     rows: number,
-    panelNumber?: number
+    panelNumber?: number,
+    initialCommand?: string
   ): Promise<{ sessionId: string; number: number }> =>
-    ipcRenderer.invoke("terminal:create", cols, rows, panelNumber),
+    ipcRenderer.invoke("terminal:create", cols, rows, panelNumber, initialCommand),
 
   getHistory: (num: number): Promise<string> =>
     ipcRenderer.invoke("terminal:get-history", num),
@@ -102,4 +103,31 @@ contextBridge.exposeInMainWorld("terminal", {
     filename: string
   ): Promise<{ role: string; content: string; timestamp?: string }[]> =>
     ipcRenderer.invoke("claude:read-session", filename),
+
+  checkWorktree: (repoName: string, branchName: string): Promise<{ exists: boolean; path: string | null }> =>
+    ipcRenderer.invoke("prs:check-worktree", repoName, branchName),
+
+  listLocalBranches: (): Promise<{ repo: string; branch: string }[]> =>
+    ipcRenderer.invoke("prs:list-local-branches"),
+
+  deleteBranches: (repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
+    ipcRenderer.invoke("prs:delete-branch", repo, branches),
+
+  cleanupMerged: (repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
+    ipcRenderer.invoke("prs:cleanup-merged", repo),
+
+  listPRs: (): Promise<{
+    number: number;
+    title: string;
+    url: string;
+    headRefName: string;
+    headRefOid: string;
+    isDraft: boolean;
+    createdAt: string;
+    reviewDecision: string | null;
+    repository: { name: string; nameWithOwner: string };
+  }[]> => ipcRenderer.invoke("prs:list"),
+
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke("shell:open-external", url),
 });

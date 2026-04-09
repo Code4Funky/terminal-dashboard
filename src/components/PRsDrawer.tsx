@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTheme } from "../ThemeContext";
 
 interface PR {
   number: number;
@@ -15,6 +16,7 @@ interface PR {
 interface Props {
   onClose: () => void;
   onOpenTerminal: (repoName: string, branchName: string) => void;
+  onOpenRepo: (repoName: string, branchName: string) => void;
 }
 
 function timeAgo(iso: string): string {
@@ -30,30 +32,31 @@ function timeAgo(iso: string): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
-const REVIEW_CONFIG: Record<string, { label: string; color: string; bg: string; dot: string }> = {
-  APPROVED:          { label: "Approved",          color: "#34d399", bg: "rgba(52,211,153,0.1)",  dot: "#34d399" },
-  CHANGES_REQUESTED: { label: "Changes requested", color: "#f87171", bg: "rgba(248,113,113,0.1)", dot: "#f87171" },
-  REVIEW_REQUIRED:   { label: "Review pending",    color: "#fbbf24", bg: "rgba(251,191,36,0.1)",  dot: "#fbbf24" },
-};
-
 function ReviewPill({ decision }: { decision: string | null }) {
-  const cfg = REVIEW_CONFIG[decision ?? "REVIEW_REQUIRED"] ?? REVIEW_CONFIG.REVIEW_REQUIRED;
+  const { theme: t } = useTheme();
+  type Cfg = { label: string; color: string; bg: string };
+  const configs: Record<string, Cfg> = {
+    APPROVED:          { label: "Approved",          color: t.green,  bg: `${t.green}18` },
+    CHANGES_REQUESTED: { label: "Changes requested", color: t.red,    bg: `${t.red}15` },
+    REVIEW_REQUIRED:   { label: "Review pending",    color: t.orange, bg: `${t.orange}15` },
+  };
+  const cfg = configs[decision ?? "REVIEW_REQUIRED"] ?? configs.REVIEW_REQUIRED;
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 5,
-      fontSize: 12, fontWeight: 600, letterSpacing: 0.3,
+      fontSize: 11, fontWeight: 600,
       color: cfg.color, background: cfg.bg,
-      border: `1px solid ${cfg.dot}28`,
+      border: `1px solid ${cfg.color}30`,
       borderRadius: 20, padding: "2px 8px",
-      fontFamily: "'Syne', sans-serif",
     }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.dot, flexShrink: 0 }} />
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.color, flexShrink: 0 }} />
       {cfg.label}
     </span>
   );
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
+  const { theme: t } = useTheme();
   const [copied, setCopied] = useState(false);
   const copy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -65,12 +68,12 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   return (
     <button onClick={copy} title={`Copy ${label}`} style={{
       background: "none", border: "none", cursor: "pointer",
-      color: copied ? "#22d3ee" : "#64748b",
+      color: copied ? t.teal : t.label4,
       fontSize: 13, padding: "1px 3px", borderRadius: 3,
       lineHeight: 1, transition: "color 0.15s", flexShrink: 0,
     }}
-      onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "#e2e8f0"; }}
-      onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "#64748b"; }}
+      onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = t.label2; }}
+      onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = t.label4; }}
     >
       {copied ? "✓" : "⎘"}
     </button>
@@ -78,6 +81,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string, branch: string) => void }) {
+  const { theme: t } = useTheme();
   const [hovered, setHovered] = useState(false);
   const shortSha = pr.headRefOid.slice(0, 7);
 
@@ -87,111 +91,90 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
       onMouseLeave={() => setHovered(false)}
       style={{
         margin: "0 12px 8px", padding: "13px 14px",
-        background: hovered ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.03)",
-        border: `1px solid ${hovered ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.07)"}`,
+        background: hovered ? t.surface3 : t.surface2,
+        border: `1px solid ${hovered ? t.borderMid : t.borderSubtle}`,
         borderRadius: 12,
-        boxShadow: hovered ? "0 6px 24px rgba(0,0,0,0.4)" : "0 2px 8px rgba(0,0,0,0.2)",
+        boxShadow: hovered ? "0 4px 16px rgba(0,0,0,0.12)" : "none",
         transition: "all 0.18s",
       }}
     >
-      {/* Title row */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
         <span style={{
-          fontSize: 12, fontWeight: 700, color: "#60a5fa",
-          background: "rgba(96,165,250,0.1)",
-          border: "1px solid rgba(96,165,250,0.2)",
+          fontSize: 12, fontWeight: 700, color: t.blue,
+          background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
           borderRadius: 5, padding: "2px 6px",
-          flexShrink: 0, marginTop: 1, letterSpacing: 0.3,
-          fontFamily: "'DM Mono', monospace",
+          flexShrink: 0, marginTop: 1, fontFamily: "monospace",
         }}>
           #{pr.number}
         </span>
-        <span style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 500, lineHeight: 1.5, flex: 1 }}>
+        <span style={{ color: t.label1, fontSize: 12, fontWeight: 500, lineHeight: 1.5, flex: 1 }}>
           {pr.title}
         </span>
       </div>
 
-      {/* Badges row */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         {pr.isDraft && (
           <span style={{
-            fontSize: 12, fontWeight: 600, color: "#64748b",
-            background: "rgba(100,116,139,0.1)",
-            border: "1px solid rgba(100,116,139,0.15)",
+            fontSize: 11, fontWeight: 600, color: t.label3,
+            background: t.surface3, border: `1px solid ${t.borderMid}`,
             borderRadius: 20, padding: "2px 8px",
-            fontFamily: "'Syne', sans-serif",
-          }}>
-            Draft
-          </span>
+          }}>Draft</span>
         )}
         <ReviewPill decision={pr.reviewDecision} />
-        <span style={{ fontSize: 12, color: "#4ade80", marginLeft: "auto", fontFamily: "'DM Mono', monospace" }}>
+        <span style={{ fontSize: 11, color: t.green, marginLeft: "auto", fontFamily: "monospace" }}>
           {timeAgo(pr.createdAt)}
         </span>
       </div>
 
-      {/* Branch chip — blue */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
-          background: "rgba(96,165,250,0.07)",
-          border: "1px solid rgba(96,165,250,0.2)",
+          background: `${t.blue}10`, border: `1px solid ${t.blue}28`,
           borderRadius: 7, padding: "4px 8px", flex: 1, minWidth: 0,
         }}>
-          <span style={{ color: "#60a5fa", fontSize: 12, flexShrink: 0 }}>⎇</span>
-          <span style={{
-            fontSize: 12, color: "#bfdbfe", fontFamily: "'DM Mono', monospace",
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          }}>
+          <span style={{ color: t.blue, fontSize: 12, flexShrink: 0 }}>⎇</span>
+          <span style={{ fontSize: 12, color: t.blue, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {pr.headRefName}
           </span>
           <CopyButton text={pr.headRefName} label="branch" />
         </div>
-
-        {/* Commit chip — amber */}
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
-          background: "rgba(251,191,36,0.07)",
-          border: "1px solid rgba(251,191,36,0.2)",
+          background: `${t.orange}10`, border: `1px solid ${t.orange}28`,
           borderRadius: 7, padding: "4px 8px", flexShrink: 0,
         }}>
-          <span style={{ color: "#fbbf24", fontSize: 12 }}>◉</span>
-          <span style={{ fontSize: 12, color: "#fde68a", fontFamily: "'DM Mono', monospace" }}>
-            {shortSha}
-          </span>
+          <span style={{ color: t.orange, fontSize: 12 }}>◉</span>
+          <span style={{ fontSize: 12, color: t.orange, fontFamily: "monospace" }}>{shortSha}</span>
           <CopyButton text={pr.headRefOid} label="commit SHA" />
         </div>
       </div>
 
-      {/* Action buttons */}
       <div style={{ display: "flex", gap: 8 }}>
-        {/* Open PR — blue */}
         <button
           onClick={() => window.terminal.openExternal(pr.url)}
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-            background: "rgba(96,165,250,0.08)", border: "1px solid rgba(96,165,250,0.22)",
-            borderRadius: 8, color: "#93c5fd",
+            background: `${t.blue}12`, border: `1px solid ${t.blue}30`,
+            borderRadius: 8, color: t.blue,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
-            transition: "all 0.18s", fontFamily: "'Syne', sans-serif",
+            transition: "all 0.18s",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(96,165,250,0.22)"; b.style.borderColor = "rgba(96,165,250,0.6)"; b.style.color = "#93c5fd"; }}
-          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(96,165,250,0.08)"; b.style.borderColor = "rgba(96,165,250,0.22)"; b.style.color = "#93c5fd"; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.blue}25`; b.style.borderColor = `${t.blue}60`; }}
+          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.blue}12`; b.style.borderColor = `${t.blue}30`; }}
         >
           <span style={{ fontSize: 12 }}>↗</span> Open PR
         </button>
-        {/* Open Terminal — cyan */}
         <button
           onClick={() => onOpenTerminal(pr.repository.name, pr.headRefName)}
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-            background: "rgba(34,211,238,0.07)", border: "1px solid rgba(34,211,238,0.2)",
-            borderRadius: 8, color: "#67e8f9",
+            background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
+            borderRadius: 8, color: t.teal,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
-            transition: "all 0.18s", fontFamily: "'Syne', sans-serif",
+            transition: "all 0.18s",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(34,211,238,0.22)"; b.style.borderColor = "rgba(34,211,238,0.6)"; b.style.color = "#22d3ee"; }}
-          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = "rgba(34,211,238,0.07)"; b.style.borderColor = "rgba(34,211,238,0.2)"; b.style.color = "#67e8f9"; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}22`; b.style.borderColor = `${t.teal}55`; }}
+          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}10`; b.style.borderColor = `${t.teal}28`; }}
         >
           <span style={{ fontSize: 12 }}>⌨</span> Open Terminal
         </button>
@@ -200,11 +183,12 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
   );
 }
 
-interface LocalBranch { repo: string; branch: string }
+interface LocalBranch { repo: string; branch: string; repoUrl: string }
 
 function LocalBranchCard({
-  item, selected, onToggle, onOpenTerminal,
-}: { item: LocalBranch; selected: boolean; onToggle: () => void; onOpenTerminal: (repo: string, branch: string) => void }) {
+  item, selected, onToggle, onOpenTerminal, repoUrl,
+}: { item: LocalBranch; selected: boolean; onToggle: () => void; onOpenTerminal: (repo: string, branch: string) => void; repoUrl: string }) {
+  const { theme: t } = useTheme();
   const [hovered, setHovered] = useState(false);
   return (
     <div
@@ -212,8 +196,8 @@ function LocalBranchCard({
       onMouseLeave={() => setHovered(false)}
       style={{
         margin: "0 12px 5px", padding: "8px 12px",
-        background: selected ? "rgba(96,165,250,0.08)" : hovered ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)",
-        border: `1px solid ${selected ? "rgba(96,165,250,0.25)" : hovered ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)"}`,
+        background: selected ? `${t.blue}12` : hovered ? t.surface3 : t.surface2,
+        border: `1px solid ${selected ? `${t.blue}35` : hovered ? t.borderMid : t.borderSubtle}`,
         borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
         transition: "all 0.15s", cursor: "default",
       }}
@@ -222,42 +206,61 @@ function LocalBranchCard({
         onClick={onToggle}
         style={{
           width: 14, height: 14, borderRadius: 3, flexShrink: 0, cursor: "pointer",
-          border: `1px solid ${selected ? "rgba(96,165,250,0.6)" : "rgba(255,255,255,0.12)"}`,
-          background: selected ? "#3b82f6" : "transparent",
+          border: `1px solid ${selected ? t.blue : t.borderMid}`,
+          background: selected ? t.blue : "transparent",
           display: "flex", alignItems: "center", justifyContent: "center",
           transition: "all 0.15s",
         }}
       >
         {selected && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1, fontWeight: 700 }}>✓</span>}
       </div>
-
       <span style={{
-        flex: 1, fontSize: 10, color: "#94a3b8", fontFamily: "'DM Mono', monospace",
+        flex: 1, fontSize: 10, color: t.label3, fontFamily: "monospace",
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         display: "flex", alignItems: "center", gap: 5,
       }}>
-        <span style={{ color: "#475569" }}>⎇</span>
+        <span style={{ color: t.label4 }}>⎇</span>
         {item.branch}
       </span>
-
-      <button
-        onClick={() => onOpenTerminal(item.repo, item.branch)}
-        title="Open terminal"
-        style={{
-          background: "none", border: "none", cursor: "pointer",
-          color: "#334155", fontSize: 12, padding: "2px 4px",
-          borderRadius: 4, transition: "color 0.15s", lineHeight: 1,
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "#22d3ee")}
-        onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}
-      >
-        ⌨
-      </button>
+      <div style={{
+        display: "flex", alignItems: "stretch",
+        background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
+        borderRadius: 5, overflow: "hidden", flexShrink: 0,
+      }}>
+        <button
+          onClick={() => repoUrl && window.terminal.openExternal(`${repoUrl}/tree/${item.branch}`)}
+          title="View in GitHub"
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            color: t.teal, fontSize: 11, padding: "2px 5px",
+            display: "flex", alignItems: "center",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = `${t.teal}20`)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+        >↗</button>
+        <div style={{ width: 1, background: `${t.teal}28`, flexShrink: 0 }} />
+        <button
+          onClick={() => onOpenTerminal(item.repo, item.branch)}
+          title="Open terminal"
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            color: t.teal, fontSize: 11, padding: "2px 5px",
+            display: "flex", alignItems: "center",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = `${t.teal}20`)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+        >⌨</button>
+      </div>
     </div>
   );
 }
 
-export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
+interface RepoEntry { name: string; branches: string[]; repoUrl: string }
+
+export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
+  const { theme: t } = useTheme();
   const [prs, setPRs] = useState<PR[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -267,6 +270,27 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
+  const [repos, setRepos] = useState<RepoEntry[]>([]);
+  const [showRepos, setShowRepos] = useState(true);
+  const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("td_pinned_repos") ?? "[]")); }
+    catch { return new Set(); }
+  });
+
+  const togglePin = (name: string) => {
+    setPinnedRepos((prev) => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      localStorage.setItem("td_pinned_repos", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const sortedRepos = [...repos].sort((a, b) => {
+    const ap = pinnedRepos.has(a.name) ? 0 : 1;
+    const bp = pinnedRepos.has(b.name) ? 0 : 1;
+    return ap !== bp ? ap - bp : a.name.localeCompare(b.name);
+  });
 
   const load = () => {
     setLoading(true); setLocalLoading(true); setError(null); setSelected(new Set());
@@ -276,6 +300,9 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
     window.terminal.listLocalBranches()
       .then((data) => { setLocalBranches(data); setLocalLoading(false); })
       .catch(() => setLocalLoading(false));
+    window.terminal.listGithubRepos()
+      .then(setRepos)
+      .catch(() => {});
   };
 
   const reloadLocal = () => {
@@ -341,79 +368,70 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
   return (
     <div style={{
       width: 400, flexShrink: 0,
-      background: "rgba(10, 12, 22, 0.88)",
-      backdropFilter: "blur(28px) saturate(150%)",
-      WebkitBackdropFilter: "blur(28px) saturate(150%)",
-      borderLeft: "1px solid rgba(255,255,255,0.08)",
+      background: t.surface1,
+      borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column",
-      boxShadow: "-4px 0 36px rgba(0,0,0,0.5)",
+      boxShadow: t.isDark ? "-4px 0 36px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.08)",
       overflowY: "hidden",
     }}>
-      {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", padding: "15px 16px",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
-        flexShrink: 0, background: "rgba(8,10,18,0.5)",
+        borderBottom: `1px solid ${t.border}`,
+        flexShrink: 0, background: t.headerBg,
       }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: 0.3, fontFamily: "'Syne', sans-serif", color: "#e2e8f0" }}>
-            Pull Requests
-          </div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: t.label1 }}>Pull Requests</div>
           {!loading && (
-            <div style={{ color: "#4ade80", fontSize: 11, marginTop: 3, fontFamily: "'DM Mono', monospace" }}>
-              {prs.length} open PRs · {!localLoading ? `${localOnly.length} local` : "loading…"}
+            <div style={{ color: t.green, fontSize: 11, marginTop: 3, fontFamily: "monospace" }}>
+              {prs.length} open PRs · {!localLoading ? `${localOnly.length} local` : "loading…"} · {repos.length} repos
             </div>
           )}
         </div>
         <button onClick={load} title="Refresh"
-          style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#475569")}
+          style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >↺</button>
         <button onClick={onClose} title="Close"
-          style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#475569")}
+          style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >✕</button>
       </div>
 
-      {/* Body */}
       <div style={{ flex: 1, overflowY: "auto", padding: "12px 0 20px" }}>
         {loading && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 10 }}>
-            <div style={{ color: "#60a5fa", fontSize: 22 }}>⟳</div>
-            <div style={{ color: "#334155", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>Fetching pull requests…</div>
+            <div style={{ color: t.blue, fontSize: 22 }}>⟳</div>
+            <div style={{ color: t.label3, fontSize: 12, fontFamily: "monospace" }}>Fetching pull requests…</div>
           </div>
         )}
 
         {error && (
-          <div style={{ margin: 12, padding: "12px 14px", background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10 }}>
-            <div style={{ color: "#f87171", fontSize: 12, fontWeight: 600, marginBottom: 4, fontFamily: "'Syne', sans-serif" }}>Failed to load PRs</div>
-            <div style={{ color: "#94a3b8", fontSize: 11, fontFamily: "'DM Mono', monospace" }}>Make sure <code style={{ color: "#22d3ee" }}>gh</code> is installed and authenticated.</div>
+          <div style={{ margin: 12, padding: "12px 14px", background: `${t.red}10`, border: `1px solid ${t.red}28`, borderRadius: 10 }}>
+            <div style={{ color: t.red, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Failed to load PRs</div>
+            <div style={{ color: t.label2, fontSize: 11, fontFamily: "monospace" }}>Make sure <code style={{ color: t.teal }}>gh</code> is installed and authenticated.</div>
           </div>
         )}
 
         {!loading && !error && prs.length === 0 && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
             <div style={{ fontSize: 28 }}>🎉</div>
-            <div style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, fontFamily: "'Syne', sans-serif" }}>No open PRs</div>
-            <div style={{ color: "#334155", fontSize: 11, fontFamily: "'DM Mono', monospace" }}>All caught up!</div>
+            <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No open PRs</div>
+            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>All caught up!</div>
           </div>
         )}
 
         {!loading && !error && Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length).map(([repoFullName, repoPRs]) => (
           <div key={repoFullName} style={{ marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", fontFamily: "'Syne', sans-serif" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
-              <span style={{ color: "#4ade80", fontSize: 13, fontWeight: 600, letterSpacing: 0.5 }}>{repoFullName}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, flexShrink: 0 }} />
+              <span style={{ color: t.green, fontSize: 13, fontWeight: 600, letterSpacing: 0.3 }}>{repoFullName}</span>
               <span style={{
-                color: "#86efac", fontSize: 10,
-                background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
-                borderRadius: 10, padding: "1px 6px", marginLeft: 2,
-                fontFamily: "'DM Mono', monospace",
-              }}>
-                {repoPRs.length}
-              </span>
+                color: t.green, fontSize: 10,
+                background: `${t.green}15`, border: `1px solid ${t.green}28`,
+                borderRadius: 10, padding: "1px 6px", marginLeft: 2, fontFamily: "monospace",
+              }}>{repoPRs.length}</span>
             </div>
             {repoPRs.map((pr) => <PRCard key={pr.number} pr={pr} onOpenTerminal={onOpenTerminal} />)}
           </div>
@@ -422,19 +440,117 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
         {cleanMsg && (
           <div style={{
             margin: "0 12px 8px", padding: "8px 12px",
-            background: cleanMsg.startsWith("Error") ? "rgba(248,113,113,0.07)" : "rgba(34,197,94,0.07)",
-            border: `1px solid ${cleanMsg.startsWith("Error") ? "rgba(248,113,113,0.22)" : "rgba(34,197,94,0.22)"}`,
+            background: cleanMsg.startsWith("Error") ? `${t.red}10` : `${t.green}10`,
+            border: `1px solid ${cleanMsg.startsWith("Error") ? t.red : t.green}30`,
             borderRadius: 8,
-            color: cleanMsg.startsWith("Error") ? "#f87171" : "#4ade80",
-            fontSize: 11, fontFamily: "'DM Mono', monospace",
+            color: cleanMsg.startsWith("Error") ? t.red : t.green,
+            fontSize: 11, fontFamily: "monospace",
           }}>
             {cleanMsg}
           </div>
         )}
 
+        {repos.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
+              <button
+                onClick={() => setShowRepos((v) => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, flex: 1,
+                  background: "none", border: "none", cursor: "pointer", padding: 0,
+                  color: t.blue, fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.blue, flexShrink: 0 }} />
+                Repos
+                <span style={{
+                  color: t.blue, fontSize: 10,
+                  background: `${t.blue}15`, border: `1px solid ${t.blue}28`,
+                  borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                }}>{repos.length}</span>
+                <span style={{ fontSize: 10, color: t.label4 }}>{showRepos ? "▾" : "▸"}</span>
+              </button>
+            </div>
+            {showRepos && sortedRepos.map((repo) => {
+              const pinned = pinnedRepos.has(repo.name);
+              return (
+                <div key={repo.name} style={{
+                  margin: "0 12px 5px", padding: "8px 12px",
+                  background: pinned ? `${t.orange}08` : t.surface2,
+                  border: `1px solid ${pinned ? `${t.orange}28` : t.borderSubtle}`,
+                  borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
+                  transition: "all 0.15s",
+                }}>
+                  <button
+                    onClick={() => togglePin(repo.name)}
+                    title={pinned ? "Unpin" : "Pin to top"}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      color: pinned ? t.orange : t.label4,
+                      fontSize: 12, padding: "1px 2px", lineHeight: 1,
+                      flexShrink: 0, transition: "color 0.15s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = pinned ? t.orange : t.label4)}
+                  >{pinned ? "★" : "☆"}</button>
+                  <span style={{
+                    flex: 1, fontSize: 12, color: pinned ? t.label1 : t.label2, fontFamily: "monospace",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    fontWeight: pinned ? 600 : 400,
+                  }}>{repo.name}</span>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {repo.branches.map((branch) => {
+                      const c = branch === "main" || branch === "master" ? t.green : t.blue;
+                      return (
+                        <div key={branch} style={{
+                          display: "flex", alignItems: "stretch",
+                          background: `${c}12`, border: `1px solid ${c}30`,
+                          borderRadius: 5, overflow: "hidden", transition: "all 0.15s",
+                        }}>
+                          <button
+                            onClick={() => repo.repoUrl && window.terminal.openExternal(`${repo.repoUrl}/tree/${branch}`)}
+                            title="View in GitHub"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer",
+                              color: c, fontSize: 10, fontWeight: 600,
+                              padding: "2px 7px", fontFamily: "monospace",
+                              display: "flex", alignItems: "center", gap: 3,
+                              transition: "background 0.15s",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = `${c}20`)}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                          >
+                            <span style={{ fontSize: 9, opacity: 0.75 }}>↗</span>{branch}
+                          </button>
+                          <div style={{ width: 1, background: `${c}30`, flexShrink: 0 }} />
+                          <button
+                            onClick={() => onOpenRepo(repo.name, branch)}
+                            title="Open terminal"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer",
+                              color: c, fontSize: 11,
+                              padding: "2px 5px",
+                              display: "flex", alignItems: "center",
+                              transition: "background 0.15s",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = `${c}20`)}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                          >⌨</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {!localLoading && !loading && localOnly.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent)", margin: "4px 16px 10px" }} />
+            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
 
             <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
               <button
@@ -442,63 +558,56 @@ export function PRsDrawer({ onClose, onOpenTerminal }: Props) {
                 style={{
                   display: "flex", alignItems: "center", gap: 6, flex: 1,
                   background: "none", border: "none", cursor: "pointer", padding: 0,
-                  color: "#64748b", fontSize: 13, fontWeight: 600, letterSpacing: 0.4,
-                  textAlign: "left", fontFamily: "'Syne', sans-serif",
+                  color: t.green, fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
+                  textAlign: "left",
                 }}
               >
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
-                <span style={{ color: "#4ade80" }}>Local branches</span>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, flexShrink: 0 }} />
+                Local branches
                 <span style={{
-                  color: "#86efac", fontSize: 10,
-                  background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
-                  borderRadius: 10, padding: "1px 6px", fontFamily: "'DM Mono', monospace",
-                }}>
-                  {localOnly.length}
-                </span>
-                <span style={{ fontSize: 10, color: "#334155" }}>{showLocal ? "▾" : "▸"}</span>
+                  color: t.green, fontSize: 10,
+                  background: `${t.green}15`, border: `1px solid ${t.green}28`,
+                  borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                }}>{localOnly.length}</span>
+                <span style={{ fontSize: 10, color: t.label4 }}>{showLocal ? "▾" : "▸"}</span>
               </button>
 
               {selected.size > 0 && (
                 <button
                   onClick={handleDeleteSelected} disabled={deleting}
                   style={{
-                    background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.22)",
-                    borderRadius: 6, color: "#f87171",
+                    background: `${t.red}10`, border: `1px solid ${t.red}30`,
+                    borderRadius: 6, color: t.red,
                     cursor: deleting ? "not-allowed" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "3px 8px",
-                    opacity: deleting ? 0.5 : 1, fontFamily: "'Syne', sans-serif",
+                    opacity: deleting ? 0.5 : 1,
                   }}
-                >
-                  🗑 Delete {selected.size}
-                </button>
+                >🗑 Delete {selected.size}</button>
               )}
             </div>
 
             {showLocal && Object.entries(localByRepo).sort((a, b) => b[1].length - a[1].length).map(([repo, branches]) => (
               <div key={repo} style={{ marginBottom: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px 4px 26px" }}>
-                  <span style={{ color: "#4ade80", fontSize: 12, fontWeight: 600, flex: 1, fontFamily: "'Syne', sans-serif" }}>{repo}</span>
+                  <span style={{ color: t.green, fontSize: 12, fontWeight: 600, flex: 1 }}>{repo}</span>
                   <button
                     onClick={() => handleCleanMerged(repo)} disabled={deleting}
                     title="Delete branches already merged into main"
                     style={{
-                      background: "none", border: "1px solid rgba(255,255,255,0.08)",
-                      borderRadius: 5, color: "#475569",
+                      background: "none", border: `1px solid ${t.borderSubtle}`,
+                      borderRadius: 5, color: t.label3,
                       cursor: deleting ? "not-allowed" : "pointer",
                       fontSize: 9, fontWeight: 600, padding: "2px 6px",
                       opacity: deleting ? 0.5 : 1, transition: "all 0.15s",
-                      fontFamily: "'Syne', sans-serif",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(34,211,238,0.4)"; e.currentTarget.style.color = "#22d3ee"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#475569"; }}
-                  >
-                    ✦ Clean merged
-                  </button>
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${t.teal}50`; e.currentTarget.style.color = t.teal; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.borderSubtle; e.currentTarget.style.color = t.label3; }}
+                  >✦ Clean merged</button>
                 </div>
                 {branches.map((b) => {
                   const key = `${b.repo}::${b.branch}`;
                   return (
-                    <LocalBranchCard key={key} item={b} selected={selected.has(key)} onToggle={() => toggleSelect(key)} onOpenTerminal={onOpenTerminal} />
+                    <LocalBranchCard key={key} item={b} selected={selected.has(key)} onToggle={() => toggleSelect(key)} onOpenTerminal={onOpenTerminal} repoUrl={b.repoUrl} />
                   );
                 })}
               </div>

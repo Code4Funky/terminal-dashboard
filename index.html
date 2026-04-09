@@ -9,43 +9,23 @@
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
     <style>
       *, *::before, *::after { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; height: 100%; background: #0f1923; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #000000; }
       #root { height: 100%; }
 
-      @keyframes gradientShift {
-        0%   { background-position: 0%   50%; }
-        50%  { background-position: 100% 50%; }
-        100% { background-position: 0%   50%; }
-      }
-
-      @keyframes orbFloat1 {
-        0%, 100% { transform: translate(0, 0) scale(1); }
-        33%  { transform: translate(22px, -28px) scale(1.03); }
-        66%  { transform: translate(-14px, 14px) scale(0.98); }
-      }
-
-      @keyframes orbFloat2 {
-        0%, 100% { transform: translate(0, 0) scale(1); }
-        40%  { transform: translate(-26px, 20px) scale(1.05); }
-        70%  { transform: translate(18px, -12px) scale(0.97); }
-      }
-
-      .btn-animated-gradient {
-        background: linear-gradient(-45deg, #3b82f6, #6366f1, #8b5cf6, #6366f1, #3b82f6) !important;
-        background-size: 300% 300% !important;
-        animation: gradientShift 5s ease infinite;
+      .btn-new-terminal {
+        background: #0A84FF !important;
         border: none !important;
         color: #fff !important;
-        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+        font-weight: 700 !important;
+        transition: opacity 0.15s ease, transform 0.15s ease !important;
       }
-
-      .btn-animated-gradient:hover {
+      .btn-new-terminal:hover {
+        opacity: 0.85;
         transform: translateY(-1px);
-        box-shadow: 0 5px 22px rgba(99, 102, 241, 0.4) !important;
       }
-
-      .btn-animated-gradient:active {
+      .btn-new-terminal:active {
         transform: translateY(0);
+        opacity: 1;
       }
     </style>
   </head>

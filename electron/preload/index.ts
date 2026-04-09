@@ -104,10 +104,37 @@ contextBridge.exposeInMainWorld("terminal", {
   ): Promise<{ role: string; content: string; timestamp?: string }[]> =>
     ipcRenderer.invoke("claude:read-session", filename),
 
+  listClaudeAgents: (): Promise<{
+    name: string;
+    description: string;
+    model?: string;
+    color?: string;
+    tools: string[];
+    filename: string;
+  }[]> => ipcRenderer.invoke("claude:list-agents"),
+
+  listClaudeCommands: (): Promise<{ name: string; description: string; filename: string }[]> =>
+    ipcRenderer.invoke("claude:list-commands"),
+
+  listClaudeSkills: (): Promise<{ name: string; description: string }[]> =>
+    ipcRenderer.invoke("claude:list-skills"),
+
+  listClaudeHooks: (): Promise<{ event: string; matcher?: string; command: string }[]> =>
+    ipcRenderer.invoke("claude:list-hooks"),
+
+  onClaudeConfigChanged: (cb: () => void): (() => void) => {
+    const handler = () => cb();
+    ipcRenderer.on("claude:config-changed", handler);
+    return () => ipcRenderer.removeListener("claude:config-changed", handler);
+  },
+
   checkWorktree: (repoName: string, branchName: string): Promise<{ exists: boolean; path: string | null }> =>
     ipcRenderer.invoke("prs:check-worktree", repoName, branchName),
 
-  listLocalBranches: (): Promise<{ repo: string; branch: string }[]> =>
+  checkGitDirty: (repoName: string): Promise<{ dirty: boolean; files: string[] }> =>
+    ipcRenderer.invoke("git:check-dirty", repoName),
+
+  listLocalBranches: (): Promise<{ repo: string; branch: string; repoUrl: string }[]> =>
     ipcRenderer.invoke("prs:list-local-branches"),
 
   deleteBranches: (repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
@@ -130,4 +157,34 @@ contextBridge.exposeInMainWorld("terminal", {
 
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
+
+  listNotes: (): Promise<{ id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }[]> =>
+    ipcRenderer.invoke("notes:list"),
+
+  saveNote: (card: { id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }): void =>
+    ipcRenderer.send("notes:save", card),
+
+  deleteNote: (id: string): void =>
+    ipcRenderer.send("notes:delete", id),
+
+  listGithubRepos: (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> =>
+    ipcRenderer.invoke("github:list-repos"),
+
+  getClaudeLimits: (): Promise<{
+    five_hour: { utilization: number; resets_at: string | null };
+    seven_day: { utilization: number; resets_at: string | null };
+    extra_usage: { monthly_limit: number; used_credits: number; utilization: number } | null;
+    org_id: string;
+  } | null> => ipcRenderer.invoke("usage:get-limits"),
+
+  getUsageSessions: (): Promise<{
+    sessionId: string;
+    totalCost: number;
+    totalTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    lastActivity: string;
+    modelsUsed: string[];
+    resolvedPath: string | null;
+  }[]> => ipcRenderer.invoke("usage:get-sessions"),
 });

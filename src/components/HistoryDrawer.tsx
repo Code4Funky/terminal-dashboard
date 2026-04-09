@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTheme } from "../ThemeContext";
 
 interface HistoryEntry { number: number; size: number; lastModified: number; }
 interface Props { openNumbers: number[]; onReopen: (num: number) => void; onClose: () => void; }
@@ -14,6 +15,7 @@ function formatDate(ms: number): string {
 }
 
 export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
+  const { theme: t } = useTheme();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [clearing, setClearing] = useState(false);
 
@@ -35,53 +37,43 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
   return (
     <div style={{
       width: 300, flexShrink: 0,
-      background: "rgba(10, 12, 22, 0.88)",
-      backdropFilter: "blur(28px) saturate(150%)",
-      WebkitBackdropFilter: "blur(28px) saturate(150%)",
-      borderLeft: "1px solid rgba(255,255,255,0.08)",
+      background: t.surface1,
+      borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column",
-      boxShadow: "-4px 0 28px rgba(0,0,0,0.4)",
+      boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 16px rgba(0,0,0,0.08)",
     }}>
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 14px",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
-        flexShrink: 0, background: "rgba(8,10,18,0.5)", gap: 8,
+        borderBottom: `1px solid ${t.border}`,
+        flexShrink: 0, background: t.headerBg, gap: 8,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", flex: 1, fontFamily: "'Syne', sans-serif" }}>
-          Terminal History
-        </span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, flex: 1 }}>Terminal History</span>
         {closedCount > 0 && (
           <button
             onClick={handleClearClosed} disabled={clearing}
-            title="Delete all closed history"
             style={{
-              background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.22)",
-              borderRadius: 5, color: "#f87171",
+              background: `${t.red}10`, border: `1px solid ${t.red}30`,
+              borderRadius: 5, color: t.red,
               cursor: clearing ? "not-allowed" : "pointer",
               fontSize: 10, fontWeight: 600, padding: "2px 8px",
-              opacity: clearing ? 0.5 : 1, transition: "all 0.15s",
-              flexShrink: 0, fontFamily: "'Syne', sans-serif",
+              opacity: clearing ? 0.5 : 1, transition: "all 0.15s", flexShrink: 0,
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.2)"; e.currentTarget.style.borderColor = "rgba(248,113,113,0.4)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(248,113,113,0.07)"; e.currentTarget.style.borderColor = "rgba(248,113,113,0.22)"; }}
-          >
-            🗑 Clear closed ({closedCount})
-          </button>
+            onMouseEnter={(e) => { e.currentTarget.style.background = `${t.red}20`; e.currentTarget.style.borderColor = `${t.red}50`; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = `${t.red}10`; e.currentTarget.style.borderColor = `${t.red}30`; }}
+          >🗑 Clear closed ({closedCount})</button>
         )}
         <button
           onClick={onClose}
-          style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, transition: "color 0.15s" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#475569")}
+          style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, transition: "color 0.15s" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >×</button>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
         {entries.length === 0 ? (
-          <div style={{ padding: 16, color: "#334155", fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-            No history found.
-          </div>
+          <div style={{ padding: 16, color: t.label3, fontSize: 12, fontFamily: "monospace" }}>No history found.</div>
         ) : (
           entries.map((e) => {
             const isOpen = openSet.has(e.number);
@@ -89,45 +81,42 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
               <div key={e.number} style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
                 padding: "8px 14px",
-                borderBottom: "1px solid rgba(255,255,255,0.05)", gap: 8,
-                background: isOpen ? "rgba(34,211,238,0.04)" : "transparent",
+                borderBottom: `1px solid ${t.borderSubtle}`, gap: 8,
+                background: isOpen ? `${t.teal}08` : "transparent",
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'DM Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: t.label2, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
                     terminal {e.number}
                     {isOpen && (
                       <span style={{
-                        fontSize: 9, color: "#22d3ee",
-                        border: "1px solid rgba(34,211,238,0.35)",
-                        borderRadius: 3, padding: "0 4px",
-                        fontFamily: "'Syne', sans-serif", fontWeight: 600,
+                        fontSize: 9, color: t.teal,
+                        border: `1px solid ${t.teal}40`,
+                        borderRadius: 3, padding: "0 4px", fontWeight: 600,
                       }}>open</span>
                     )}
                   </div>
-                  <div style={{ fontSize: 10, color: "#334155", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>
+                  <div style={{ fontSize: 10, color: t.label4, marginTop: 2, fontFamily: "monospace" }}>
                     {formatDate(e.lastModified)} · {formatSize(e.size)}
                   </div>
                 </div>
                 <button
                   onClick={() => onReopen(e.number)} disabled={isOpen}
-                  title={isOpen ? "Already open" : "Reopen"}
                   style={{
-                    background: isOpen ? "none" : "rgba(96,165,250,0.08)",
-                    border: `1px solid ${isOpen ? "rgba(255,255,255,0.05)" : "rgba(96,165,250,0.28)"}`,
-                    borderRadius: 4, color: isOpen ? "#334155" : "#93c5fd",
+                    background: isOpen ? "none" : `${t.blue}12`,
+                    border: `1px solid ${isOpen ? t.borderSubtle : `${t.blue}35`}`,
+                    borderRadius: 4, color: isOpen ? t.label4 : t.blue,
                     cursor: isOpen ? "default" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "2px 8px",
-                    flexShrink: 0, fontFamily: "'Syne', sans-serif", transition: "all 0.15s",
+                    flexShrink: 0, transition: "all 0.15s",
                   }}
                 >Reopen</button>
                 <button
                   onClick={() => { window.terminal.deleteHistory(e.number); setEntries((prev) => prev.filter((x) => x.number !== e.number)); }}
                   disabled={isOpen}
-                  title={isOpen ? "Close terminal first" : "Delete history"}
                   style={{
                     background: "none",
-                    border: `1px solid ${isOpen ? "rgba(255,255,255,0.05)" : "rgba(248,113,113,0.2)"}`,
-                    borderRadius: 4, color: isOpen ? "#334155" : "#f87171",
+                    border: `1px solid ${isOpen ? t.borderSubtle : `${t.red}30`}`,
+                    borderRadius: 4, color: isOpen ? t.label4 : t.red,
                     cursor: isOpen ? "default" : "pointer",
                     fontSize: 10, padding: "2px 8px", flexShrink: 0, transition: "all 0.15s",
                   }}

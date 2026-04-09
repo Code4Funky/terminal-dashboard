@@ -1,5 +1,6 @@
 import { useRef, useEffect } from "react";
 import { useTerminal } from "../hooks/useTerminal";
+import { useTheme } from "../ThemeContext";
 import "@xterm/xterm/css/xterm.css";
 
 interface Props {
@@ -24,6 +25,7 @@ export function TerminalPanel({
   sessionId, panelNumber, title, cwd, gitBranch,
   fontFamily, fontSize, onClose, focused, onFocus,
 }: Props) {
+  const { theme: t } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize);
 
@@ -36,49 +38,50 @@ export function TerminalPanel({
       style={{
         display: "flex", flexDirection: "column",
         border: focused
-          ? "1px solid rgba(34,197,94,0.55)"
-          : "1px solid rgba(255,255,255,0.07)",
-        borderRadius: 8, overflow: "hidden",
-        background: "rgba(255,255,255,0.02)",
-        backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
+          ? `2px solid ${t.green}99`
+          : `2px solid ${t.borderMid}`,
+        borderRadius: 10, overflow: "hidden",
+        background: t.isDark ? "#1C1C1E" : "#FFFFFF",
         minHeight: 0,
         boxShadow: focused
-          ? "0 0 0 1px rgba(34,197,94,0.15), 0 4px 28px rgba(0,0,0,0.4)"
-          : "0 2px 14px rgba(0,0,0,0.3)",
+          ? `0 0 0 1px ${t.green}20, 0 4px 28px rgba(0,0,0,0.3)`
+          : "0 2px 12px rgba(0,0,0,0.15)",
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
       onClick={onFocus}
-      onMouseEnter={(e) => { if (!focused) e.currentTarget.style.borderColor = "rgba(34,197,94,0.28)"; }}
-      onMouseLeave={(e) => { if (!focused) e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"; }}
+      onMouseEnter={(e) => { if (!focused) e.currentTarget.style.borderColor = `${t.green}55`; }}
+      onMouseLeave={(e) => { if (!focused) e.currentTarget.style.borderColor = t.borderMid; }}
     >
       {/* Title bar */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "4px 10px",
-        background: focused ? "rgba(15, 20, 35, 0.75)" : "rgba(10, 12, 20, 0.65)",
-        borderBottom: focused
-          ? "1px solid rgba(255,255,255,0.1)"
-          : "1px solid rgba(255,255,255,0.05)",
+        background: t.isDark
+          ? (focused ? "rgba(44,44,46,0.9)" : "rgba(28,28,30,0.85)")
+          : (focused ? "rgba(242,242,247,0.95)" : "rgba(255,255,255,0.9)"),
+        borderBottom: `1px solid ${focused ? t.borderMid : t.borderSubtle}`,
         userSelect: "none", flexShrink: 0,
       }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-          <span style={{ color: focused ? "#e2e8f0" : "#475569" }}>{title}</span>
-          {cwd && <span style={{ color: "#334155" }}>{formatCwd(cwd)}</span>}
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "monospace" }}>
+          <span style={{ color: focused ? t.label1 : t.label3 }}>{title}</span>
+          {cwd && <span style={{ color: t.label4 }}>{formatCwd(cwd)}</span>}
+          {gitBranch && (
+            <span style={{ color: t.red, fontFamily: "monospace" }}>
+              git:({gitBranch})
+            </span>
+          )}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); onClose(); }}
           style={{
-            background: "none", border: "none", color: "#334155",
+            background: "none", border: "none", color: t.label4,
             cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px",
             transition: "color 0.15s",
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
           title="Close"
-        >
-          ×
-        </button>
+        >×</button>
       </div>
 
       {/* Terminal area */}

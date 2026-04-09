@@ -55,8 +55,14 @@ declare global {
       }>;
       listClaudeSessions: () => Promise<{ filename: string; size: number; lastModified: number }[]>;
       readClaudeSession: (filename: string) => Promise<{ role: string; content: string; timestamp?: string }[]>;
+      listClaudeAgents: () => Promise<{ name: string; description: string; model?: string; color?: string; tools: string[]; filename: string }[]>;
+      listClaudeCommands: () => Promise<{ name: string; description: string; filename: string }[]>;
+      listClaudeSkills: () => Promise<{ name: string; description: string }[]>;
+      listClaudeHooks: () => Promise<{ event: string; matcher?: string; command: string }[]>;
+      onClaudeConfigChanged: (cb: () => void) => () => void;
       checkWorktree: (repoName: string, branchName: string) => Promise<{ exists: boolean; path: string | null }>;
-      listLocalBranches: () => Promise<{ repo: string; branch: string }[]>;
+      checkGitDirty: (repoName: string) => Promise<{ dirty: boolean; files: string[] }>;
+      listLocalBranches: () => Promise<{ repo: string; branch: string; repoUrl: string }[]>;
       deleteBranches: (repo: string, branches: string[]) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
       cleanupMerged: (repo: string) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
       listPRs: () => Promise<{
@@ -71,6 +77,10 @@ declare global {
         repository: { name: string; nameWithOwner: string };
       }[]>;
       openExternal: (url: string) => Promise<void>;
+      listGithubRepos: () => Promise<{ name: string; branches: string[]; repoUrl: string }[]>;
+      listNotes: () => Promise<{ id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }[]>;
+      saveNote: (card: { id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }) => void;
+      deleteNote: (id: string) => void;
     };
   }
 }

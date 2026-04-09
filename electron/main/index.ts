@@ -12,6 +12,45 @@ import os from "os";
 
 app.name = "Terminal Dashboard";
 
+// ── Resolve ccusage binary + a PATH that includes its node runtime ────────────
+function resolveCcusageEnv(): { bin: string; env: NodeJS.ProcessEnv } {
+  const nvmDir = `${os.homedir()}/.nvm/versions/node`;
+  // Collect all nvm node bin dirs (newest first) to prepend to PATH
+  const nvmBinDirs: string[] = [];
+  try {
+    if (fs.existsSync(nvmDir)) {
+      for (const v of fs.readdirSync(nvmDir).sort().reverse()) {
+        nvmBinDirs.push(`${nvmDir}/${v}/bin`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  const extraPaths = [
+    ...nvmBinDirs,
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+  ];
+  const augmentedPath = [...extraPaths, process.env.PATH ?? ""].join(":");
+  const env = { ...process.env, PATH: augmentedPath };
+
+  const candidates = [
+    "ccusage",
+    ...nvmBinDirs.map((d) => `${d}/ccusage`),
+    "/usr/local/bin/ccusage",
+    "/opt/homebrew/bin/ccusage",
+  ];
+  for (const c of candidates) {
+    try {
+      execSync(`"${c}" --version`, { stdio: "ignore", timeout: 3000, env });
+      return { bin: c, env };
+    } catch {
+      // try next
+    }
+  }
+  return { bin: "ccusage", env }; // last resort
+}
+const { bin: CCUSAGE_BIN, env: CCUSAGE_ENV } = resolveCcusageEnv();
+
 // ── Paths ────────────────────────────────────────────────────────────────────
 const dataDir = join(os.homedir(), ".terminal-dashboard");
 const stateFile = join(dataDir, "state.json");
@@ -19,8 +58,24 @@ const historyDir = join(dataDir, "history");
 const repoStatsFile = join(dataDir, "repo-stats.json");
 const claudeSessionsDir = join(os.homedir(), ".claude", "sessions");
 const claudeProjectsDir = join(os.homedir(), ".claude", "projects");
+const claudeAgentsDir = join(os.homedir(), ".claude", "agents");
+const claudeCommandsDir = join(os.homedir(), ".claude", "commands");
+const claudeSkillsDir = join(os.homedir(), ".claude", "skills");
+const notesFile = join(dataDir, "notes.json");
 
 fs.mkdirSync(historyDir, { recursive: true });
+
+// ── Notes ─────────────────────────────────────────────────────────────────────
+interface NoteCard { id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string; }
+
+function loadNotes(): NoteCard[] {
+  try { return JSON.parse(fs.readFileSync(notesFile, "utf8")); }
+  catch { return []; }
+}
+
+function saveNotes(notes: NoteCard[]) {
+  fs.writeFileSync(notesFile, JSON.stringify(notes, null, 2));
+}
 
 // ── State ────────────────────────────────────────────────────────────────────
 interface SavedPanel {
@@ -533,6 +588,20 @@ app.setAboutPanelOptions({
 
 app.whenReady().then(() => {
   startHttpServer(); // createWindow() is called inside once zdotdir is ready
+
+  // Watch Claude config dirs — debounce to avoid floods on bulk file saves
+  let claudeConfigTimer: ReturnType<typeof setTimeout> | null = null;
+  const notifyClaudeConfigChanged = () => {
+    if (claudeConfigTimer) clearTimeout(claudeConfigTimer);
+    claudeConfigTimer = setTimeout(() => send("claude:config-changed"), 300);
+  };
+  for (const dir of [claudeAgentsDir, claudeCommandsDir, claudeSkillsDir]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.watch(dir, notifyClaudeConfigChanged);
+    } catch { /* dir may not exist yet */ }
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       // zdotdir was deleted when the window closed — recreate it before opening
@@ -624,6 +693,20 @@ ipcMain.on("terminal:set-focused", (_, sessionId: string) => {
   focusedSessionId = sessionId;
 });
 
+// ── Notes IPC ─────────────────────────────────────────────────────────────────
+ipcMain.handle("notes:list", () => loadNotes());
+
+ipcMain.on("notes:save", (_, card: NoteCard) => {
+  const notes = loadNotes();
+  const idx = notes.findIndex((n) => n.id === card.id);
+  if (idx >= 0) notes[idx] = card; else notes.push(card);
+  saveNotes(notes);
+});
+
+ipcMain.on("notes:delete", (_, id: string) => {
+  saveNotes(loadNotes().filter((n) => n.id !== id));
+});
+
 // ── Stats IPC ─────────────────────────────────────────────────────────────────
 ipcMain.handle("stats:get-data", (_, month?: string) => {
   const { claudeRepoVisits, ...claude } = computeClaudeStats(month);
@@ -646,6 +729,117 @@ ipcMain.handle("stats:get-data", (_, month?: string) => {
     .sort((a, b) => b.visits - a.visits)
     .slice(0, 12);
   return { claude, repos };
+});
+
+// ── Usage Sessions IPC (ccusage) ──────────────────────────────────────────────
+function resolveProjectPath(sessionId: string): string | null {
+  if (!sessionId.startsWith("-")) return null;
+  function dfs(remaining: string, current: string): string | null {
+    if (remaining.length === 0) return fs.existsSync(current) ? current : null;
+    const dashIdx = remaining.indexOf("-");
+    if (dashIdx === -1) {
+      const full = current + remaining;
+      return fs.existsSync(full) ? full : null;
+    }
+    const prefix = remaining.slice(0, dashIdx);
+    const rest = remaining.slice(dashIdx + 1);
+    if (prefix.length > 0) {
+      const asDir = current + prefix;
+      if (fs.existsSync(asDir) && fs.statSync(asDir).isDirectory()) {
+        const r = dfs(rest, asDir + "/");
+        if (r !== null) return r;
+      }
+    }
+    return dfs(rest, current + prefix + "-");
+  }
+  return dfs(sessionId.slice(1), "/");
+}
+
+ipcMain.handle("usage:get-sessions", () => {
+  try {
+    const out = execSync(`"${CCUSAGE_BIN}" session --json`, { timeout: 10000, env: CCUSAGE_ENV }).toString();
+    const data = JSON.parse(out);
+    const raw: Array<{
+      sessionId: string; totalCost: number; totalTokens: number;
+      inputTokens: number; outputTokens: number;
+      lastActivity: string; modelsUsed: string[];
+    }> = data.sessions ?? data;
+    return raw
+      .map((s) => ({ ...s, resolvedPath: resolveProjectPath(s.sessionId) }))
+      .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+  } catch {
+    return [];
+  }
+});
+
+// ── Claude.ai Usage Limits IPC ────────────────────────────────────────────────
+const CLAUDE_LIMITS_PY = `
+import subprocess, sqlite3, os, tempfile, shutil, json, urllib.request, urllib.error
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+key_str = subprocess.check_output(
+    ["security","find-generic-password","-s","Claude Safe Storage","-w"],
+    stderr=subprocess.DEVNULL).strip()
+kdf = PBKDF2HMAC(algorithm=hashes.SHA1(),length=16,salt=b'saltysalt',iterations=1003,backend=default_backend())
+aes_key = kdf.derive(key_str)
+iv = b' ' * 16
+
+def decrypt(enc):
+    ct = enc[3:]
+    d = Cipher(algorithms.AES(aes_key), modes.CBC(iv)).decryptor()
+    raw = d.update(ct) + d.finalize()
+    payload = raw[32:]; pad = payload[-1]
+    return (payload[:-pad] if 0 < pad <= 16 else payload).decode('utf-8')
+
+src = os.path.expanduser("~/Library/Application Support/Claude/Cookies")
+tmp = tempfile.mktemp(suffix=".db")
+shutil.copy2(src, tmp)
+conn = sqlite3.connect(tmp)
+rows = conn.execute("SELECT name,encrypted_value FROM cookies WHERE host_key LIKE '%claude.ai%' AND name IN ('sessionKey','lastActiveOrg','cf_clearance','__ssid','anthropic-device-id','routingHint')").fetchall()
+conn.close(); os.unlink(tmp)
+
+cookies = {}
+for name, enc in rows:
+    try: cookies[name] = decrypt(enc)
+    except: pass
+
+org_id = cookies.get('lastActiveOrg','')
+cookie_str = "; ".join(f"{k}={v}" for k,v in cookies.items())
+headers = {
+    "Cookie": cookie_str, "Accept": "application/json",
+    "Referer": "https://claude.ai/settings/limits",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "anthropic-client-platform": "web_claude_ai",
+    "sec-fetch-site": "same-origin",
+}
+
+req = urllib.request.Request(f"https://claude.ai/api/organizations/{org_id}/usage", headers=headers)
+with urllib.request.urlopen(req, timeout=10) as r:
+    data = json.loads(r.read())
+    data['org_id'] = org_id
+    print(json.dumps(data))
+`;
+
+const PYTHON3_PATH = (() => {
+  for (const p of ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]) {
+    if (fs.existsSync(p)) return p;
+  }
+  return "python3";
+})();
+
+ipcMain.handle("usage:get-limits", () => {
+  try {
+    const pyPath = join(os.tmpdir(), "td_claude_limits.py");
+    fs.writeFileSync(pyPath, CLAUDE_LIMITS_PY);
+    const out = execSync(`"${PYTHON3_PATH}" "${pyPath}"`, { timeout: 15000 }).toString().trim();
+    try { fs.unlinkSync(pyPath); } catch {}
+    return JSON.parse(out);
+  } catch {
+    return null;
+  }
 });
 
 // ── iTerm2 Font IPC ───────────────────────────────────────────────────────────
@@ -716,6 +910,141 @@ interface ClaudeMessage {
 }
 
 
+// ── Claude Agents IPC ─────────────────────────────────────────────────────────
+interface ClaudeAgent {
+  name: string;
+  description: string;
+  model?: string;
+  color?: string;
+  tools: string[];
+  filename: string;
+}
+
+ipcMain.handle("claude:list-agents", (): ClaudeAgent[] => {
+  try {
+    if (!fs.existsSync(claudeAgentsDir)) return [];
+    return fs.readdirSync(claudeAgentsDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => {
+        const content = fs.readFileSync(join(claudeAgentsDir, f), "utf8");
+        const fm = content.match(/^---\n([\s\S]*?)\n---/);
+        let name = f.replace(".md", "");
+        let description = "";
+        let model: string | undefined;
+        let color: string | undefined;
+        const tools: string[] = [];
+        if (fm) {
+          const yaml = fm[1];
+          const nameM = yaml.match(/^name:\s*(.+)$/m);
+          if (nameM) name = nameM[1].trim();
+          description = parseFmDescription(yaml);
+          const modelM = yaml.match(/^model:\s*(.+)$/m);
+          if (modelM) model = modelM[1].trim();
+          const colorM = yaml.match(/^color:\s*(.+)$/m);
+          if (colorM) color = colorM[1].trim();
+          const toolsBlock = yaml.match(/^tools:\n((?:[ \t]+-[^\n]*\n?)*)/m);
+          if (toolsBlock) {
+            toolsBlock[1].split("\n").forEach((l) => {
+              const m = l.match(/^\s+-\s+(.+)$/);
+              if (m) tools.push(m[1].trim());
+            });
+          }
+        }
+        return { name, description, model, color, tools, filename: f };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+});
+
+interface ClaudeCommand { name: string; description: string; filename: string; }
+interface ClaudeSkill { name: string; description: string; }
+interface ClaudeHook { event: string; matcher?: string; command: string; }
+
+/** Parse `description:` from YAML frontmatter, handling inline, `>`, and `|` block scalars. */
+function parseFmDescription(yaml: string): string {
+  const m = yaml.match(/^description:\s*(.*)/m);
+  if (!m) return "";
+  const inline = m[1].trim();
+  // Inline value (not a block scalar indicator)
+  if (inline && inline !== ">" && inline !== "|") return inline;
+  // Block scalar: collect subsequent indented lines
+  const afterKey = yaml.slice(yaml.indexOf(m[0]) + m[0].length);
+  const lines = afterKey.split("\n");
+  const indented: string[] = [];
+  for (const line of lines) {
+    if (line === "") { indented.push(""); continue; }
+    if (/^\s+/.test(line)) indented.push(line.trim());
+    else break;
+  }
+  return indented.join(" ").replace(/\s+/g, " ").trim();
+}
+
+ipcMain.handle("claude:list-commands", (): ClaudeCommand[] => {
+  try {
+    if (!fs.existsSync(claudeCommandsDir)) return [];
+    return fs.readdirSync(claudeCommandsDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => {
+        const content = fs.readFileSync(join(claudeCommandsDir, f), "utf8");
+        const fm = content.match(/^---\n([\s\S]*?)\n---/);
+        let description = "";
+        if (fm) {
+          description = parseFmDescription(fm[1]);
+        }
+        if (!description) {
+          // fallback: first non-empty line after frontmatter
+          const body = fm ? content.slice(content.indexOf("---", 3) + 3) : content;
+          description = body.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").trim() ?? "";
+        }
+        return { name: f.replace(".md", ""), description, filename: f };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch { return []; }
+});
+
+ipcMain.handle("claude:list-skills", (): ClaudeSkill[] => {
+  try {
+    if (!fs.existsSync(claudeSkillsDir)) return [];
+    return fs.readdirSync(claudeSkillsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => {
+        const skillFile = join(claudeSkillsDir, d.name, "SKILL.md");
+        let description = "";
+        try {
+          const content = fs.readFileSync(skillFile, "utf8");
+          const fm = content.match(/^---\n([\s\S]*?)\n---/);
+          if (fm) {
+            description = parseFmDescription(fm[1]);
+          }
+          if (!description) {
+            const body = fm ? content.slice(content.indexOf("---", 3) + 3) : content;
+            description = body.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").trim() ?? "";
+          }
+        } catch { /* ignore */ }
+        return { name: d.name, description };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch { return []; }
+});
+
+ipcMain.handle("claude:list-hooks", (): ClaudeHook[] => {
+  try {
+    const settingsPath = join(os.homedir(), ".claude", "settings.json");
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    const result: ClaudeHook[] = [];
+    for (const [event, entries] of Object.entries(settings.hooks ?? {})) {
+      for (const entry of entries as { matcher?: string; hooks?: { command?: string }[] }[]) {
+        for (const h of entry.hooks ?? []) {
+          if (h.command) result.push({ event, matcher: entry.matcher, command: h.command });
+        }
+      }
+    }
+    return result;
+  } catch { return []; }
+});
+
 // ── PRs IPC ───────────────────────────────────────────────────────────────────
 interface PRNode {
   number: number;
@@ -778,9 +1107,10 @@ ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted:
   return { deleted, failed };
 });
 
-ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string }[]> => {
-  const results: { repo: string; branch: string }[] = [];
+ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string; repoUrl: string }[]> => {
+  const results: { repo: string; branch: string; repoUrl: string }[] = [];
   const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
+  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
   try {
     for (const dir of fs.readdirSync(githubDir)) {
       const repoPath = join(githubDir, dir);
@@ -790,14 +1120,17 @@ ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; bran
         if (!fs.existsSync(gitEntry)) continue;
         // Worktrees have .git as a file pointing back to the main repo — skip them
         if (!fs.statSync(gitEntry).isDirectory()) continue;
-        const { stdout } = await execAsync(
-          `git branch --format="%(refname:short)"`,
-          { cwd: repoPath, env: { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` } }
-        );
-        for (const b of stdout.trim().split("\n")) {
+        const [branchOut, remoteOut] = await Promise.all([
+          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: gitEnv }),
+          execAsync(`git remote get-url origin`, { cwd: repoPath, env: gitEnv }).catch(() => ({ stdout: "" })),
+        ]);
+        const rawUrl = remoteOut.stdout.trim();
+        const match = rawUrl.match(/github\.com[/:](.+?)(?:\.git)?$/);
+        const repoUrl = match ? `https://github.com/${match[1]}` : "";
+        for (const b of branchOut.stdout.trim().split("\n")) {
           const branch = b.trim();
           if (branch && !skipBranches.has(branch)) {
-            results.push({ repo: dir, branch });
+            results.push({ repo: dir, branch, repoUrl });
           }
         }
       } catch {}
@@ -822,6 +1155,17 @@ ipcMain.handle("prs:check-worktree", async (_, repoName: string, branchName: str
   }
 });
 
+ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: boolean; files: string[] }> => {
+  try {
+    const repoPath = join(os.homedir(), "Documents", "GitHub", repoName);
+    const { stdout } = await execAsync("git status --porcelain", { cwd: repoPath });
+    const files = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    return { dirty: files.length > 0, files };
+  } catch {
+    return { dirty: false, files: [] };
+  }
+});
+
 ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
   try {
     const query = `{ viewer { pullRequests(first: 50, states: [OPEN]) { nodes { number title url headRefName headRefOid isDraft createdAt reviewDecision repository { name nameWithOwner } } } } }`;
@@ -836,6 +1180,35 @@ ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
 
 ipcMain.handle("shell:open-external", (_, url: string) => {
   shell.openExternal(url);
+});
+
+ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> => {
+  const results: { name: string; branches: string[]; repoUrl: string }[] = [];
+  const targetBranches = ["main", "dev", "master", "develop"];
+  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+  try {
+    for (const dir of fs.readdirSync(githubDir)) {
+      const repoPath = join(githubDir, dir);
+      try {
+        if (!fs.statSync(repoPath).isDirectory()) continue;
+        const gitEntry = join(repoPath, ".git");
+        if (!fs.existsSync(gitEntry)) continue;
+        if (!fs.statSync(gitEntry).isDirectory()) continue;
+        const [branchOut, remoteOut] = await Promise.all([
+          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: gitEnv }),
+          execAsync(`git remote get-url origin`, { cwd: repoPath, env: gitEnv }).catch(() => ({ stdout: "" })),
+        ]);
+        const existing = new Set(branchOut.stdout.trim().split("\n").map((b) => b.trim()));
+        const branches = targetBranches.filter((b) => existing.has(b));
+        if (branches.length === 0) continue;
+        const rawUrl = remoteOut.stdout.trim();
+        const match = rawUrl.match(/github\.com[/:](.+?)(?:\.git)?$/);
+        const repoUrl = match ? `https://github.com/${match[1]}` : "";
+        results.push({ name: dir, branches, repoUrl });
+      } catch {}
+    }
+  } catch {}
+  return results.sort((a, b) => a.name.localeCompare(b.name));
 });
 
 ipcMain.handle("claude:read-session", (_, filename: string): ClaudeMessage[] => {

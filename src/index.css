@@ -7,19 +7,17 @@
 html, body, #root {
   height: 100%;
   width: 100%;
-  background: #0d1117;
-  color: #e6edf3;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  background: #000000;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   overflow: hidden;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #161b22;
-}
-::-webkit-scrollbar-thumb {
-  background: #30363d;
-  border-radius: 3px;
-}
+/* Dark scrollbars */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1C1C1E; }
+::-webkit-scrollbar-thumb { background: #3A3A3C; border-radius: 3px; }
+
+/* Light scrollbars */
+[data-theme="light"] ::-webkit-scrollbar-track { background: #F2F2F7; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #C7C7CC; }

@@ -17,7 +17,7 @@ declare global {
         initialCommand?: string
       ) => Promise<{ sessionId: string; number: number }>;
       getHistory: (num: number) => Promise<string>;
-      listHistory: () => Promise<{ number: number; size: number; lastModified: number }[]>;
+      listHistory: () => Promise<{ number: number; size: number; lastModified: number; title?: string }[]>;
       savePanels: (panels: { number: number; title: string }[]) => void;
       write: (id: string, data: string) => void;
       resize: (id: string, cols: number, rows: number) => void;
@@ -30,7 +30,7 @@ declare global {
       ) => () => void;
       onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void) => () => void;
       setFocused: (sessionId: string) => void;
-      getIterm2Font: () => Promise<{ family: string; size: number } | null>;
+      getIterm2Font: () => Promise<{ family: string; size: number; files: string[] } | null>;
       getStats: (month?: string) => Promise<{
         claude: {
           currentMonth: string;
@@ -60,6 +60,11 @@ declare global {
       listClaudeSkills: () => Promise<{ name: string; description: string }[]>;
       listClaudeHooks: () => Promise<{ event: string; matcher?: string; command: string }[]>;
       onClaudeConfigChanged: (cb: () => void) => () => void;
+      openClaudeFile: (filepath: string) => Promise<void>;
+      listClaudeMemoryFiles: () => Promise<{ path: string; label: string; size: number }[]>;
+      readClaudeMemoryFile: (filepath: string) => Promise<string>;
+      getClaudeActiveCount: () => Promise<number>;
+      writeToFocusedTerminal: (text: string) => Promise<void>;
       checkWorktree: (repoName: string, branchName: string) => Promise<{ exists: boolean; path: string | null }>;
       checkGitDirty: (repoName: string) => Promise<{ dirty: boolean; files: string[] }>;
       listLocalBranches: () => Promise<{ repo: string; branch: string; repoUrl: string }[]>;
@@ -77,49 +82,81 @@ declare global {
         repository: { name: string; nameWithOwner: string };
       }[]>;
       openExternal: (url: string) => Promise<void>;
+      listClaudeWorktrees: () => Promise<{ repo: string; branch: string; path: string; merged: boolean }[]>;
+      removeClaudeWorktree: (repoName: string, wtPath: string) => Promise<void>;
       listGithubRepos: () => Promise<{ name: string; branches: string[]; repoUrl: string }[]>;
       listNotes: () => Promise<{ id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }[]>;
       saveNote: (card: { id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }) => void;
       deleteNote: (id: string) => void;
+      getClaudeLimits: () => Promise<{
+        five_hour: { utilization: number; resets_at: string | null };
+        seven_day: { utilization: number; resets_at: string | null };
+        extra_usage: { monthly_limit: number; used_credits: number; utilization: number } | null;
+        org_id: string;
+      } | null>;
+      getUsageSessions: () => Promise<{
+        sessionId: string; totalCost: number; totalTokens: number;
+        inputTokens: number; outputTokens: number; lastActivity: string;
+        modelsUsed: string[]; resolvedPath: string | null;
+      }[]>;
+      getChatSettings: () => Promise<{ model: string; wikiDir: string }>;
+      saveChatSettings: (data: { model: string; wikiDir: string }) => void;
+      sendChatMessage: (params: { requestId: string; message: string; sessionId: string | null; mode: "kb" | "code"; wikiContext?: string; model?: string }) => void;
+      loadChatWikiPages: () => Promise<{ name: string; content: string }[]>;
+      loadChatSessions: () => Promise<unknown[]>;
+      saveChatSessions: (data: unknown[]) => void;
+      stopChat: (requestId: string) => void;
+      onChatChunk: (requestId: string, cb: (text: string) => void) => () => void;
+      onChatSessionId: (requestId: string, cb: (sessionId: string) => void) => () => void;
+      onChatDone: (requestId: string, cb: () => void) => () => void;
+      onChatError: (requestId: string, cb: (error: string) => void) => () => void;
+      onChatUsage: (requestId: string, cb: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }) => void) => () => void;
+      onChatToolActivity: (requestId: string, cb: (toolName: string) => void) => () => void;
     };
   }
 }
+
+const TERM_DARK = {
+  background: "#14191e", foreground: "#dbdbdb", cursor: "#fefffe",
+  selectionBackground: "#3a4a5a",
+  black: "#14191e", red: "#b43c29", green: "#00c200", yellow: "#c7c400",
+  blue: "#2743c7", magenta: "#bf3fbd", cyan: "#00c5c7", white: "#c7c7c7",
+  brightBlack: "#5c6773", brightRed: "#dc7974", brightGreen: "#57e690",
+  brightYellow: "#ece100", brightBlue: "#a6aaf1", brightMagenta: "#e07de0",
+  brightCyan: "#5ffdff", brightWhite: "#feffff",
+};
+
+const TERM_LIGHT = {
+  background: "#FEFEFE", foreground: "#1a1a1a", cursor: "#222222",
+  selectionBackground: "#b0cff5",
+  black: "#2e3436", red: "#cc0000", green: "#4e9a06", yellow: "#c4a000",
+  blue: "#3465a4", magenta: "#75507b", cyan: "#06989a", white: "#d3d7cf",
+  brightBlack: "#555753", brightRed: "#ef2929", brightGreen: "#8ae234",
+  brightYellow: "#fce94f", brightBlue: "#729fcf", brightMagenta: "#ad7fa8",
+  brightCyan: "#34e2e2", brightWhite: "#eeeeec",
+};
 
 export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   sessionId: string | null,
   panelNumber: number | null,
   fontFamily = "MesloLGS NF, Monaco, monospace",
-  fontSize = 12
+  fontSize = 12,
+  isDark = true
 ) {
   const termRef = useRef<Terminal | null>(null);
+
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = isDark ? TERM_DARK : TERM_LIGHT;
+    }
+  }, [isDark]);
 
   useEffect(() => {
     if (!containerRef.current || !sessionId || panelNumber === null) return;
 
     const term = new Terminal({
-      theme: {
-        background: "#14191e",
-        foreground: "#dbdbdb",
-        cursor: "#fefffe",
-        selectionBackground: "#3a4a5a",
-        black: "#14191e",
-        red: "#b43c29",
-        green: "#00c200",
-        yellow: "#c7c400",
-        blue: "#2743c7",
-        magenta: "#bf3fbd",
-        cyan: "#00c5c7",
-        white: "#c7c7c7",
-        brightBlack: "#5c6773",
-        brightRed: "#dc7974",
-        brightGreen: "#57e690",
-        brightYellow: "#ece100",
-        brightBlue: "#a6aaf1",
-        brightMagenta: "#e07de0",
-        brightCyan: "#5ffdff",
-        brightWhite: "#feffff",
-      },
+      theme: isDark ? TERM_DARK : TERM_LIGHT,
       fontFamily,
       fontSize,
       lineHeight: 1,

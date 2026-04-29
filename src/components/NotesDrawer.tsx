@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "../ThemeContext";
+import type { Theme } from "../theme";
 
 interface NoteCard {
   id: string;
@@ -29,6 +30,11 @@ export function NotesDrawer({ onClose }: Props) {
   const [preview, setPreview] = useState(false);
 
   useEffect(() => { window.terminal.listNotes().then(setNotes); }, []);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   const commands = notes.filter((n) => !n.type || n.type === "command");
   const markdownNotes = notes.filter((n) => n.type === "note");
@@ -101,13 +107,13 @@ export function NotesDrawer({ onClose }: Props) {
         <button
           onClick={startNew}
           style={{
-            background: `${t.green ?? t.teal}18`, border: `1px solid ${t.green ?? t.teal}35`,
-            borderRadius: 5, color: t.green ?? t.teal,
+            background: `${t.green}18`, border: `1px solid ${t.green}35`,
+            borderRadius: 5, color: t.green,
             cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "2px 10px",
             transition: "all 0.15s", flexShrink: 0, ...SYS,
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.green ?? t.teal}30`; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = `${t.green ?? t.teal}18`; }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.green}30`; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = `${t.green}18`; }}
         >+ Add</button>
         <button
           onClick={onClose}
@@ -247,6 +253,7 @@ export function NotesDrawer({ onClose }: Props) {
               onEdit={() => startEdit(card)}
               onDelete={() => remove(card.id)}
               onCopy={(text) => copy(text, card.id)}
+              onRun={(cmd) => window.terminal.writeToFocusedTerminal(cmd + "\n")}
             />
           ))
         )}
@@ -257,59 +264,68 @@ export function NotesDrawer({ onClose }: Props) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function CommandItem({ card, t, SYS, isEditing, copied, onEdit, onDelete, onCopy }: {
-  card: NoteCard; t: ReturnType<typeof import("../ThemeContext").useTheme>["theme"];
-  SYS: object; isEditing: boolean; copied: string | null;
-  onEdit: () => void; onDelete: () => void; onCopy: (text: string) => void;
+function CommandItem({ card, t, SYS, isEditing, copied, onEdit, onDelete, onCopy, onRun }: {
+  card: NoteCard; t: Theme; SYS: object; isEditing: boolean; copied: string | null;
+  onEdit: () => void; onDelete: () => void; onCopy: (text: string) => void; onRun: (cmd: string) => void;
 }) {
+  const [ran, setRan] = useState(false);
+  const handleRun = () => {
+    onRun(card.command);
+    setRan(true);
+    setTimeout(() => setRan(false), 1500);
+  };
   return (
-    <div style={{ padding: "10px 14px", borderBottom: `1px solid ${(t as any).borderSubtle}`, background: isEditing ? `${(t as any).blue}08` : "transparent" }}>
+    <div style={{ padding: "10px 14px", borderBottom: `1px solid ${t.borderSubtle}`, background: isEditing ? `${t.blue}08` : "transparent" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: (t as any).label1, flex: 1, ...SYS }}>{card.title}</span>
-        <button onClick={onEdit} title="Edit" style={{ background: "none", border: `1px solid ${(t as any).borderSubtle}`, borderRadius: 4, color: (t as any).label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = (t as any).label1; e.currentTarget.style.borderColor = (t as any).borderMid; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = (t as any).label3; e.currentTarget.style.borderColor = (t as any).borderSubtle; }}>✎</button>
-        <button onClick={onDelete} title="Delete" style={{ background: "none", border: `1px solid ${(t as any).red}30`, borderRadius: 4, color: (t as any).red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = `${(t as any).red}15`; }}
+        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS }}>{card.title}</span>
+        <button onClick={onEdit} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>
+        <button onClick={onDelete} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: 4, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.red}15`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>×</button>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <code style={{ flex: 1, fontSize: 11, color: (t as any).teal, fontFamily: "monospace", background: (t as any).surface2, border: `1px solid ${(t as any).borderSubtle}`, borderRadius: 4, padding: "3px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.command}</code>
-        <button onClick={() => onCopy(card.command)} title="Copy command" style={{ background: copied === card.id ? `${(t as any).teal}20` : "none", border: `1px solid ${copied === card.id ? (t as any).teal + "50" : (t as any).borderSubtle}`, borderRadius: 4, color: copied === card.id ? (t as any).teal : (t as any).label3, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}>{copied === card.id ? "✓" : "⌘C"}</button>
+        <code style={{ flex: 1, fontSize: 11, color: t.teal, fontFamily: "monospace", background: t.surface2, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, padding: "3px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.command}</code>
+        <button onClick={() => onCopy(card.command)} title="Copy command" style={{ background: copied === card.id ? `${t.teal}20` : "none", border: `1px solid ${copied === card.id ? t.teal + "50" : t.borderSubtle}`, borderRadius: 4, color: copied === card.id ? t.teal : t.label3, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}>{copied === card.id ? "✓" : "⌘C"}</button>
+        <button onClick={handleRun} title="Run in focused terminal"
+          style={{ background: ran ? `${t.green}25` : `${t.green}12`, border: `1px solid ${ran ? t.green + "55" : t.green + "30"}`, borderRadius: 4, color: t.green, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}
+          onMouseEnter={(e) => { if (!ran) { e.currentTarget.style.background = `${t.green}25`; e.currentTarget.style.borderColor = `${t.green}55`; } }}
+          onMouseLeave={(e) => { if (!ran) { e.currentTarget.style.background = `${t.green}12`; e.currentTarget.style.borderColor = `${t.green}30`; } }}
+        >{ran ? "✓" : "▶"}</button>
       </div>
-      {card.description && <div style={{ fontSize: 10, color: (t as any).label4, marginTop: 4, ...SYS }}>{card.description}</div>}
+      {card.description && <div style={{ fontSize: 10, color: t.label4, marginTop: 4, ...SYS }}>{card.description}</div>}
     </div>
   );
 }
 
 function NoteItem({ card, t, SYS, isEditing, onEdit, onDelete }: {
-  card: NoteCard; t: ReturnType<typeof import("../ThemeContext").useTheme>["theme"];
-  SYS: object; isEditing: boolean; onEdit: () => void; onDelete: () => void;
+  card: NoteCard; t: Theme; SYS: object; isEditing: boolean; onEdit: () => void; onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div style={{ borderBottom: `1px solid ${(t as any).borderSubtle}`, background: isEditing ? `${(t as any).blue}08` : "transparent" }}>
+    <div style={{ borderBottom: `1px solid ${t.borderSubtle}`, background: isEditing ? `${t.blue}08` : "transparent" }}>
       <div
         onClick={() => setExpanded((v) => !v)}
         style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 14px", cursor: "pointer", transition: "background 0.12s" }}
-        onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = `${(t as any).purple}10`)}
-        onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = isEditing ? `${(t as any).blue}08` : "")}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = `${t.purple}10`)}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = isEditing ? `${t.blue}08` : "")}
       >
-        <span style={{ fontSize: 12, fontWeight: 700, color: (t as any).label1, flex: 1, ...SYS }}>{card.title}</span>
-        <button onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit" style={{ background: "none", border: `1px solid ${(t as any).borderSubtle}`, borderRadius: 4, color: (t as any).label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = (t as any).label1; e.currentTarget.style.borderColor = (t as any).borderMid; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = (t as any).label3; e.currentTarget.style.borderColor = (t as any).borderSubtle; }}>✎</button>
-        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete" style={{ background: "none", border: `1px solid ${(t as any).red}30`, borderRadius: 4, color: (t as any).red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = `${(t as any).red}15`; }}
+        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS }}>{card.title}</span>
+        <button onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>
+        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: 4, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.red}15`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>×</button>
-        <span style={{ fontSize: 11, color: (t as any).label3, display: "inline-block", transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>›</span>
+        <span style={{ fontSize: 11, color: t.label3, display: "inline-block", transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>›</span>
       </div>
       {expanded && (
-        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${(t as any).borderSubtle}` }}>
+        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${t.borderSubtle}` }}>
           {card.body ? (
             <MarkdownContent body={card.body} t={t} />
           ) : (
-            <span style={{ fontSize: 11, color: (t as any).label4, fontStyle: "italic" }}>No content</span>
+            <span style={{ fontSize: 11, color: t.label4, fontStyle: "italic" }}>No content</span>
           )}
         </div>
       )}
@@ -317,25 +333,25 @@ function NoteItem({ card, t, SYS, isEditing, onEdit, onDelete }: {
   );
 }
 
-function MarkdownContent({ body, t }: { body: string; t: ReturnType<typeof import("../ThemeContext").useTheme>["theme"] }) {
+function MarkdownContent({ body, t }: { body: string; t: Theme }) {
   return (
-    <div style={{ fontSize: 12, color: (t as any).label2, lineHeight: 1.7, fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
+    <div style={{ fontSize: 12, color: t.label2, lineHeight: 1.7, fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
       <style>{`
-        .md-content h1, .md-content h2, .md-content h3 { color: ${(t as any).label1}; margin: 10px 0 4px; font-weight: 700; }
+        .md-content h1, .md-content h2, .md-content h3 { color: ${t.label1}; margin: 10px 0 4px; font-weight: 700; }
         .md-content h1 { font-size: 15px; }
         .md-content h2 { font-size: 13px; }
         .md-content h3 { font-size: 12px; }
         .md-content p { margin: 4px 0; }
         .md-content ul, .md-content ol { padding-left: 18px; margin: 4px 0; }
         .md-content li { margin: 2px 0; }
-        .md-content code { font-family: monospace; font-size: 11px; background: ${(t as any).surface3}; color: ${(t as any).teal}; padding: 1px 5px; border-radius: 3px; }
-        .md-content pre { background: ${(t as any).surface3}; border: 1px solid ${(t as any).borderSubtle}; border-radius: 6px; padding: 10px; margin: 6px 0; overflow-x: auto; }
-        .md-content pre code { background: none; padding: 0; color: ${(t as any).label2}; }
-        .md-content strong { color: ${(t as any).label1}; font-weight: 700; }
-        .md-content em { color: ${(t as any).label2}; font-style: italic; }
-        .md-content blockquote { border-left: 3px solid ${(t as any).purple}; margin: 6px 0; padding-left: 10px; color: ${(t as any).label3}; }
-        .md-content a { color: ${(t as any).blue}; }
-        .md-content hr { border: none; border-top: 1px solid ${(t as any).borderSubtle}; margin: 8px 0; }
+        .md-content code { font-family: monospace; font-size: 11px; background: ${t.surface3}; color: ${t.teal}; padding: 1px 5px; border-radius: 3px; }
+        .md-content pre { background: ${t.surface3}; border: 1px solid ${t.borderSubtle}; border-radius: 6px; padding: 10px; margin: 6px 0; overflow-x: auto; }
+        .md-content pre code { background: none; padding: 0; color: ${t.label2}; }
+        .md-content strong { color: ${t.label1}; font-weight: 700; }
+        .md-content em { color: ${t.label2}; font-style: italic; }
+        .md-content blockquote { border-left: 3px solid ${t.purple}; margin: 6px 0; padding-left: 10px; color: ${t.label3}; }
+        .md-content a { color: ${t.blue}; }
+        .md-content hr { border: none; border-top: 1px solid ${t.borderSubtle}; margin: 8px 0; }
       `}</style>
       <div className="md-content">
         <ReactMarkdown>{body}</ReactMarkdown>

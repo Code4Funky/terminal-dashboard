@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "../ThemeContext";
 
-interface HistoryEntry { number: number; size: number; lastModified: number; }
+interface HistoryEntry { number: number; size: number; lastModified: number; title?: string; }
 interface Props { openNumbers: number[]; onReopen: (num: number) => void; onClose: () => void; }
 
 function formatSize(bytes: number): string {
@@ -20,6 +20,11 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
   const [clearing, setClearing] = useState(false);
 
   useEffect(() => { window.terminal.listHistory().then(setEntries); }, []);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   const openSet = new Set(openNumbers);
   const closedCount = entries.filter((e) => !openSet.has(e.number)).length;
@@ -86,7 +91,7 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: t.label2, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                    terminal {e.number}
+                    {e.title ?? `terminal ${e.number}`}
                     {isOpen && (
                       <span style={{
                         fontSize: 9, color: t.teal,

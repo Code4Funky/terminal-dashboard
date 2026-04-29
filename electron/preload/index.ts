@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld("terminal", {
     ipcRenderer.invoke("terminal:get-history", num),
 
   listHistory: (): Promise<
-    { number: number; size: number; lastModified: number }[]
+    { number: number; size: number; lastModified: number; title?: string }[]
   > => ipcRenderer.invoke("terminal:list-history"),
 
   savePanels: (panels: { number: number; title: string }[]): void =>
@@ -187,4 +187,82 @@ contextBridge.exposeInMainWorld("terminal", {
     modelsUsed: string[];
     resolvedPath: string | null;
   }[]> => ipcRenderer.invoke("usage:get-sessions"),
+
+  openClaudeFile: (filepath: string): Promise<void> =>
+    ipcRenderer.invoke("claude:open-file", filepath),
+
+  listClaudeMemoryFiles: (): Promise<{ path: string; label: string; size: number }[]> =>
+    ipcRenderer.invoke("claude:list-memory-files"),
+
+  readClaudeMemoryFile: (filepath: string): Promise<string> =>
+    ipcRenderer.invoke("claude:read-memory-file", filepath),
+
+  getClaudeActiveCount: (): Promise<number> =>
+    ipcRenderer.invoke("claude:active-count"),
+
+  writeToFocusedTerminal: (text: string): Promise<void> =>
+    ipcRenderer.invoke("claude:write-to-focused", text),
+
+  listClaudeWorktrees: (): Promise<{ repo: string; branch: string; path: string; merged: boolean }[]> =>
+    ipcRenderer.invoke("claude-worktrees:list"),
+
+  removeClaudeWorktree: (repoName: string, wtPath: string): Promise<void> =>
+    ipcRenderer.invoke("claude-worktrees:remove", repoName, wtPath),
+
+  getChatSettings: (): Promise<{ model: string; wikiDir: string }> =>
+    ipcRenderer.invoke("chat:get-settings"),
+
+  saveChatSettings: (data: { model: string; wikiDir: string }): void =>
+    ipcRenderer.send("chat:save-settings", data),
+
+  sendChatMessage: (params: { requestId: string; message: string; sessionId: string | null; mode: "kb" | "code"; wikiContext?: string; model?: string }): void =>
+    ipcRenderer.send("chat:send", params),
+
+  loadChatWikiPages: (): Promise<{ name: string; content: string }[]> =>
+    ipcRenderer.invoke("chat:load-wiki-pages"),
+
+  loadChatSessions: (): Promise<unknown[]> =>
+    ipcRenderer.invoke("chat:load-sessions"),
+
+  saveChatSessions: (data: unknown[]): void =>
+    ipcRenderer.send("chat:save-sessions", data),
+
+  stopChat: (requestId: string): void =>
+    ipcRenderer.send("chat:stop", requestId),
+
+  onChatChunk: (requestId: string, cb: (text: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, text: string) => { if (id === requestId) cb(text); };
+    ipcRenderer.on("chat:chunk", handler);
+    return () => ipcRenderer.removeListener("chat:chunk", handler);
+  },
+
+  onChatSessionId: (requestId: string, cb: (sessionId: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, sid: string) => { if (id === requestId) cb(sid); };
+    ipcRenderer.on("chat:session-id", handler);
+    return () => ipcRenderer.removeListener("chat:session-id", handler);
+  },
+
+  onChatDone: (requestId: string, cb: () => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string) => { if (id === requestId) cb(); };
+    ipcRenderer.on("chat:done", handler);
+    return () => ipcRenderer.removeListener("chat:done", handler);
+  },
+
+  onChatError: (requestId: string, cb: (error: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, error: string) => { if (id === requestId) cb(error); };
+    ipcRenderer.on("chat:error", handler);
+    return () => ipcRenderer.removeListener("chat:error", handler);
+  },
+
+  onChatUsage: (requestId: string, cb: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }) => { if (id === requestId) cb(usage); };
+    ipcRenderer.on("chat:usage", handler);
+    return () => ipcRenderer.removeListener("chat:usage", handler);
+  },
+
+  onChatToolActivity: (requestId: string, cb: (toolName: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, toolName: string) => { if (id === requestId) cb(toolName); };
+    ipcRenderer.on("chat:tool-activity", handler);
+    return () => ipcRenderer.removeListener("chat:tool-activity", handler);
+  },
 });

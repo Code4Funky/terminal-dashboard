@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "node-pty": "^1.0.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",

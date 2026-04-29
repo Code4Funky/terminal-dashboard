@@ -5,6 +5,7 @@ import { StatsDrawer } from "./StatsDrawer";
 import { PRsDrawer } from "./PRsDrawer";
 import { NotesDrawer } from "./NotesDrawer";
 import { ClaudeAgentsDrawer } from "./ClaudeAgentsDrawer";
+import { KBChatDrawer } from "./KBChatDrawer";
 import { useTheme } from "../ThemeContext";
 
 interface PanelState {
@@ -17,13 +18,15 @@ interface PanelState {
 }
 
 type Columns = 1 | 2 | 3 | 4;
-type SidePanel = "prs" | "stats" | "history" | "notes" | "claude-agents";
+type SidePanel = "prs" | "stats" | "history" | "notes" | "claude-agents" | "kb-chat";
+
+const TOOLBAR_HEIGHT = 41;
 
 const COLUMN_OPTIONS: { cols: Columns; icon: string; label: string }[] = [
-  { cols: 1, icon: "▣", label: "1 col" },
-  { cols: 2, icon: "⬒", label: "2 cols" },
-  { cols: 3, icon: "⊟", label: "3 cols" },
-  { cols: 4, icon: "⊞", label: "4 cols" },
+  { cols: 1, icon: "▣", label: "1 col  ⌘1" },
+  { cols: 2, icon: "⬒", label: "2 cols  ⌘2" },
+  { cols: 3, icon: "⊟", label: "3 cols  ⌘3" },
+  { cols: 4, icon: "⊞", label: "4 cols  ⌘4" },
 ];
 
 function savePanels(panels: PanelState[]) {
@@ -106,28 +109,29 @@ export function Dashboard() {
     return cleanup;
   }, []);
 
-  const handleAddPanel = async () => {
-    const { sessionId, number } = await window.terminal.create(220, 50);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: `terminal ${number}` };
+  const addPanel = (sessionId: string, number: number, title: string) => {
+    const panel: PanelState = { id: sessionId, sessionId, number, title };
+    setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
+    setFocusedId(sessionId);
+    window.terminal.setFocused(sessionId);
+  };
+
+  const handleRename = (panelId: string, newTitle: string) => {
     setPanels((prev) => {
-      const next = [...prev, panel];
+      const next = prev.map((p) => p.id === panelId ? { ...p, title: newTitle } : p);
       savePanels(next);
       return next;
     });
-    setFocusedId(sessionId);
+  };
+
+  const handleAddPanel = async () => {
+    const { sessionId, number } = await window.terminal.create(220, 50);
+    addPanel(sessionId, number, `terminal ${number}`);
   };
 
   const openBranchInTerminal = async (repoName: string, branchName: string, wtPath: string) => {
-    const cmd = `cd "${wtPath}"`;
-    const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: `${repoName}:${branchName}` };
-    setPanels((prev) => {
-      const next = [...prev, panel];
-      savePanels(next);
-      return next;
-    });
-    setFocusedId(sessionId);
-    window.terminal.setFocused(sessionId);
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${wtPath}"`);
+    addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
 
   const handleOpenBranchTerminal = async (repoName: string, branchName: string) => {
@@ -143,12 +147,8 @@ export function Dashboard() {
           setDirtyConfirm({ repoName, branchName, files });
         } else {
           const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-          const cmd = `cd "${repoPath}" && git checkout ${branchName}`;
-          const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
-          const panel: PanelState = { id: sessionId, sessionId, number, title: `${repoName}:${branchName}` };
-          setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
-          setFocusedId(sessionId);
-          window.terminal.setFocused(sessionId);
+          const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${branchName}`);
+          addPanel(sessionId, number, `${repoName}:${branchName}`);
         }
       }
     } catch (e) {
@@ -161,31 +161,38 @@ export function Dashboard() {
     const { repoName, branchName } = dirtyConfirm;
     setDirtyConfirm(null);
     const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-    const cmd = `cd "${repoPath}" && git stash && git checkout ${branchName}`;
-    const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: `${repoName}:${branchName}` };
-    setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
-    setFocusedId(sessionId);
-    window.terminal.setFocused(sessionId);
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git stash && git checkout ${branchName}`);
+    addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
 
   const handleOpenRepoTerminal = async (repoName: string, branchName: string) => {
     const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-    const cmd = `cd "${repoPath}" && git checkout ${branchName}`;
-    const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: `${repoName}:${branchName}` };
-    setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
-    setFocusedId(sessionId);
-    window.terminal.setFocused(sessionId);
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${branchName}`);
+    addPanel(sessionId, number, `${repoName}:${branchName}`);
+  };
+
+  const handleRunClaudeAction = async (repoName: string, branchName: string, claudeCmd: string) => {
+    try {
+      const { exists, path } = await window.terminal.checkWorktree(repoName, branchName);
+      let cmd: string;
+      if (exists && path) {
+        cmd = `cd "${path}" && ${claudeCmd}`;
+      } else {
+        // Auto-create an isolated worktree so parallel branch runs never conflict
+        const wtPath = `$HOME/Documents/GitHub/${repoName}-worktrees/${branchName}`;
+        cmd = `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" "${branchName}" 2>/dev/null || true && cd "${wtPath}" && ${claudeCmd}`;
+      }
+      const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
+      addPanel(sessionId, number, `${repoName}:${branchName}`);
+    } catch (e) {
+      console.error("handleRunClaudeAction failed", e);
+    }
   };
 
   const handleOpenSessionTerminal = async (resolvedPath: string) => {
     const name = resolvedPath.split("/").filter(Boolean).pop() ?? "session";
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${resolvedPath}"`);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: name };
-    setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
-    setFocusedId(sessionId);
-    window.terminal.setFocused(sessionId);
+    addPanel(sessionId, number, name);
   };
 
   const handleConfirmWorktree = async () => {
@@ -195,28 +202,16 @@ export function Dashboard() {
     const createCmd =
       `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" "${branchName}" && cd "${wtPath}"`;
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, createCmd);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: `${repoName}:${branchName}` };
-    setPanels((prev) => {
-      const next = [...prev, panel];
-      savePanels(next);
-      return next;
-    });
-    setFocusedId(sessionId);
-    window.terminal.setFocused(sessionId);
+    addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
 
   const handleReopen = async (num: number) => {
     const { sessionId } = await window.terminal.create(220, 50, num);
-    const panel: PanelState = { id: sessionId, sessionId, number: num, title: `terminal ${num}` };
-    setPanels((prev) => {
-      const next = [...prev, panel];
-      savePanels(next);
-      return next;
-    });
-    setFocusedId(sessionId);
+    addPanel(sessionId, num, `terminal ${num}`);
   };
 
   const handleClose = (panelId: string) => {
+    if (panels.length <= 1) return;
     const panel = panels.find((p) => p.id === panelId);
     if (panel) window.terminal.close(panel.sessionId);
     setPanels((prev) => {
@@ -226,6 +221,32 @@ export function Dashboard() {
       return next;
     });
   };
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const fromTerminal = (e.target as HTMLElement).classList?.contains("xterm-helper-textarea");
+      if (e.metaKey && !e.shiftKey && !e.altKey) {
+        if (e.key === "t") { e.preventDefault(); handleAddPanel(); return; }
+        const col = parseInt(e.key);
+        if (col >= 1 && col <= 4) { e.preventDefault(); setColumns(col as Columns); return; }
+      }
+      if (e.metaKey && e.shiftKey && !e.altKey) {
+        const TABS: SidePanel[] = ["prs", "stats", "history", "notes", "claude-agents", "kb-chat"];
+        const idx = parseInt(e.key) - 1;
+        if (idx >= 0 && idx < TABS.length) {
+          e.preventDefault();
+          togglePanel(TABS[idx]);
+          return;
+        }
+      }
+      if (e.ctrlKey && e.key === "w" && !fromTerminal) {
+        e.preventDefault();
+        if (focusedId) handleClose(focusedId);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [focusedId, panels]);
 
   const colBtnStyle = (active: boolean) => ({
     background: active ? t.surface3 : "none",
@@ -291,6 +312,7 @@ export function Dashboard() {
           }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.82")}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+          title="New Terminal (⌘T)"
         >
           + New Terminal
         </button>
@@ -301,34 +323,46 @@ export function Dashboard() {
         <div style={{ display: "flex", gap: 4, WebkitAppRegion: "no-drag" as const }}>
           <button
             onClick={() => togglePanel("prs")}
+            title="GitHub  ⌘⇧1"
             style={drawerBtnStyle(activePanel === "prs", t.blue, t.isDark ? "rgba(10,132,255,0.18)" : "rgba(0,122,255,0.12)", t.isDark ? "rgba(10,132,255,0.5)" : "rgba(0,122,255,0.4)")}
             onMouseEnter={(e) => { if (activePanel !== "prs") { e.currentTarget.style.color = t.blue; e.currentTarget.style.borderColor = t.isDark ? "rgba(10,132,255,0.35)" : "rgba(0,122,255,0.3)"; }}}
             onMouseLeave={(e) => { if (activePanel !== "prs") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
           >GitHub</button>
           <button
             onClick={() => togglePanel("stats")}
+            title="Stats  ⌘⇧2"
             style={drawerBtnStyle(activePanel === "stats", t.orange, t.isDark ? "rgba(255,159,10,0.15)" : "rgba(255,149,0,0.1)", t.isDark ? "rgba(255,159,10,0.5)" : "rgba(255,149,0,0.4)")}
             onMouseEnter={(e) => { if (activePanel !== "stats") { e.currentTarget.style.color = t.orange; e.currentTarget.style.borderColor = t.isDark ? "rgba(255,159,10,0.35)" : "rgba(255,149,0,0.3)"; }}}
             onMouseLeave={(e) => { if (activePanel !== "stats") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
           >Stats</button>
           <button
             onClick={() => togglePanel("history")}
+            title="History  ⌘⇧3"
             style={drawerBtnStyle(activePanel === "history", t.teal, t.isDark ? "rgba(90,200,250,0.15)" : "rgba(50,173,230,0.1)", t.isDark ? "rgba(90,200,250,0.5)" : "rgba(50,173,230,0.4)")}
             onMouseEnter={(e) => { if (activePanel !== "history") { e.currentTarget.style.color = t.teal; e.currentTarget.style.borderColor = t.isDark ? "rgba(90,200,250,0.35)" : "rgba(50,173,230,0.3)"; }}}
             onMouseLeave={(e) => { if (activePanel !== "history") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
           >History</button>
           <button
             onClick={() => togglePanel("notes")}
+            title="Notes  ⌘⇧4"
             style={drawerBtnStyle(activePanel === "notes", t.purple, t.isDark ? "rgba(191,90,242,0.15)" : "rgba(175,82,222,0.1)", t.isDark ? "rgba(191,90,242,0.5)" : "rgba(175,82,222,0.4)")}
             onMouseEnter={(e) => { if (activePanel !== "notes") { e.currentTarget.style.color = t.purple; e.currentTarget.style.borderColor = t.isDark ? "rgba(191,90,242,0.35)" : "rgba(175,82,222,0.3)"; }}}
             onMouseLeave={(e) => { if (activePanel !== "notes") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
           >Notes</button>
           <button
             onClick={() => togglePanel("claude-agents")}
-            style={drawerBtnStyle(activePanel === "claude-agents", t.teal, t.isDark ? "rgba(90,200,250,0.15)" : "rgba(50,173,230,0.1)", t.isDark ? "rgba(90,200,250,0.5)" : "rgba(50,173,230,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "claude-agents") { e.currentTarget.style.color = t.teal; e.currentTarget.style.borderColor = t.isDark ? "rgba(90,200,250,0.35)" : "rgba(50,173,230,0.3)"; }}}
+            title="Claude  ⌘⇧5"
+            style={drawerBtnStyle(activePanel === "claude-agents", t.green, t.isDark ? "rgba(48,209,88,0.15)" : "rgba(52,199,89,0.1)", t.isDark ? "rgba(48,209,88,0.5)" : "rgba(52,199,89,0.4)")}
+            onMouseEnter={(e) => { if (activePanel !== "claude-agents") { e.currentTarget.style.color = t.green; e.currentTarget.style.borderColor = t.isDark ? "rgba(48,209,88,0.35)" : "rgba(52,199,89,0.3)"; }}}
             onMouseLeave={(e) => { if (activePanel !== "claude-agents") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
           >Claude</button>
+          <button
+            onClick={() => togglePanel("kb-chat")}
+            title="KB Chat  ⌘⇧6"
+            style={drawerBtnStyle(activePanel === "kb-chat", t.purple, t.isDark ? "rgba(191,90,242,0.15)" : "rgba(175,82,222,0.1)", t.isDark ? "rgba(191,90,242,0.5)" : "rgba(175,82,222,0.4)")}
+            onMouseEnter={(e) => { if (activePanel !== "kb-chat") { e.currentTarget.style.color = t.purple; e.currentTarget.style.borderColor = t.isDark ? "rgba(191,90,242,0.35)" : "rgba(175,82,222,0.3)"; }}}
+            onMouseLeave={(e) => { if (activePanel !== "kb-chat") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
+          >KB Chat</button>
         </div>
 
         {/* Theme toggle */}
@@ -347,7 +381,7 @@ export function Dashboard() {
           {t.isDark ? "☀" : "☾"}
         </button>
 
-        <span style={{ fontSize: 11, color: t.label4, marginLeft: 4, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 11, color: t.label3, marginLeft: 4, fontFamily: "monospace" }}>
           {panels.length} session{panels.length !== 1 ? "s" : ""}
         </span>
       </div>
@@ -464,7 +498,7 @@ export function Dashboard() {
         <div style={{
           flex: 1, display: "grid",
           gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gridAutoRows: `calc((100vh - 41px) / ${Math.ceil(panels.length / columns)})`,
+          gridAutoRows: `calc((100vh - ${TOOLBAR_HEIGHT}px) / ${Math.ceil(panels.length / columns)})`,
           gap: 4, padding: 4, minHeight: 0, overflowY: "auto",
         }}>
           {panels.map((panel) => (
@@ -479,18 +513,21 @@ export function Dashboard() {
               fontFamily={termFont?.family}
               fontSize={termFont?.size}
               onFocus={() => { setFocusedId(panel.id); window.terminal.setFocused(panel.sessionId); }}
+              onRename={(title) => handleRename(panel.id, title)}
+              canClose={panels.length > 1}
               onClose={() => handleClose(panel.id)}
             />
           ))}
         </div>
 
-        {activePanel === "prs" && <PRsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenBranchTerminal} onOpenRepo={handleOpenRepoTerminal} />}
+        {activePanel === "prs" && <PRsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenBranchTerminal} onOpenRepo={handleOpenRepoTerminal} onRunClaudeAction={handleRunClaudeAction} />}
         {activePanel === "stats" && <StatsDrawer onClose={() => setActivePanel(null)} onOpenSession={handleOpenSessionTerminal} />}
         {activePanel === "history" && (
           <HistoryDrawer openNumbers={panels.map((p) => p.number)} onReopen={handleReopen} onClose={() => setActivePanel(null)} />
         )}
         {activePanel === "notes" && <NotesDrawer onClose={() => setActivePanel(null)} />}
         {activePanel === "claude-agents" && <ClaudeAgentsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenSessionTerminal} />}
+        {activePanel === "kb-chat" && <KBChatDrawer onClose={() => setActivePanel(null)} />}
       </div>
     </div>
   );

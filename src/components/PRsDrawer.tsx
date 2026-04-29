@@ -17,6 +17,7 @@ interface Props {
   onClose: () => void;
   onOpenTerminal: (repoName: string, branchName: string) => void;
   onOpenRepo: (repoName: string, branchName: string) => void;
+  onRunClaudeAction: (repoName: string, branchName: string, cmd: string) => void;
 }
 
 function timeAgo(iso: string): string {
@@ -80,10 +81,23 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string, branch: string) => void }) {
+function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
+  pr: PR;
+  onOpenTerminal: (repo: string, branch: string) => void;
+  onRunClaudeAction: (repo: string, branch: string, cmd: string) => void;
+}) {
   const { theme: t } = useTheme();
   const [hovered, setHovered] = useState(false);
+  const [cooldown, setCooldown] = useState<Set<string>>(new Set());
+  const [showActions, setShowActions] = useState(false);
   const shortSha = pr.headRefOid.slice(0, 7);
+
+  const handleClaudeAction = (label: string, repo: string, branch: string, cmd: string) => {
+    if (cooldown.has(label)) return;
+    setCooldown((prev) => new Set(prev).add(label));
+    onRunClaudeAction(repo, branch, cmd);
+    setTimeout(() => setCooldown((prev) => { const n = new Set(prev); n.delete(label); return n; }), 2000);
+  };
 
   return (
     <div
@@ -93,7 +107,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
         margin: "0 12px 8px", padding: "13px 14px",
         background: hovered ? t.surface3 : t.surface2,
         border: `1px solid ${hovered ? t.borderMid : t.borderSubtle}`,
-        borderRadius: 12,
+        borderRadius: 10,
         boxShadow: hovered ? "0 4px 16px rgba(0,0,0,0.12)" : "none",
         transition: "all 0.18s",
       }}
@@ -102,7 +116,7 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
         <span style={{
           fontSize: 12, fontWeight: 700, color: t.blue,
           background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-          borderRadius: 5, padding: "2px 6px",
+          borderRadius: 4, padding: "2px 6px",
           flexShrink: 0, marginTop: 1, fontFamily: "monospace",
         }}>
           #{pr.number}
@@ -149,36 +163,89 @@ function PRCard({ pr, onOpenTerminal }: { pr: PR; onOpenTerminal: (repo: string,
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
+      {/* Primary actions */}
+      <div style={{ display: "flex", gap: 6 }}>
         <button
           onClick={() => window.terminal.openExternal(pr.url)}
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
             background: `${t.blue}12`, border: `1px solid ${t.blue}30`,
-            borderRadius: 8, color: t.blue,
-            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
-            transition: "all 0.18s",
+            borderRadius: 7, color: t.blue,
+            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 10px",
+            transition: "all 0.15s",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.blue}25`; b.style.borderColor = `${t.blue}60`; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.blue}25`; b.style.borderColor = `${t.blue}55`; }}
           onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.blue}12`; b.style.borderColor = `${t.blue}30`; }}
         >
-          <span style={{ fontSize: 12 }}>↗</span> Open PR
+          <span style={{ fontSize: 11 }}>↗</span> Open PR
         </button>
         <button
           onClick={() => onOpenTerminal(pr.repository.name, pr.headRefName)}
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
             background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
-            borderRadius: 8, color: t.teal,
-            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 10px",
-            transition: "all 0.18s",
+            borderRadius: 7, color: t.teal,
+            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 10px",
+            transition: "all 0.15s",
           }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}22`; b.style.borderColor = `${t.teal}55`; }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}22`; b.style.borderColor = `${t.teal}50`; }}
           onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}10`; b.style.borderColor = `${t.teal}28`; }}
         >
-          <span style={{ fontSize: 12 }}>⌨</span> Open Terminal
+          <span style={{ fontSize: 11 }}>⌨</span> Terminal
         </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowActions((v) => !v); }}
+          title="Claude actions"
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: showActions ? `${t.green}15` : "transparent",
+            border: `1px solid ${showActions ? `${t.green}40` : t.borderSubtle}`,
+            borderRadius: 7, color: showActions ? t.green : t.label4,
+            cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "6px 10px",
+            transition: "all 0.15s", flexShrink: 0,
+          }}
+          onMouseEnter={(e) => { const b = e.currentTarget; if (!showActions) { b.style.background = t.surface3; b.style.color = t.label2; } }}
+          onMouseLeave={(e) => { const b = e.currentTarget; if (!showActions) { b.style.background = "transparent"; b.style.color = t.label4; } }}
+        >…</button>
       </div>
+
+      {/* Claude Actions — overflow panel */}
+      {showActions && (
+        <div style={{ marginTop: 7 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+            {([
+              { label: "PR Comments", icon: "✏", cmd: `claude "/pr-comments"`,                    color: t.orange },
+              { label: "CodeRabbit",  icon: "◈", cmd: `claude "/action-coderabbit ${pr.number}"`, color: t.purple },
+              { label: "Review",      icon: "◎", cmd: `claude "/review"`,                         color: t.blue   },
+              { label: "PR Fixer",    icon: "⚙", cmd: `claude "/pr-fixer"`,                       color: t.green  },
+            ] as const).map(({ label, icon, cmd, color }) => {
+              const busy = cooldown.has(label);
+              return (
+                <button
+                  key={label}
+                  onClick={() => handleClaudeAction(label, pr.repository.name, pr.headRefName, cmd)}
+                  disabled={busy}
+                  title={busy ? "Opening terminal…" : `Open terminal and run: ${cmd}`}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                    background: busy ? `${color}18` : `${color}10`,
+                    border: `1px solid ${busy ? `${color}50` : `${color}28`}`,
+                    borderRadius: 7, color,
+                    cursor: busy ? "not-allowed" : "pointer",
+                    fontSize: 10, fontWeight: 600, padding: "6px 8px",
+                    opacity: busy ? 0.55 : 1,
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => { if (!busy) { const b = e.currentTarget; b.style.background = `${color}20`; b.style.borderColor = `${color}50`; } }}
+                  onMouseLeave={(e) => { if (!busy) { const b = e.currentTarget; b.style.background = `${color}10`; b.style.borderColor = `${color}28`; } }}
+                >
+                  <span style={{ fontSize: 11 }}>{busy ? "⟳" : icon}</span> {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -225,7 +292,7 @@ function LocalBranchCard({
       <div style={{
         display: "flex", alignItems: "stretch",
         background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
-        borderRadius: 5, overflow: "hidden", flexShrink: 0,
+        borderRadius: 4, overflow: "hidden", flexShrink: 0,
       }}>
         <button
           onClick={() => repoUrl && window.terminal.openExternal(`${repoUrl}/tree/${item.branch}`)}
@@ -259,7 +326,7 @@ function LocalBranchCard({
 
 interface RepoEntry { name: string; branches: string[]; repoUrl: string }
 
-export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
+export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeAction }: Props) {
   const { theme: t } = useTheme();
   const [prs, setPRs] = useState<PR[]>([]);
   const [loading, setLoading] = useState(true);
@@ -270,8 +337,12 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
+  const [claudeWorktrees, setClaudeWorktrees] = useState<{ repo: string; branch: string; path: string; merged: boolean }[]>([]);
+  const [showWorktrees, setShowWorktrees] = useState(true);
+  const [wtMsg, setWtMsg] = useState<string | null>(null);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [showRepos, setShowRepos] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("td_pinned_repos") ?? "[]")); }
     catch { return new Set(); }
@@ -292,10 +363,27 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
     return ap !== bp ? ap - bp : a.name.localeCompare(b.name);
   });
 
+  const loadWorktrees = async () => {
+    const wts = await window.terminal.listClaudeWorktrees().catch(() => []);
+    const merged = wts.filter((w) => w.merged);
+    const active = wts.filter((w) => !w.merged);
+    if (merged.length > 0) {
+      await Promise.all(merged.map((w) => window.terminal.removeClaudeWorktree(w.repo, w.path).catch(() => {})));
+      setWtMsg(`Auto-removed ${merged.length} merged worktree${merged.length !== 1 ? "s" : ""}`);
+      setTimeout(() => setWtMsg(null), 5000);
+    }
+    setClaudeWorktrees(active);
+  };
+
+  const handleRemoveWorktree = async (repo: string, path: string) => {
+    await window.terminal.removeClaudeWorktree(repo, path).catch(() => {});
+    setClaudeWorktrees((prev) => prev.filter((w) => w.path !== path));
+  };
+
   const load = () => {
     setLoading(true); setLocalLoading(true); setError(null); setSelected(new Set());
     window.terminal.listPRs()
-      .then((data) => { setPRs(data); setLoading(false); })
+      .then((data) => { setPRs(data); setLoading(false); setLastRefreshed(new Date()); })
       .catch((err: Error) => { setError(err.message ?? "Failed to load PRs"); setLoading(false); });
     window.terminal.listLocalBranches()
       .then((data) => { setLocalBranches(data); setLocalLoading(false); })
@@ -303,6 +391,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
     window.terminal.listGithubRepos()
       .then(setRepos)
       .catch(() => {});
+    loadWorktrees();
   };
 
   const reloadLocal = () => {
@@ -350,6 +439,19 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
 
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => { loadWorktrees(); }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   const byRepo = prs.reduce<Record<string, PR[]>>((acc, pr) => {
     const key = pr.repository.nameWithOwner;
     if (!acc[key]) acc[key] = [];
@@ -375,7 +477,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
       overflowY: "hidden",
     }}>
       <div style={{
-        display: "flex", alignItems: "center", padding: "15px 16px",
+        display: "flex", alignItems: "center", padding: "12px 16px",
         borderBottom: `1px solid ${t.border}`,
         flexShrink: 0, background: t.headerBg,
       }}>
@@ -384,16 +486,17 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
           {!loading && (
             <div style={{ color: t.green, fontSize: 11, marginTop: 3, fontFamily: "monospace" }}>
               {prs.length} open PRs · {!localLoading ? `${localOnly.length} local` : "loading…"} · {repos.length} repos
+              <span style={{ color: t.label4 }}> · {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
           )}
         </div>
         <button onClick={load} title="Refresh"
-          style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
+          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: 4, lineHeight: 1, transition: "color 0.15s" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
           onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >↺</button>
         <button onClick={onClose} title="Close"
-          style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 15, padding: "4px 8px", borderRadius: 6, lineHeight: 1, transition: "color 0.15s" }}
+          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: 4, lineHeight: 1, transition: "color 0.15s" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
           onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >✕</button>
@@ -433,7 +536,17 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
                 borderRadius: 10, padding: "1px 6px", marginLeft: 2, fontFamily: "monospace",
               }}>{repoPRs.length}</span>
             </div>
-            {repoPRs.map((pr) => <PRCard key={pr.number} pr={pr} onOpenTerminal={onOpenTerminal} />)}
+            {repoPRs.map((pr) => (
+              <PRCard
+                key={pr.number}
+                pr={pr}
+                onOpenTerminal={onOpenTerminal}
+                onRunClaudeAction={(repo, branch, cmd) => {
+                  onRunClaudeAction(repo, branch, cmd);
+                  setTimeout(() => loadWorktrees(), 2500);
+                }}
+              />
+            ))}
           </div>
         ))}
 
@@ -447,6 +560,68 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
             fontSize: 11, fontFamily: "monospace",
           }}>
             {cleanMsg}
+          </div>
+        )}
+
+        {(claudeWorktrees.length > 0 || wtMsg) && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
+              <button
+                onClick={() => setShowWorktrees((v) => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, flex: 1,
+                  background: "none", border: "none", cursor: "pointer", padding: 0,
+                  color: t.purple, fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.purple, flexShrink: 0 }} />
+                Claude Worktrees
+                {claudeWorktrees.length > 0 && (
+                  <span style={{
+                    color: t.purple, fontSize: 10,
+                    background: `${t.purple}15`, border: `1px solid ${t.purple}28`,
+                    borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                  }}>{claudeWorktrees.length}</span>
+                )}
+                <span style={{ fontSize: 10, color: t.label4 }}>{showWorktrees ? "▾" : "▸"}</span>
+              </button>
+            </div>
+            {wtMsg && (
+              <div style={{
+                margin: "0 12px 6px", padding: "6px 10px",
+                background: `${t.green}10`, border: `1px solid ${t.green}28`,
+                borderRadius: 7, color: t.green, fontSize: 11, fontFamily: "monospace",
+              }}>{wtMsg}</div>
+            )}
+            {showWorktrees && claudeWorktrees.map((w) => (
+              <div key={w.path} style={{
+                margin: "0 12px 5px", padding: "8px 12px",
+                background: t.surface2, border: `1px solid ${t.borderSubtle}`,
+                borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
+                transition: "all 0.15s",
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: t.label2 }}>{w.repo}</div>
+                  <div style={{ fontSize: 10, color: t.purple, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    ⎇ {w.branch}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleRemoveWorktree(w.repo, w.path)}
+                  title="Remove worktree"
+                  style={{
+                    background: `${t.red}10`, border: `1px solid ${t.red}28`,
+                    borderRadius: 5, color: t.red,
+                    cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "3px 7px",
+                    transition: "all 0.15s", flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => { const b = e.currentTarget; b.style.background = `${t.red}22`; b.style.borderColor = `${t.red}50`; }}
+                  onMouseLeave={(e) => { const b = e.currentTarget; b.style.background = `${t.red}10`; b.style.borderColor = `${t.red}28`; }}
+                >✕ Remove</button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -507,7 +682,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
                         <div key={branch} style={{
                           display: "flex", alignItems: "stretch",
                           background: `${c}12`, border: `1px solid ${c}30`,
-                          borderRadius: 5, overflow: "hidden", transition: "all 0.15s",
+                          borderRadius: 4, overflow: "hidden", transition: "all 0.15s",
                         }}>
                           <button
                             onClick={() => repo.repoUrl && window.terminal.openExternal(`${repo.repoUrl}/tree/${branch}`)}
@@ -595,7 +770,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo }: Props) {
                     title="Delete branches already merged into main"
                     style={{
                       background: "none", border: `1px solid ${t.borderSubtle}`,
-                      borderRadius: 5, color: t.label3,
+                      borderRadius: 4, color: t.label3,
                       cursor: deleting ? "not-allowed" : "pointer",
                       fontSize: 9, fontWeight: 600, padding: "2px 6px",
                       opacity: deleting ? 0.5 : 1, transition: "all 0.15s",

@@ -130,8 +130,8 @@ function Ring({ pct, color, label, sub, t }: { pct: number; color: string; label
         </div>
       </div>
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: t.label1 }}>{label}</div>
-        <div style={{ fontSize: 10, color: t.label3, fontFamily: "monospace", marginTop: 1 }}>{sub}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.label1 }}>{label}</div>
+        <div style={{ fontSize: 11, color: t.label3, fontFamily: "monospace", marginTop: 1 }}>{sub}</div>
       </div>
     </div>
   );
@@ -185,8 +185,10 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [limits, setLimits] = useState<ClaudeLimits | null>(null);
   const [limitsLoading, setLimitsLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
+    setData(null); setLimitsLoading(true); setSessionsLoading(true);
     const now = new Date().toISOString().slice(0, 7);
     window.terminal.getStats(now).then((d) => setData({ repos: d.repos }));
     window.terminal.getClaudeLimits().then((l) => {
@@ -197,14 +199,14 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
       setSessions(s);
       setSessionsLoading(false);
     }).catch(() => setSessionsLoading(false));
-  }, []);
+  }, [refreshKey]);
 
   const topRepo = data?.repos[0]?.name ?? "—";
   const card = { background: t.surface2, border: `1px solid ${t.borderMid}`, borderRadius: 10, padding: "12px 14px" };
 
-  const SectionLabel = ({ icon, title, sub }: { icon: string; title: string; sub?: string }) => (
+  const SectionLabel = ({ icon, title, sub, color }: { icon: string; title: string; sub?: string; color?: string }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-      <span style={{ color: t.green, fontSize: 13 }}>{icon}</span>
+      <span style={{ color: color ?? t.green, fontSize: 13 }}>{icon}</span>
       <span style={{ fontSize: 13, fontWeight: 700, color: t.label1 }}>{title}</span>
       {sub && <span style={{ fontSize: 11, color: t.label3 }}>· {sub}</span>}
     </div>
@@ -232,16 +234,28 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
           <span style={{ fontSize: 15, color: t.green }}>◈</span>
           <span style={{ fontSize: 13, fontWeight: 700, color: t.label1 }}>Stats</span>
         </div>
+        <button onClick={() => setRefreshKey((k) => k + 1)} title="Refresh" style={{
+          background: "none", border: `1px solid ${t.borderMid}`,
+          borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px",
+          marginRight: 4, transition: "color 0.15s",
+        }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+        >↺</button>
         <button onClick={onClose} style={{
           background: "none", border: `1px solid ${t.borderMid}`,
           borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px",
-        }}>✕</button>
+          transition: "color 0.15s",
+        }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+        >✕</button>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 20 }}>
         {/* Usage Limits */}
         <section>
-          <SectionLabel icon="◆" title="Usage Limits" sub="live · claude.ai" />
+          <SectionLabel icon="◆" title="Usage Limits" sub="live · claude.ai" color={t.blue} />
           {limitsLoading ? (
             <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Fetching limits…</div>
           ) : !limits ? (
@@ -284,7 +298,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
 
         {/* Claude Sessions */}
         <section>
-          <SectionLabel icon="◆" title="Claude Sessions" sub="via ccusage · click to open" />
+          <SectionLabel icon="◈" title="Claude Sessions" sub="via ccusage · click to open" color={t.teal} />
           {sessionsLoading ? (
             <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Loading sessions…</div>
           ) : mergedSessions.length === 0 ? (
@@ -351,7 +365,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
 
         {/* GitHub Repos */}
         <section>
-          <SectionLabel icon="◆" title="GitHub Repos" />
+          <SectionLabel icon="⎇" title="GitHub Repos" />
           {data ? (
             <>
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>

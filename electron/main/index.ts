@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join, basename } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
-import { execSync, exec } from "child_process";
+import { execSync, exec, spawn, type ChildProcess } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
@@ -51,6 +51,19 @@ function resolveCcusageEnv(): { bin: string; env: NodeJS.ProcessEnv } {
 }
 const { bin: CCUSAGE_BIN, env: CCUSAGE_ENV } = resolveCcusageEnv();
 
+// ── Resolve claude binary ──────────────────────────────────────────────────────
+const CLAUDE_BIN = (() => {
+  const candidates = [
+    join(os.homedir(), ".local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return "claude";
+})();
+
 // ── Paths ────────────────────────────────────────────────────────────────────
 const dataDir = join(os.homedir(), ".terminal-dashboard");
 const stateFile = join(dataDir, "state.json");
@@ -85,13 +98,15 @@ interface SavedPanel {
 interface AppState {
   terminalCounter: number;
   lastPanels: SavedPanel[];
+  panelTitles: Record<number, string>;
 }
 
 function loadState(): AppState {
   try {
-    return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const s = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    return { panelTitles: {}, ...s };
   } catch {
-    return { terminalCounter: 0, lastPanels: [] };
+    return { terminalCounter: 0, lastPanels: [], panelTitles: {} };
   }
 }
 
@@ -103,9 +118,14 @@ function saveState(state: AppState) {
 interface RepoEntry { visits: number; lastSeen: number }
 interface RepoStats { [repo: string]: RepoEntry }
 
+let cachedRepoStats: RepoStats | null = null;
+let repoStatFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
 function loadRepoStats(): RepoStats {
-  try { return JSON.parse(fs.readFileSync(repoStatsFile, "utf8")); }
-  catch { return {}; }
+  if (cachedRepoStats) return cachedRepoStats;
+  try { cachedRepoStats = JSON.parse(fs.readFileSync(repoStatsFile, "utf8")); }
+  catch { cachedRepoStats = {}; }
+  return cachedRepoStats!;
 }
 
 const githubDir = join(os.homedir(), "Documents", "GitHub");
@@ -120,7 +140,8 @@ function recordRepoVisit(sessionId: string, cwd: string) {
   sessionLastRepo.set(sessionId, repoName);
   const stats = loadRepoStats();
   stats[repoName] = { visits: (stats[repoName]?.visits ?? 0) + 1, lastSeen: Date.now() };
-  fs.writeFileSync(repoStatsFile, JSON.stringify(stats));
+  if (repoStatFlushTimer) clearTimeout(repoStatFlushTimer);
+  repoStatFlushTimer = setTimeout(() => fs.writeFileSync(repoStatsFile, JSON.stringify(stats)), 2000);
 }
 
 // ── Model pricing (per million tokens, USD) ──────────────────────────────────
@@ -652,6 +673,11 @@ ipcMain.on(
   "terminal:save-panels",
   (_, panels: { number: number; title: string }[]) => {
     state.lastPanels = panels;
+    for (const p of panels) {
+      if (p.title && p.title !== `terminal ${p.number}`) {
+        state.panelTitles[p.number] = p.title;
+      }
+    }
     saveState(state);
   }
 );
@@ -664,7 +690,7 @@ ipcMain.handle("terminal:list-history", () => {
       .map((f) => {
         const num = parseInt(f.replace("terminal-", "").replace(".log", ""));
         const stat = fs.statSync(join(historyDir, f));
-        return { number: num, size: stat.size, lastModified: stat.mtimeMs };
+        return { number: num, size: stat.size, lastModified: stat.mtimeMs, title: state.panelTitles[num] };
       })
       .sort((a, b) => b.number - a.number);
   } catch {
@@ -755,10 +781,10 @@ function resolveProjectPath(sessionId: string): string | null {
   return dfs(sessionId.slice(1), "/");
 }
 
-ipcMain.handle("usage:get-sessions", () => {
+ipcMain.handle("usage:get-sessions", async () => {
   try {
-    const out = execSync(`"${CCUSAGE_BIN}" session --json`, { timeout: 10000, env: CCUSAGE_ENV }).toString();
-    const data = JSON.parse(out);
+    const { stdout } = await execAsync(`"${CCUSAGE_BIN}" session --json`, { timeout: 10000, env: CCUSAGE_ENV });
+    const data = JSON.parse(stdout);
     const raw: Array<{
       sessionId: string; totalCost: number; totalTokens: number;
       inputTokens: number; outputTokens: number;
@@ -830,13 +856,13 @@ const PYTHON3_PATH = (() => {
   return "python3";
 })();
 
-ipcMain.handle("usage:get-limits", () => {
+ipcMain.handle("usage:get-limits", async () => {
   try {
     const pyPath = join(os.tmpdir(), "td_claude_limits.py");
     fs.writeFileSync(pyPath, CLAUDE_LIMITS_PY);
-    const out = execSync(`"${PYTHON3_PATH}" "${pyPath}"`, { timeout: 15000 }).toString().trim();
+    const { stdout } = await execAsync(`"${PYTHON3_PATH}" "${pyPath}"`, { timeout: 15000 });
     try { fs.unlinkSync(pyPath); } catch {}
-    return JSON.parse(out);
+    return JSON.parse(stdout.trim());
   } catch {
     return null;
   }
@@ -1155,6 +1181,51 @@ ipcMain.handle("prs:check-worktree", async (_, repoName: string, branchName: str
   }
 });
 
+ipcMain.handle("claude-worktrees:list", async (): Promise<{ repo: string; branch: string; path: string; merged: boolean }[]> => {
+  const results: { repo: string; branch: string; path: string; merged: boolean }[] = [];
+  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+  try {
+    for (const dir of fs.readdirSync(githubDir)) {
+      const repoPath = join(githubDir, dir);
+      try {
+        if (!fs.statSync(repoPath).isDirectory()) continue;
+        const gitEntry = join(repoPath, ".git");
+        if (!fs.existsSync(gitEntry) || !fs.statSync(gitEntry).isDirectory()) continue;
+        const { stdout } = await execAsync("git worktree list", { cwd: repoPath, env: gitEnv });
+        for (const line of stdout.split("\n")) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 3) continue;
+          const [wtPath, , branchRef] = parts;
+          if (!wtPath.includes(`${dir}-worktrees`)) continue;
+          const branch = branchRef.replace(/^\[|\]$/g, "");
+          let merged = false;
+          try {
+            await execAsync(`git merge-base --is-ancestor "${branch}" main`, { cwd: repoPath, env: gitEnv });
+            merged = true;
+          } catch {
+            try {
+              await execAsync(`git merge-base --is-ancestor "${branch}" master`, { cwd: repoPath, env: gitEnv });
+              merged = true;
+            } catch { /* not merged */ }
+          }
+          results.push({ repo: dir, branch, path: wtPath, merged });
+        }
+      } catch {}
+    }
+  } catch {}
+  return results;
+});
+
+ipcMain.handle("claude-worktrees:remove", async (_, repoName: string, wtPath: string): Promise<void> => {
+  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+  const repoPath = join(githubDir, repoName);
+  try {
+    await execAsync(`git worktree remove --force "${wtPath}"`, { cwd: repoPath, env: gitEnv });
+  } catch {
+    try { fs.rmSync(wtPath, { recursive: true, force: true }); } catch {}
+  }
+});
+
 ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: boolean; files: string[] }> => {
   try {
     const repoPath = join(os.homedir(), "Documents", "GitHub", repoName);
@@ -1209,6 +1280,191 @@ ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: 
     }
   } catch {}
   return results.sort((a, b) => a.name.localeCompare(b.name));
+});
+
+// ── Claude File / Process / Memory IPC ───────────────────────────────────────
+ipcMain.handle("claude:open-file", (_, filepath: string) => {
+  const resolved = filepath.startsWith("~") ? join(os.homedir(), filepath.slice(1)) : filepath;
+  shell.openPath(resolved);
+});
+
+ipcMain.handle("claude:list-memory-files", (): { path: string; label: string; size: number }[] => {
+  const files: { path: string; label: string; size: number }[] = [];
+  const globalMem = join(os.homedir(), ".claude", "MEMORY.md");
+  if (fs.existsSync(globalMem)) {
+    files.push({ path: globalMem, label: "MEMORY.md (global)", size: fs.statSync(globalMem).size });
+  }
+  if (fs.existsSync(claudeProjectsDir)) {
+    try {
+      for (const proj of fs.readdirSync(claudeProjectsDir)) {
+        const memDir = join(claudeProjectsDir, proj, "memory");
+        try {
+          if (!fs.existsSync(memDir) || !fs.statSync(memDir).isDirectory()) continue;
+          for (const f of fs.readdirSync(memDir)) {
+            if (!f.endsWith(".md")) continue;
+            const fullPath = join(memDir, f);
+            files.push({ path: fullPath, label: `${proj.slice(0, 40)}/${f}`, size: fs.statSync(fullPath).size });
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+  return files;
+});
+
+ipcMain.handle("claude:read-memory-file", (_, filepath: string): string => {
+  try { return fs.readFileSync(filepath, "utf8"); } catch { return ""; }
+});
+
+ipcMain.handle("claude:active-count", async (): Promise<number> => {
+  try {
+    const { stdout } = await execAsync("pgrep -x claude", { timeout: 2000 });
+    return stdout.trim().split("\n").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+});
+
+ipcMain.handle("claude:write-to-focused", (_, text: string): void => {
+  if (focusedSessionId) sessions.get(focusedSessionId)?.write(text);
+});
+
+// ── KB Chat IPC ───────────────────────────────────────────────────────────────
+
+// Strip the grammar-correction block injected by the UserPromptSubmit hook in
+// ~/.claude/settings.json. Pattern: ─── Correction ─── / ***text*** / ─────────
+function stripCorrectionBlock(text: string): string {
+  return text.replace(/^─+[^\n]*\n\*{3}[^*\n]*\*{3}\n─+[^\n]*\n*/, "").trimStart();
+}
+
+const chatSessionsFile = join(dataDir, "chat-sessions.json");
+const chatSettingsFile = join(dataDir, "chat-settings.json");
+const chatProcesses = new Map<string, ChildProcess>();
+
+const DEFAULT_WIKI_DIR = "~/Documents/GitHub/knowledge-base/wiki";
+
+interface ChatSettings { model: string; wikiDir: string; }
+
+function loadChatSettings(): ChatSettings {
+  try {
+    const s = JSON.parse(fs.readFileSync(chatSettingsFile, "utf8"));
+    return { model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR, ...s };
+  }
+  catch { return { model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR }; }
+}
+
+ipcMain.handle("chat:get-settings", () => loadChatSettings());
+ipcMain.on("chat:save-settings", (_, data: ChatSettings) => {
+  try { fs.writeFileSync(chatSettingsFile, JSON.stringify(data, null, 2)); } catch {}
+});
+
+ipcMain.handle("chat:load-wiki-pages", (): { name: string; content: string }[] => {
+  const raw = loadChatSettings().wikiDir;
+  const wikiDir = raw.startsWith("~/") ? join(os.homedir(), raw.slice(2)) : raw;
+  if (!fs.existsSync(wikiDir)) return [];
+  try {
+    return fs.readdirSync(wikiDir)
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .map((f) => ({ name: f.replace(".md", ""), content: fs.readFileSync(join(wikiDir, f), "utf8") }));
+  } catch { return []; }
+});
+
+ipcMain.handle("chat:load-sessions", () => {
+  try { return JSON.parse(fs.readFileSync(chatSessionsFile, "utf8")); }
+  catch { return []; }
+});
+
+ipcMain.on("chat:save-sessions", (_, data: unknown) => {
+  try { fs.writeFileSync(chatSessionsFile, JSON.stringify(data, null, 2)); } catch {}
+});
+
+ipcMain.on("chat:send", (_, { requestId, message, sessionId, mode, wikiContext, model }: {
+  requestId: string;
+  message: string;
+  sessionId: string | null;
+  mode: "kb" | "code";
+  wikiContext?: string;
+  model?: string;
+}) => {
+  const claudeEnv = {
+    ...process.env,
+    PATH: `${join(os.homedir(), ".local", "bin")}:/usr/local/bin:/opt/homebrew/bin:${process.env.PATH ?? ""}`,
+  };
+
+  const resolvedModel = model ?? loadChatSettings().model;
+
+  const args: string[] = [
+    "--print",
+    "--output-format", "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--model", resolvedModel,
+  ];
+
+  if (sessionId) {
+    args.push("--resume", sessionId);
+  } else if (mode === "kb" && wikiContext) {
+    args.push("--system-prompt", wikiContext);
+  } else if (mode === "code") {
+    args.push("--add-dir", join(os.homedir(), "Documents", "GitHub"));
+    args.push("--permission-mode", "bypassPermissions");
+  }
+
+  args.push(message);
+
+  const proc = spawn(CLAUDE_BIN, args, { env: claudeEnv });
+  chatProcesses.set(requestId, proc);
+  let lineBuffer = "";
+
+  proc.stdout.on("data", (data: Buffer) => {
+    lineBuffer += data.toString();
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const event = JSON.parse(trimmed);
+        if (event.type === "system" && event.subtype === "init" && event.session_id) {
+          send("chat:session-id", requestId, event.session_id);
+        }
+        if (event.type === "assistant") {
+          const content: { type: string; name?: string; text?: string }[] = event.message?.content ?? [];
+          const toolUse = content.find((c) => c.type === "tool_use");
+          if (toolUse?.name) send("chat:tool-activity", requestId, toolUse.name);
+          const textBlock = content.find((c) => c.type === "text");
+          if (textBlock?.text) send("chat:chunk", requestId, stripCorrectionBlock(textBlock.text));
+        }
+        if (event.type === "result" && event.usage) {
+          send("chat:usage", requestId, {
+            inputTokens: event.usage.input_tokens ?? 0,
+            outputTokens: event.usage.output_tokens ?? 0,
+            cacheReadTokens: event.usage.cache_read_input_tokens ?? 0,
+            cacheCreationTokens: event.usage.cache_creation_input_tokens ?? 0,
+          });
+        }
+      } catch { /* ignore malformed lines */ }
+    }
+  });
+
+  proc.on("close", (code: number | null) => {
+    chatProcesses.delete(requestId);
+    if (code !== 0 && code !== null) {
+      send("chat:error", requestId, `claude exited with code ${code}`);
+    } else {
+      send("chat:done", requestId);
+    }
+  });
+});
+
+ipcMain.on("chat:stop", (_, requestId: string) => {
+  const proc = chatProcesses.get(requestId);
+  if (proc) {
+    proc.kill();
+    chatProcesses.delete(requestId);
+    send("chat:done", requestId);
+  }
 });
 
 ipcMain.handle("claude:read-session", (_, filename: string): ClaudeMessage[] => {

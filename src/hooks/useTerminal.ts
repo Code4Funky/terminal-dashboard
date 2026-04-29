@@ -30,6 +30,7 @@ declare global {
       ) => () => void;
       onCwdUpdate: (cb: (sessionId: string, cwd: string, gitBranch: string) => void) => () => void;
       setFocused: (sessionId: string) => void;
+      setBackgroundColor: (color: string) => void;
       getIterm2Font: () => Promise<{ family: string; size: number; files: string[] } | null>;
       getStats: (month?: string) => Promise<{
         claude: {
@@ -101,6 +102,7 @@ declare global {
       }[]>;
       getChatSettings: () => Promise<{ model: string; wikiDir: string }>;
       saveChatSettings: (data: { model: string; wikiDir: string }) => void;
+      pickChatWikiDir: () => Promise<string | null>;
       sendChatMessage: (params: { requestId: string; message: string; sessionId: string | null; mode: "kb" | "code"; wikiContext?: string; model?: string }) => void;
       loadChatWikiPages: () => Promise<{ name: string; content: string }[]>;
       loadChatSessions: () => Promise<unknown[]>;

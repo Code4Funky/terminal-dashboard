@@ -368,7 +368,7 @@ export function Dashboard() {
         {/* Theme toggle */}
         <button
           onClick={toggleTheme}
-          title={t.isDark ? "Switch to light mode" : "Switch to dark mode"}
+          title={{ dark: "Switch to Slack theme", slack: "Switch to light mode", light: "Switch to dark mode" }[t.name]}
           style={{
             background: "none", border: `1px solid ${t.borderSubtle}`,
             borderRadius: 6, color: t.label3, cursor: "pointer",
@@ -378,7 +378,7 @@ export function Dashboard() {
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}
         >
-          {t.isDark ? "☀" : "☾"}
+          {{ dark: "☀", slack: "◐", light: "☾" }[t.name]}
         </button>
 
         <span style={{ fontSize: 11, color: t.label3, marginLeft: 4, fontFamily: "monospace" }}>

@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld("terminal", {
   setFocused: (sessionId: string): void =>
     ipcRenderer.send("terminal:set-focused", sessionId),
 
+  setBackgroundColor: (color: string): void =>
+    ipcRenderer.send("terminal:set-background-color", color),
+
   getIterm2Font: (): Promise<{ family: string; size: number; files: string[] } | null> =>
     ipcRenderer.invoke("iterm2:get-font"),
 
@@ -214,6 +217,9 @@ contextBridge.exposeInMainWorld("terminal", {
 
   saveChatSettings: (data: { model: string; wikiDir: string }): void =>
     ipcRenderer.send("chat:save-settings", data),
+
+  pickChatWikiDir: (): Promise<string | null> =>
+    ipcRenderer.invoke("chat:pick-wiki-dir"),
 
   sendChatMessage: (params: { requestId: string; message: string; sessionId: string | null; mode: "kb" | "code"; wikiContext?: string; model?: string }): void =>
     ipcRenderer.send("chat:send", params),

@@ -29,7 +29,7 @@ export function TerminalPanel({
 }: Props) {
   const { theme: t } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize, t.isDark);
+  const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize, true);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(title);
 

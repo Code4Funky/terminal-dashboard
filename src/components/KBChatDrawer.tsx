@@ -100,6 +100,34 @@ function newSession(mode: Mode): ChatSession {
 
 const SYS = { fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" };
 
+function getModeColor(mode: Mode, t: Theme): string {
+  return mode === "kb" ? t.blue : t.green;
+}
+
+function CircleIconButton({ onClick, title, children, t }: {
+  onClick: (e: { stopPropagation: () => void }) => void;
+  title: string;
+  children: ReactNode;
+  t: Theme;
+}) {
+  const bg = t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+  const bgHover = t.isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)";
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: bg, border: "none", borderRadius: "50%",
+        color: t.label3, cursor: "pointer",
+        width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 9, flexShrink: 0, transition: "background 0.1s",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = bgHover)}
+      onMouseLeave={(e) => (e.currentTarget.style.background = bg)}
+    >{children}</button>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export function KBChatDrawer({ onClose }: Props) {
   const { theme: t } = useTheme();
@@ -112,10 +140,10 @@ export function KBChatDrawer({ onClose }: Props) {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(540);
   const [chatSettings, setChatSettings] = useState<ChatSettings>({ model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR });
-  const [wikiDirInput, setWikiDirInput] = useState(DEFAULT_WIKI_DIR);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -143,7 +171,7 @@ export function KBChatDrawer({ onClose }: Props) {
 
   // Load wiki pages + persisted sessions + settings on mount
   useEffect(() => {
-    window.terminal.getChatSettings().then((s) => { setChatSettings(s); setWikiDirInput(s.wikiDir); });
+    window.terminal.getChatSettings().then(setChatSettings);
     window.terminal.loadChatWikiPages().then(setWikiPages);
     window.terminal.loadChatSessions().then((saved) => {
       const typed = saved as ChatSession[];
@@ -435,77 +463,94 @@ export function KBChatDrawer({ onClose }: Props) {
             >+</button>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto" }}>
-            {filteredSessions.map((s) => (
-              <div
-                key={s.id}
-                onClick={() => switchSession(s.id)}
-                style={{
-                  padding: "7px 8px",
-                  background: s.id === currentId
-                    ? (t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)")
-                    : "none",
-                  cursor: "pointer",
-                  borderBottom: `1px solid ${t.borderSubtle}`,
-                  position: "relative",
-                }}
-              >
-                {editingId === s.id ? (
-                  <input
-                    autoFocus
-                    value={editingTitle}
-                    onChange={(e) => setEditingTitle(e.target.value)}
-                    onBlur={() => {
-                      if (editingTitle.trim()) updateSession(s.id, (sess) => ({ ...sess, title: editingTitle.trim() }));
-                      setEditingId(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") setEditingId(null);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      width: "100%", background: t.surface2, border: `1px solid ${t.blue}`,
-                      borderRadius: 3, color: t.label1, fontSize: 11, padding: "1px 4px",
-                      outline: "none", ...SYS,
-                    }}
-                  />
-                ) : (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2, paddingRight: s.id === currentId ? 36 : 0 }}>
-                      <span style={{
-                        fontSize: 9, fontWeight: 700, padding: "1px 4px", borderRadius: 3,
-                        background: s.mode === "kb" ? `${t.purple}25` : `${t.green}25`,
-                        color: s.mode === "kb" ? t.purple : t.green,
-                        border: `1px solid ${s.mode === "kb" ? t.purple + "50" : t.green + "50"}`,
-                        flexShrink: 0, ...SYS,
-                      }}>{s.mode.toUpperCase()}</span>
-                      <span style={{
-                        flex: 1, fontSize: 11, color: t.label2, fontWeight: 500,
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...SYS,
-                      }}>{s.title}</span>
-                    </div>
-                    <div style={{ fontSize: 9, color: t.label4, ...SYS }}>
-                      {s.messages.length} msg · {relativeTime(s.updatedAt)}
-                    </div>
-                    {s.id === currentId && (
-                      <div style={{ position: "absolute", right: 4, top: 5, display: "flex", gap: 1 }}>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditingTitle(s.title); }}
-                          style={{ background: "none", border: "none", color: t.label4, cursor: "pointer", fontSize: 10, padding: "1px 3px" }}
-                          title="Rename"
-                        >✎</button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                          style={{ background: "none", border: "none", color: t.label4, cursor: "pointer", fontSize: 10, padding: "1px 3px" }}
-                          title="Delete"
-                        >✕</button>
-                      </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: "4px 6px" }} onMouseLeave={() => setHoveredId(null)}>
+            {filteredSessions.map((s) => {
+              const mc = getModeColor(s.mode, t);
+              const isSelected = s.id === currentId;
+              const isHovered = hoveredId === s.id;
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => switchSession(s.id)}
+                  onMouseEnter={() => setHoveredId(s.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  style={{
+                    display: "flex", alignItems: "stretch", gap: 6,
+                    padding: "7px 8px",
+                    marginBottom: 2,
+                    borderRadius: 7,
+                    background: isSelected
+                      ? `${mc}1e`
+                      : isHovered ? (t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)") : "none",
+                    cursor: "pointer",
+                    position: "relative",
+                    transition: "background 0.1s",
+                  }}
+                >
+                  {/* Left color indicator */}
+                  <div style={{
+                    width: 3, borderRadius: 2, flexShrink: 0,
+                    background: mc,
+                    opacity: isSelected ? 0.9 : 0.5,
+                    alignSelf: "stretch",
+                  }} />
+
+                  {/* Content */}
+                  <div style={{ flex: 1, minWidth: 0, paddingRight: (isSelected || isHovered) ? 42 : 0 }}>
+                    {editingId === s.id ? (
+                      <input
+                        autoFocus
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onBlur={() => {
+                          if (editingTitle.trim()) updateSession(s.id, (sess) => ({ ...sess, title: editingTitle.trim() }));
+                          setEditingId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          if (e.key === "Escape") setEditingId(null);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          width: "100%", background: t.surface2, border: `1px solid ${t.blue}`,
+                          borderRadius: 3, color: t.label1, fontSize: 11, padding: "1px 4px",
+                          outline: "none", ...SYS,
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <div
+                          onDoubleClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditingTitle(s.title); }}
+                          style={{
+                            fontSize: 11, fontWeight: isSelected ? 600 : 400,
+                            color: isSelected ? t.label1 : t.label2,
+                            lineHeight: 1.4, marginBottom: 2,
+                            overflow: "hidden", display: "-webkit-box",
+                            WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                            ...SYS,
+                          }}
+                        >{s.title}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, ...SYS }}>
+                          <span style={{ color: mc, fontWeight: 600 }}>
+                            {s.mode === "kb" ? "KB" : "Code"}
+                          </span>
+                          <span style={{ color: t.label4, opacity: 0.5 }}>·</span>
+                          <span style={{ color: t.label4 }}>{relativeTime(s.updatedAt)}</span>
+                        </div>
+                      </>
                     )}
-                  </>
-                )}
-              </div>
-            ))}
+                  </div>
+
+                  {/* Rename + Delete buttons — visible on hover or selected */}
+                  {(isSelected || isHovered) && editingId !== s.id && (
+                    <div style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
+                      <CircleIconButton t={t} title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditingTitle(s.title); }}>✎</CircleIconButton>
+                      <CircleIconButton t={t} title="Delete" onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}>✕</CircleIconButton>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -526,33 +571,7 @@ export function KBChatDrawer({ onClose }: Props) {
 
           <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, ...SYS }}>KB Chat</span>
 
-          {current && (
-            <div style={{ display: "flex", gap: 2, background: t.surface2, borderRadius: 5, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
-              {(["kb", "code"] as Mode[]).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => {
-                    if (!loading) updateSession(current.id, (s) => ({ ...s, mode: m, claudeSessionId: null, updatedAt: Date.now() }));
-                  }}
-                  style={{
-                    background: current.mode === m ? (m === "kb" ? `${t.purple}25` : `${t.green}25`) : "none",
-                    border: `1px solid ${current.mode === m ? (m === "kb" ? t.purple + "60" : t.green + "60") : "transparent"}`,
-                    borderRadius: 3,
-                    color: current.mode === m ? (m === "kb" ? t.purple : t.green) : t.label3,
-                    cursor: loading ? "not-allowed" : "pointer",
-                    fontSize: 10, fontWeight: 700, padding: "1px 7px",
-                    transition: "all 0.15s", ...SYS,
-                  }}
-                >{m === "kb" ? "KB" : "Code"}</button>
-              ))}
-            </div>
-          )}
-
           <div style={{ flex: 1 }} />
-
-          <span style={{ fontSize: 9, color: t.label4, ...SYS }}>
-            {MODELS.find((m) => m.id === chatSettings.model)?.label ?? chatSettings.model}
-          </span>
 
           {totalTokens > 0 && (
             <span style={{
@@ -572,88 +591,6 @@ export function KBChatDrawer({ onClose }: Props) {
               title="Export as Markdown"
             >⬇</button>
           )}
-
-          <div ref={settingsRef} style={{ position: "relative" }}>
-            <button
-              onClick={() => setSettingsOpen((v) => !v)}
-              style={{
-                background: settingsOpen ? `${t.label3}18` : "none",
-                border: "none", color: settingsOpen ? t.label2 : t.label3,
-                cursor: "pointer", fontSize: 13, padding: "2px 4px",
-                transition: "color 0.15s",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = t.label2)}
-              onMouseLeave={(e) => { if (!settingsOpen) e.currentTarget.style.color = t.label3; }}
-              title="Settings"
-            >⚙</button>
-            {settingsOpen && (
-              <div style={{
-                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
-                background: t.surface1, border: `1px solid ${t.border}`,
-                borderRadius: 8, padding: "10px 12px", minWidth: 280,
-                boxShadow: t.isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(0,0,0,0.12)",
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 8, ...SYS }}>
-                  Model
-                </div>
-                {MODELS.map((m) => (
-                  <div
-                    key={m.id}
-                    onClick={() => {
-                      const next = { ...chatSettings, model: m.id };
-                      setChatSettings(next);
-                      window.terminal.saveChatSettings(next);
-                    }}
-                    style={{
-                      padding: "6px 8px", borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                      background: chatSettings.model === m.id
-                        ? (t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)")
-                        : "none",
-                      border: `1px solid ${chatSettings.model === m.id ? t.borderMid : "transparent"}`,
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                    }}
-                    onMouseEnter={(e) => { if (chatSettings.model !== m.id) e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"; }}
-                    onMouseLeave={(e) => { if (chatSettings.model !== m.id) e.currentTarget.style.background = "none"; }}
-                  >
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...SYS }}>{m.label}</div>
-                      <div style={{ fontSize: 10, color: t.label4, ...SYS }}>{m.desc}</div>
-                    </div>
-                    {chatSettings.model === m.id && (
-                      <span style={{ color: t.blue, fontSize: 12, fontWeight: 700 }}>✓</span>
-                    )}
-                  </div>
-                ))}
-
-                <div style={{ borderTop: `1px solid ${t.borderSubtle}`, margin: "10px 0 8px" }} />
-                <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 6, ...SYS }}>
-                  Wiki directory
-                </div>
-                <input
-                  value={wikiDirInput}
-                  onChange={(e) => setWikiDirInput(e.target.value)}
-                  onBlur={() => {
-                    const trimmed = wikiDirInput.trim() || DEFAULT_WIKI_DIR;
-                    setWikiDirInput(trimmed);
-                    const next = { ...chatSettings, wikiDir: trimmed };
-                    setChatSettings(next);
-                    window.terminal.saveChatSettings(next);
-                    window.terminal.loadChatWikiPages().then(setWikiPages);
-                  }}
-                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                  onFocus={(e) => e.currentTarget.select()}
-                  placeholder={DEFAULT_WIKI_DIR}
-                  title={wikiDirInput}
-                  style={{
-                    width: "100%", boxSizing: "border-box",
-                    background: t.surface2, border: `1px solid ${t.borderMid}`,
-                    borderRadius: 5, color: t.label1, fontSize: 10, padding: "4px 6px",
-                    outline: "none", direction: "rtl", textAlign: "left", ...SYS,
-                  }}
-                />
-              </div>
-            )}
-          </div>
 
           <button
             onClick={() => createSession()}
@@ -705,58 +642,184 @@ export function KBChatDrawer({ onClose }: Props) {
 
         {/* Input */}
         <div style={{
-          padding: "8px 10px", borderTop: `1px solid ${t.border}`,
-          flexShrink: 0, display: "flex", gap: 6, alignItems: "flex-end",
-          background: t.surface1,
+          padding: "8px 10px 10px", borderTop: `1px solid ${t.border}`,
+          flexShrink: 0, background: t.surface1,
         }}>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-              if (e.key === "ArrowUp" && !input && current) {
-                const lastUser = [...current.messages].reverse().find((m) => m.role === "user");
-                if (lastUser) { e.preventDefault(); setInput(lastUser.content); }
-              }
-            }}
-            placeholder={loading ? "Waiting for response…" : "Message  (⇧↵ newline · ↑ recall)"}
-            disabled={loading}
-            rows={1}
-            style={{
-              flex: 1, background: t.surface2, border: `1px solid ${t.borderMid}`,
-              borderRadius: 8, color: t.label1, fontSize: 12, padding: "7px 9px",
-              outline: "none", resize: "none", lineHeight: 1.5,
-              maxHeight: 120, overflowY: "auto",
-              opacity: loading ? 0.5 : 1, ...SYS,
-            }}
-          />
-          {loading ? (
-            <button
-              onClick={stopChat}
-              style={{
-                background: `${t.red}20`, border: `1px solid ${t.red}40`,
-                borderRadius: 8, color: t.red, cursor: "pointer",
-                fontSize: 12, fontWeight: 700, padding: "7px 10px",
-                flexShrink: 0, lineHeight: 1,
+          <div style={{
+            background: t.surface2,
+            border: `1px solid ${t.borderMid}`,
+            borderRadius: 12,
+          }}>
+            {/* Textarea */}
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                if (e.key === "ArrowUp" && !input && current) {
+                  const lastUser = [...current.messages].reverse().find((m) => m.role === "user");
+                  if (lastUser) { e.preventDefault(); setInput(lastUser.content); }
+                }
               }}
-              title="Stop"
-            >■</button>
-          ) : (
-            <button
-              onClick={sendMessage}
-              disabled={!input.trim()}
+              placeholder={loading ? "Waiting for response…" : "Message…  (⇧↵ newline · ↑ recall)"}
+              disabled={loading}
+              rows={1}
               style={{
-                background: !input.trim() ? t.surface3 : t.blue,
-                border: "none", borderRadius: 8,
-                color: !input.trim() ? t.label4 : "#fff",
-                cursor: !input.trim() ? "not-allowed" : "pointer",
-                fontSize: 14, fontWeight: 700, padding: "7px 11px",
-                transition: "all 0.15s", flexShrink: 0, lineHeight: 1,
+                width: "100%", boxSizing: "border-box",
+                background: "none", border: "none",
+                color: t.label1, fontSize: 12, padding: "10px 12px 6px",
+                outline: "none", resize: "none", lineHeight: 1.5,
+                maxHeight: 160, overflowY: "auto",
+                opacity: loading ? 0.5 : 1, ...SYS,
               }}
-              title="Send (↵)"
-            >↑</button>
-          )}
+            />
+
+            {/* Bottom toolbar */}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px 8px" }}>
+
+              {/* Mode toggle */}
+              {current && (
+                <div style={{ display: "flex", gap: 1, background: t.surface3, borderRadius: 5, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
+                  {(["kb", "code"] as Mode[]).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => {
+                        if (!loading) updateSession(current.id, (s) => ({ ...s, mode: m, claudeSessionId: null, updatedAt: Date.now() }));
+                      }}
+                      style={{
+                        background: current.mode === m ? `${getModeColor(m, t)}28` : "none",
+                        border: `1px solid ${current.mode === m ? getModeColor(m, t) + "60" : "transparent"}`,
+                        borderRadius: 4,
+                        color: current.mode === m ? getModeColor(m, t) : t.label3,
+                        cursor: loading ? "not-allowed" : "pointer",
+                        fontSize: 10, fontWeight: 700, padding: "1px 7px",
+                        transition: "all 0.15s", ...SYS,
+                      }}
+                    >{m === "kb" ? "KB" : "Code"}</button>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ flex: 1 }} />
+
+              {/* Model picker */}
+              <div ref={settingsRef} style={{ position: "relative" }}>
+                <button
+                  onClick={() => setSettingsOpen((v) => !v)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 3,
+                    background: settingsOpen ? `${t.label3}15` : "none",
+                    border: `1px solid ${settingsOpen ? t.borderMid : "transparent"}`,
+                    borderRadius: 6, color: settingsOpen ? t.label2 : t.label3,
+                    cursor: "pointer", fontSize: 10, padding: "3px 7px",
+                    transition: "all 0.15s", ...SYS,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderSubtle; }}
+                  onMouseLeave={(e) => { if (!settingsOpen) { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = "transparent"; } }}
+                  title="Model & settings"
+                >
+                  {MODELS.find((m) => m.id === chatSettings.model)?.label ?? chatSettings.model}
+                  <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
+                </button>
+
+                {settingsOpen && (
+                  <div style={{
+                    position: "absolute", bottom: "calc(100% + 6px)", right: 0, zIndex: 100,
+                    background: t.surface1, border: `1px solid ${t.border}`,
+                    borderRadius: 8, padding: "10px 12px", minWidth: 280,
+                    boxShadow: t.isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(0,0,0,0.12)",
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 8, ...SYS }}>Model</div>
+                    {MODELS.map((m) => (
+                      <div
+                        key={m.id}
+                        onClick={() => {
+                          const next = { ...chatSettings, model: m.id };
+                          setChatSettings(next);
+                          window.terminal.saveChatSettings(next);
+                        }}
+                        style={{
+                          padding: "6px 8px", borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                          background: chatSettings.model === m.id
+                            ? (t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)")
+                            : "none",
+                          border: `1px solid ${chatSettings.model === m.id ? t.borderMid : "transparent"}`,
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                        }}
+                        onMouseEnter={(e) => { if (chatSettings.model !== m.id) e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"; }}
+                        onMouseLeave={(e) => { if (chatSettings.model !== m.id) e.currentTarget.style.background = "none"; }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...SYS }}>{m.label}</div>
+                          <div style={{ fontSize: 10, color: t.label4, ...SYS }}>{m.desc}</div>
+                        </div>
+                        {chatSettings.model === m.id && <span style={{ color: t.blue, fontSize: 12, fontWeight: 700 }}>✓</span>}
+                      </div>
+                    ))}
+                    <div style={{ borderTop: `1px solid ${t.borderSubtle}`, margin: "10px 0 8px" }} />
+                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 6, ...SYS }}>Wiki directory</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span
+                        title={chatSettings.wikiDir}
+                        style={{
+                          flex: 1, fontSize: 10, color: t.label2, ...SYS,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          direction: "rtl", textAlign: "left",
+                        }}
+                      >{chatSettings.wikiDir || DEFAULT_WIKI_DIR}</span>
+                      <button
+                        onClick={async () => {
+                          const dir = await window.terminal.pickChatWikiDir();
+                          if (!dir) return;
+                          const next = { ...chatSettings, wikiDir: dir };
+                          setChatSettings(next);
+                          window.terminal.saveChatSettings(next);
+                          window.terminal.loadChatWikiPages().then(setWikiPages).catch(console.error);
+                        }}
+                        style={{
+                          flexShrink: 0,
+                          background: t.surface3, border: `1px solid ${t.borderMid}`,
+                          borderRadius: 5, color: t.label2, cursor: "pointer",
+                          fontSize: 10, padding: "3px 8px", transition: "all 0.15s", ...SYS,
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.borderColor = t.blue)}
+                        onMouseLeave={(e) => (e.currentTarget.style.borderColor = t.borderMid)}
+                      >Browse…</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Send / Stop */}
+              {loading ? (
+                <button
+                  onClick={stopChat}
+                  style={{
+                    background: `${t.red}20`, border: `1px solid ${t.red}40`,
+                    borderRadius: 7, color: t.red, cursor: "pointer",
+                    fontSize: 11, fontWeight: 700, padding: "4px 9px",
+                    flexShrink: 0, lineHeight: 1, ...SYS,
+                  }}
+                  title="Stop"
+                >■</button>
+              ) : (
+                <button
+                  onClick={sendMessage}
+                  disabled={!input.trim()}
+                  style={{
+                    background: !input.trim() ? t.surface3 : t.blue,
+                    border: "none", borderRadius: 7,
+                    color: !input.trim() ? t.label4 : "#fff",
+                    cursor: !input.trim() ? "not-allowed" : "pointer",
+                    fontSize: 13, fontWeight: 700, padding: "4px 10px",
+                    transition: "all 0.15s", flexShrink: 0, lineHeight: 1, ...SYS,
+                  }}
+                  title="Send (↵)"
+                >↑</button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -800,7 +863,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
   return (
     <div style={{ padding: "3px 10px", display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
       <div style={{
-        maxWidth: "90%",
+        maxWidth: isUser ? "90%" : "100%",
         background: isUser
           ? (t.isDark ? "rgba(10,132,255,0.2)" : "rgba(0,122,255,0.12)")
           : t.surface2,
@@ -896,7 +959,7 @@ function ChatStyles({ t }: { t: Theme }) {
       .kbc-md p { margin: 3px 0; }
       .kbc-md ul, .kbc-md ol { padding-left: 16px; margin: 3px 0; }
       .kbc-md li { margin: 1px 0; }
-      .kbc-md code { font-family: monospace; font-size: 11px; background: ${t.surface3}; color: ${t.teal}; padding: 1px 4px; border-radius: 3px; }
+      .kbc-md code { font-family: monospace; font-size: 11px; background: ${t.surface3}; color: ${t.isDark ? t.teal : "#0055CC"}; padding: 1px 4px; border-radius: 3px; }
       .kbc-md pre { background: ${t.surface3}; border: 1px solid ${t.borderSubtle}; border-radius: 6px; padding: 8px; margin: 4px 0; overflow-x: auto; }
       .kbc-md pre code { background: none; padding: 0; color: ${t.label2}; }
       .kbc-md strong { color: ${t.label1}; font-weight: 700; }

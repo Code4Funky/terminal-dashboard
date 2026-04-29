@@ -1,7 +1,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { Theme, darkTheme, lightTheme } from "./theme";
+import { Theme, darkTheme, slackTheme, lightTheme } from "./theme";
 
 const THEME_KEY = "td_theme";
+
+type ThemeName = "dark" | "slack" | "light";
+const themes: Record<ThemeName, Theme> = { dark: darkTheme, slack: slackTheme, light: lightTheme };
+const cycle: ThemeName[] = ["dark", "slack", "light"];
 
 interface ThemeContextValue {
   theme: Theme;
@@ -14,26 +18,27 @@ const ThemeContext = createContext<ThemeContextValue>({
 });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [isDark, setIsDark] = useState<boolean>(() => {
+  const [themeName, setThemeName] = useState<ThemeName>(() => {
     try {
       const stored = localStorage.getItem(THEME_KEY);
-      return stored ? stored === "dark" : true; // dark by default
+      return (stored && stored in themes ? stored : "dark") as ThemeName;
     } catch {
-      return true;
+      return "dark";
     }
   });
 
-  const theme = isDark ? darkTheme : lightTheme;
+  const theme = themes[themeName];
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", themeName);
     document.body.style.background = theme.bg;
-  }, [isDark, theme.bg]);
+    window.terminal.setBackgroundColor(theme.bg);
+  }, [themeName, theme.bg]);
 
   const toggleTheme = () => {
-    setIsDark((v) => {
-      const next = !v;
-      localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+    setThemeName((v) => {
+      const next = cycle[(cycle.indexOf(v) + 1) % cycle.length];
+      localStorage.setItem(THEME_KEY, next);
       return next;
     });
   };

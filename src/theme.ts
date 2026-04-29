@@ -1,4 +1,5 @@
 export interface Theme {
+  name: "dark" | "slack" | "light";
   isDark: boolean;
   // Backgrounds
   bg: string;        // App base
@@ -25,6 +26,7 @@ export interface Theme {
 }
 
 export const darkTheme: Theme = {
+  name: "dark",
   isDark: true,
   bg: "#000000",
   surface1: "#1C1C1E",
@@ -46,10 +48,34 @@ export const darkTheme: Theme = {
   teal: "#5AC8FA",
 };
 
+export const slackTheme: Theme = {
+  name: "slack",
+  isDark: true,
+  bg: "#1A1D21",
+  surface1: "#19171D",
+  surface2: "#222529",
+  surface3: "#2C2D30",
+  headerBg: "rgba(26,29,33,0.85)",
+  border: "#3D3F44",
+  borderMid: "#313339",
+  borderSubtle: "#282A2E",
+  label1: "#E8E8E8",
+  label2: "#ABABAD",
+  label3: "#7A7B7C",
+  label4: "#5E5F61",
+  blue: "#1D9BD1",
+  green: "#2BAC76",
+  orange: "#E8912D",
+  red: "#E01E5A",
+  purple: "#6C37C9",
+  teal: "#1BA8A8",
+};
+
 export const lightTheme: Theme = {
+  name: "light",
   isDark: false,
   bg: "#F2F2F7",
-  surface1: "#FFFFFF",
+  surface1: "#F8F8F8",
   surface2: "#F2F2F7",
   surface3: "#E5E5EA",
   headerBg: "rgba(242,242,247,0.7)",

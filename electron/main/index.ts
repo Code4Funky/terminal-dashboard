@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
 import { join, basename } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
@@ -585,7 +585,7 @@ function createWindow() {
     width: 1400,
     height: 900,
     titleBarStyle: "hiddenInset",
-    backgroundColor: "#0d1117",
+    backgroundColor: "#000000",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -717,6 +717,10 @@ ipcMain.on("terminal:delete-history", (_, num: number) => {
 
 ipcMain.on("terminal:set-focused", (_, sessionId: string) => {
   focusedSessionId = sessionId;
+});
+
+ipcMain.on("terminal:set-background-color", (_, color: string) => {
+  mainWindow?.setBackgroundColor(color);
 });
 
 // ── Notes IPC ─────────────────────────────────────────────────────────────────
@@ -1357,6 +1361,14 @@ ipcMain.handle("chat:get-settings", () => loadChatSettings());
 ipcMain.on("chat:save-settings", (_, data: ChatSettings) => {
   try { fs.writeFileSync(chatSettingsFile, JSON.stringify(data, null, 2)); } catch {}
 });
+ipcMain.handle("chat:pick-wiki-dir", async (): Promise<string | null> => {
+  const win = BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
+    title: "Choose wiki directory",
+    properties: ["openDirectory"],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
 
 ipcMain.handle("chat:load-wiki-pages", (): { name: string; content: string }[] => {
   const raw = loadChatSettings().wikiDir;
@@ -1416,6 +1428,8 @@ ipcMain.on("chat:send", (_, { requestId, message, sessionId, mode, wikiContext, 
   const proc = spawn(CLAUDE_BIN, args, { env: claudeEnv });
   chatProcesses.set(requestId, proc);
   let lineBuffer = "";
+  let stderrBuffer = "";
+  proc.stderr.on("data", (data: Buffer) => { if (stderrBuffer.length < 8192) stderrBuffer += data.toString(); });
 
   proc.stdout.on("data", (data: Buffer) => {
     lineBuffer += data.toString();
@@ -1451,7 +1465,8 @@ ipcMain.on("chat:send", (_, { requestId, message, sessionId, mode, wikiContext, 
   proc.on("close", (code: number | null) => {
     chatProcesses.delete(requestId);
     if (code !== 0 && code !== null) {
-      send("chat:error", requestId, `claude exited with code ${code}`);
+      const detail = stderrBuffer.trim();
+      send("chat:error", requestId, detail || `claude exited with code ${code}`);
     } else {
       send("chat:done", requestId);
     }

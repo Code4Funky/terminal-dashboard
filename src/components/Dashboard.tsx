@@ -281,6 +281,8 @@ export function Dashboard() {
         display: "flex", alignItems: "center",
         gap: 8, padding: "6px 12px 6px 80px",
         background: t.surface1,
+        backdropFilter: t.backdropFilter,
+        WebkitBackdropFilter: t.backdropFilter,
         borderBottom: `1px solid ${t.border}`,
         flexShrink: 0,
         WebkitAppRegion: "drag" as const,

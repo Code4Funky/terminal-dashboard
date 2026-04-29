@@ -31,8 +31,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", themeName);
-    document.body.style.background = theme.bg;
-    window.terminal.setBackgroundColor(theme.bg);
+    document.body.style.background = "transparent";
+    window.terminal.setBackgroundColor("#00000000");
   }, [themeName, theme.bg]);
 
   const toggleTheme = () => {

@@ -145,6 +145,7 @@ export function KBChatDrawer({ onClose }: Props) {
   const [drawerWidth, setDrawerWidth] = useState(540);
   const [chatSettings, setChatSettings] = useState<ChatSettings>({ model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hoveredMode, setHoveredMode] = useState<Mode | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -413,7 +414,10 @@ export function KBChatDrawer({ onClose }: Props) {
   return (
     <div style={{
       width: drawerWidth, flexShrink: 0,
-      background: t.surface1, borderLeft: `1px solid ${t.border}`,
+      background: t.surface1,
+      backdropFilter: t.backdropFilter,
+      WebkitBackdropFilter: t.backdropFilter,
+      borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "row", position: "relative",
       boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 16px rgba(0,0,0,0.08)",
     }}>
@@ -436,6 +440,8 @@ export function KBChatDrawer({ onClose }: Props) {
           borderRight: `1px solid ${t.border}`,
           display: "flex", flexDirection: "column",
           background: t.bg,
+          backdropFilter: t.backdropFilter,
+          WebkitBackdropFilter: t.backdropFilter,
         }}>
           <div style={{
             padding: "8px 8px 6px",
@@ -680,10 +686,12 @@ export function KBChatDrawer({ onClose }: Props) {
 
               {/* Mode toggle */}
               {current && (
-                <div style={{ display: "flex", gap: 1, background: t.surface3, borderRadius: 5, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
+                <div style={{ position: "relative", display: "flex", gap: 1, background: t.surface3, borderRadius: 5, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
                   {(["kb", "code"] as Mode[]).map((m) => (
                     <button
                       key={m}
+                      onMouseEnter={() => setHoveredMode(m)}
+                      onMouseLeave={() => setHoveredMode(null)}
                       onClick={() => {
                         if (!loading) updateSession(current.id, (s) => ({ ...s, mode: m, claudeSessionId: null, updatedAt: Date.now() }));
                       }}
@@ -698,6 +706,19 @@ export function KBChatDrawer({ onClose }: Props) {
                       }}
                     >{m === "kb" ? "KB" : "Code"}</button>
                   ))}
+                  {hoveredMode && (
+                    <div style={{
+                      position: "absolute", bottom: "calc(100% + 6px)", left: "50%",
+                      transform: "translateX(-50%)",
+                      background: t.surface2, border: `1px solid ${t.borderMid}`,
+                      borderRadius: 5, padding: "4px 8px",
+                      fontSize: 10, color: t.label2, whiteSpace: "nowrap",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+                      pointerEvents: "none", zIndex: 50, ...SYS,
+                    }}>
+                      {hoveredMode === "kb" ? "Answers from your knowledge base wiki" : "Full repo access via Claude Code tools"}
+                    </div>
+                  )}
                 </div>
               )}
 

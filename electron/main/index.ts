@@ -585,7 +585,10 @@ function createWindow() {
     width: 1400,
     height: 900,
     titleBarStyle: "hiddenInset",
-    backgroundColor: "#000000",
+    backgroundColor: "#00000000",
+    transparent: true,
+    vibrancy: "under-window",
+    visualEffectState: "active",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,

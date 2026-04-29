@@ -199,7 +199,10 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
   return (
     <div style={{
       width: isWide ? 520 : 360, flexShrink: 0,
-      background: t.surface1, borderLeft: `1px solid ${t.border}`,
+      background: t.surface1,
+      backdropFilter: t.backdropFilter,
+      WebkitBackdropFilter: t.backdropFilter,
+      borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column",
       boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 16px rgba(0,0,0,0.08)",
       transition: "width 0.15s ease",

@@ -471,6 +471,8 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     <div style={{
       width: 400, flexShrink: 0,
       background: t.surface1,
+      backdropFilter: t.backdropFilter,
+      WebkitBackdropFilter: t.backdropFilter,
       borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column",
       boxShadow: t.isDark ? "-4px 0 36px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.08)",

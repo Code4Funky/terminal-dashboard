@@ -219,6 +219,8 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
     <div style={{
       width: 480, flexShrink: 0,
       background: t.surface1,
+      backdropFilter: t.backdropFilter,
+      WebkitBackdropFilter: t.backdropFilter,
       borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column",
       boxShadow: t.isDark ? "-8px 0 40px rgba(0,0,0,0.6)" : "-8px 0 24px rgba(0,0,0,0.08)",

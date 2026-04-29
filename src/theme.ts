@@ -7,6 +7,7 @@ export interface Theme {
   surface2: string;  // Cards
   surface3: string;  // Card hover / elevated
   headerBg: string;  // Drawer header overlay
+  backdropFilter: string; // Frosted-glass blur
   // Borders
   border: string;    // Separator-strength border
   borderMid: string; // Normal border
@@ -28,11 +29,12 @@ export interface Theme {
 export const darkTheme: Theme = {
   name: "dark",
   isDark: true,
-  bg: "#000000",
-  surface1: "#1C1C1E",
-  surface2: "#2C2C2E",
-  surface3: "#3A3A3C",
+  bg: "rgba(0,0,0,0.82)",
+  surface1: "rgba(28,28,30,0.88)",
+  surface2: "rgba(44,44,46,0.82)",
+  surface3: "rgba(58,58,60,0.90)",
   headerBg: "rgba(0,0,0,0.35)",
+  backdropFilter: "blur(20px) saturate(180%)",
   border: "rgba(84,84,88,0.65)",
   borderMid: "rgba(84,84,88,0.5)",
   borderSubtle: "rgba(84,84,88,0.35)",
@@ -51,11 +53,12 @@ export const darkTheme: Theme = {
 export const slackTheme: Theme = {
   name: "slack",
   isDark: true,
-  bg: "#1A1D21",
-  surface1: "#19171D",
-  surface2: "#222529",
-  surface3: "#2C2D30",
+  bg: "rgba(26,29,33,0.85)",
+  surface1: "rgba(25,23,29,0.90)",
+  surface2: "rgba(34,37,41,0.85)",
+  surface3: "rgba(44,45,48,0.90)",
   headerBg: "rgba(26,29,33,0.85)",
+  backdropFilter: "blur(20px) saturate(180%)",
   border: "#3D3F44",
   borderMid: "#313339",
   borderSubtle: "#282A2E",
@@ -74,11 +77,12 @@ export const slackTheme: Theme = {
 export const lightTheme: Theme = {
   name: "light",
   isDark: false,
-  bg: "#F2F2F7",
-  surface1: "#F8F8F8",
-  surface2: "#F2F2F7",
-  surface3: "#E5E5EA",
-  headerBg: "rgba(242,242,247,0.7)",
+  bg: "rgba(242,242,247,0.72)",
+  surface1: "rgba(248,248,248,0.82)",
+  surface2: "rgba(240,240,242,0.80)",
+  surface3: "rgba(229,229,234,0.85)",
+  headerBg: "rgba(242,242,247,0.70)",
+  backdropFilter: "blur(20px) saturate(180%)",
   border: "rgba(60,60,67,0.29)",
   borderMid: "rgba(60,60,67,0.2)",
   borderSubtle: "rgba(60,60,67,0.12)",

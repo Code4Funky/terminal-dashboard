@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from "react"
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "../ThemeContext";
+import { SYS_FONT } from "../theme";
 import type { Theme } from "../theme";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -98,7 +99,6 @@ function newSession(mode: Mode): ChatSession {
   };
 }
 
-const SYS = { fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" };
 
 function getModeColor(mode: Mode, t: Theme): string {
   return mode === "kb" ? t.blue : t.green;
@@ -419,7 +419,7 @@ export function KBChatDrawer({ onClose }: Props) {
       WebkitBackdropFilter: t.backdropFilter,
       borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "row", position: "relative",
-      boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 16px rgba(0,0,0,0.08)",
+      boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.12)",
     }}>
       {/* Resize handle */}
       <div
@@ -439,9 +439,8 @@ export function KBChatDrawer({ onClose }: Props) {
           width: 180, flexShrink: 0,
           borderRight: `1px solid ${t.border}`,
           display: "flex", flexDirection: "column",
-          background: t.bg,
-          backdropFilter: t.backdropFilter,
-          WebkitBackdropFilter: t.backdropFilter,
+          background: t.isDark ? t.surface1 : "#f7f7f8",
+          boxShadow: t.isDark ? "none" : "inset -1px 0 0 rgba(0,0,0,0.04)",
         }}>
           <div style={{
             padding: "8px 8px 6px",
@@ -455,7 +454,7 @@ export function KBChatDrawer({ onClose }: Props) {
               style={{
                 flex: 1, background: t.surface2, border: `1px solid ${t.borderMid}`,
                 borderRadius: 5, color: t.label1, fontSize: 11, padding: "3px 6px",
-                outline: "none", ...SYS,
+                outline: "none", ...SYS_FONT,
               }}
             />
             <button
@@ -486,11 +485,12 @@ export function KBChatDrawer({ onClose }: Props) {
                     marginBottom: 2,
                     borderRadius: 7,
                     background: isSelected
-                      ? `${mc}1e`
-                      : isHovered ? (t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)") : "none",
+                      ? (t.isDark ? `${mc}1e` : "#ffffff")
+                      : isHovered ? (t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)") : "transparent",
+                    boxShadow: isSelected && !t.isDark ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
                     cursor: "pointer",
                     position: "relative",
-                    transition: "background 0.1s",
+                    transition: "background 0.1s, box-shadow 0.1s",
                   }}
                 >
                   {/* Left color indicator */}
@@ -520,7 +520,7 @@ export function KBChatDrawer({ onClose }: Props) {
                         style={{
                           width: "100%", background: t.surface2, border: `1px solid ${t.blue}`,
                           borderRadius: 3, color: t.label1, fontSize: 11, padding: "1px 4px",
-                          outline: "none", ...SYS,
+                          outline: "none", ...SYS_FONT,
                         }}
                       />
                     ) : (
@@ -533,10 +533,10 @@ export function KBChatDrawer({ onClose }: Props) {
                             lineHeight: 1.4, marginBottom: 2,
                             overflow: "hidden", display: "-webkit-box",
                             WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-                            ...SYS,
+                            ...SYS_FONT,
                           }}
                         >{s.title}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, ...SYS }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, ...SYS_FONT }}>
                           <span style={{ color: mc, fontWeight: 600 }}>
                             {s.mode === "kb" ? "KB" : "Code"}
                           </span>
@@ -575,13 +575,13 @@ export function KBChatDrawer({ onClose }: Props) {
             title={sidebarOpen ? "Hide sessions" : "Show sessions"}
           >{sidebarOpen ? "◂" : "▸"}</button>
 
-          <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, ...SYS }}>KB Chat</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, ...SYS_FONT }}>KB Chat</span>
 
           <div style={{ flex: 1 }} />
 
           {totalTokens > 0 && (
             <span style={{
-              fontSize: 9, ...SYS,
+              fontSize: 9, ...SYS_FONT,
               color: totalTokens > 16000 ? t.red : totalTokens > 8000 ? t.orange : t.label4,
             }}>
               {(totalTokens / 1000).toFixed(1)}k tok
@@ -604,7 +604,7 @@ export function KBChatDrawer({ onClose }: Props) {
               background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
               borderRadius: 5, color: t.blue, cursor: "pointer",
               fontSize: 10, fontWeight: 700, padding: "2px 8px",
-              transition: "all 0.15s", ...SYS,
+              transition: "all 0.15s", ...SYS_FONT,
             }}
             onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}28`; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = `${t.blue}15`; }}
@@ -638,7 +638,7 @@ export function KBChatDrawer({ onClose }: Props) {
               style={{
                 background: "none", border: `1px solid ${t.borderMid}`,
                 borderRadius: 5, color: t.label3, cursor: "pointer",
-                fontSize: 10, padding: "2px 8px", ...SYS,
+                fontSize: 10, padding: "2px 8px", ...SYS_FONT,
               }}
               onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
               onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
@@ -677,7 +677,7 @@ export function KBChatDrawer({ onClose }: Props) {
                 color: t.label1, fontSize: 12, padding: "10px 12px 6px",
                 outline: "none", resize: "none", lineHeight: 1.5,
                 maxHeight: 160, overflowY: "auto",
-                opacity: loading ? 0.5 : 1, ...SYS,
+                opacity: loading ? 0.5 : 1, ...SYS_FONT,
               }}
             />
 
@@ -702,7 +702,7 @@ export function KBChatDrawer({ onClose }: Props) {
                         color: current.mode === m ? getModeColor(m, t) : t.label3,
                         cursor: loading ? "not-allowed" : "pointer",
                         fontSize: 10, fontWeight: 700, padding: "1px 7px",
-                        transition: "all 0.15s", ...SYS,
+                        transition: "all 0.15s", ...SYS_FONT,
                       }}
                     >{m === "kb" ? "KB" : "Code"}</button>
                   ))}
@@ -714,7 +714,7 @@ export function KBChatDrawer({ onClose }: Props) {
                       borderRadius: 5, padding: "4px 8px",
                       fontSize: 10, color: t.label2, whiteSpace: "nowrap",
                       boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-                      pointerEvents: "none", zIndex: 50, ...SYS,
+                      pointerEvents: "none", zIndex: 50, ...SYS_FONT,
                     }}>
                       {hoveredMode === "kb" ? "Answers from your knowledge base wiki" : "Full repo access via Claude Code tools"}
                     </div>
@@ -734,7 +734,7 @@ export function KBChatDrawer({ onClose }: Props) {
                     border: `1px solid ${settingsOpen ? t.borderMid : "transparent"}`,
                     borderRadius: 6, color: settingsOpen ? t.label2 : t.label3,
                     cursor: "pointer", fontSize: 10, padding: "3px 7px",
-                    transition: "all 0.15s", ...SYS,
+                    transition: "all 0.15s", ...SYS_FONT,
                   }}
                   onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderSubtle; }}
                   onMouseLeave={(e) => { if (!settingsOpen) { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = "transparent"; } }}
@@ -751,7 +751,7 @@ export function KBChatDrawer({ onClose }: Props) {
                     borderRadius: 8, padding: "10px 12px", minWidth: 280,
                     boxShadow: t.isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(0,0,0,0.12)",
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 8, ...SYS }}>Model</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 8, ...SYS_FONT }}>Model</div>
                     {MODELS.map((m) => (
                       <div
                         key={m.id}
@@ -772,19 +772,19 @@ export function KBChatDrawer({ onClose }: Props) {
                         onMouseLeave={(e) => { if (chatSettings.model !== m.id) e.currentTarget.style.background = "none"; }}
                       >
                         <div>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...SYS }}>{m.label}</div>
-                          <div style={{ fontSize: 10, color: t.label4, ...SYS }}>{m.desc}</div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...SYS_FONT }}>{m.label}</div>
+                          <div style={{ fontSize: 10, color: t.label4, ...SYS_FONT }}>{m.desc}</div>
                         </div>
                         {chatSettings.model === m.id && <span style={{ color: t.blue, fontSize: 12, fontWeight: 700 }}>✓</span>}
                       </div>
                     ))}
                     <div style={{ borderTop: `1px solid ${t.borderSubtle}`, margin: "10px 0 8px" }} />
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 6, ...SYS }}>Wiki directory</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 6, ...SYS_FONT }}>Wiki directory</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span
                         title={chatSettings.wikiDir}
                         style={{
-                          flex: 1, fontSize: 10, color: t.label2, ...SYS,
+                          flex: 1, fontSize: 10, color: t.label2, ...SYS_FONT,
                           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                           direction: "rtl", textAlign: "left",
                         }}
@@ -802,7 +802,7 @@ export function KBChatDrawer({ onClose }: Props) {
                           flexShrink: 0,
                           background: t.surface3, border: `1px solid ${t.borderMid}`,
                           borderRadius: 5, color: t.label2, cursor: "pointer",
-                          fontSize: 10, padding: "3px 8px", transition: "all 0.15s", ...SYS,
+                          fontSize: 10, padding: "3px 8px", transition: "all 0.15s", ...SYS_FONT,
                         }}
                         onMouseEnter={(e) => (e.currentTarget.style.borderColor = t.blue)}
                         onMouseLeave={(e) => (e.currentTarget.style.borderColor = t.borderMid)}
@@ -820,7 +820,7 @@ export function KBChatDrawer({ onClose }: Props) {
                     background: `${t.red}20`, border: `1px solid ${t.red}40`,
                     borderRadius: 7, color: t.red, cursor: "pointer",
                     fontSize: 11, fontWeight: 700, padding: "4px 9px",
-                    flexShrink: 0, lineHeight: 1, ...SYS,
+                    flexShrink: 0, lineHeight: 1, ...SYS_FONT,
                   }}
                   title="Stop"
                 >■</button>
@@ -834,7 +834,7 @@ export function KBChatDrawer({ onClose }: Props) {
                     color: !input.trim() ? t.label4 : "#fff",
                     cursor: !input.trim() ? "not-allowed" : "pointer",
                     fontSize: 13, fontWeight: 700, padding: "4px 10px",
-                    transition: "all 0.15s", flexShrink: 0, lineHeight: 1, ...SYS,
+                    transition: "all 0.15s", flexShrink: 0, lineHeight: 1, ...SYS_FONT,
                   }}
                   title="Send (↵)"
                 >↑</button>
@@ -857,15 +857,15 @@ function EmptyState({ mode, t, wikiDir }: { mode: Mode; t: Theme; wikiDir: strin
       padding: "60px 24px 40px", textAlign: "center", gap: 8,
     }}>
       <div style={{ fontSize: 22, marginBottom: 2 }}>{mode === "kb" ? "📖" : "💻"}</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: t.label2, ...SYS }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: t.label2, ...SYS_FONT }}>
         {mode === "kb" ? "Ask your knowledge base" : "Ask about your codebase"}
       </div>
-      <div style={{ fontSize: 11, color: t.label4, lineHeight: 1.6, maxWidth: 220, ...SYS }}>
+      <div style={{ fontSize: 11, color: t.label4, lineHeight: 1.6, maxWidth: 220, ...SYS_FONT }}>
         {mode === "kb"
           ? `Answers sourced from ${wikiDir}`
           : "Full repo access via Claude Code tools"}
       </div>
-      <div style={{ marginTop: 4, fontSize: 10, color: t.label4, lineHeight: 1.9, ...SYS }}>
+      <div style={{ marginTop: 4, fontSize: 10, color: t.label4, lineHeight: 1.9, ...SYS_FONT }}>
         <span style={{ opacity: 0.6 }}>/clear · /kb · /code · ↑ recall</span>
       </div>
     </div>
@@ -897,9 +897,9 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
         wordBreak: "break-word",
       }}>
         {isUser ? (
-          <span style={{ ...SYS, whiteSpace: "pre-wrap" }}>{msg.content}</span>
+          <span style={{ ...SYS_FONT, whiteSpace: "pre-wrap" }}>{msg.content}</span>
         ) : (
-          <div style={{ ...SYS }}>
+          <div style={{ ...SYS_FONT }}>
             {msg.streaming && !msg.content ? (
               <TypingDots t={t} toolActivity={msg.toolActivity} />
             ) : (
@@ -908,7 +908,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
                 {msg.streaming && msg.content && (
                   <>
                     {msg.toolActivity && (
-                      <div style={{ fontSize: 10, color: t.label4, marginTop: 4, fontStyle: "italic", ...SYS }}>
+                      <div style={{ fontSize: 10, color: t.label4, marginTop: 4, fontStyle: "italic", ...SYS_FONT }}>
                         ⚙ {msg.toolActivity}…
                       </div>
                     )}
@@ -933,14 +933,14 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
                 borderRadius: 4,
                 color: msgCopied ? t.green : t.label3,
                 cursor: "pointer", fontSize: 10, padding: "1px 6px",
-                transition: "all 0.15s", ...SYS,
+                transition: "all 0.15s", ...SYS_FONT,
               }}
               onMouseEnter={(e) => { if (!msgCopied) e.currentTarget.style.borderColor = t.borderMid; }}
               onMouseLeave={(e) => { if (!msgCopied) e.currentTarget.style.borderColor = t.borderSubtle; }}
               title="Copy full response"
             >{msgCopied ? "✓ Copied" : "Copy"}</button>
           )}
-          <span style={{ fontSize: 9, color: t.label4, ...SYS }}>{relativeTime(msg.timestamp)}</span>
+          <span style={{ fontSize: 9, color: t.label4, ...SYS_FONT }}>{relativeTime(msg.timestamp)}</span>
         </div>
       </div>
     </div>
@@ -960,7 +960,7 @@ function TypingDots({ t, toolActivity }: { t: Theme; toolActivity?: string }) {
         ))}
       </div>
       {toolActivity && (
-        <span style={{ fontSize: 10, color: t.label4, fontStyle: "italic", ...SYS }}>
+        <span style={{ fontSize: 10, color: t.label4, fontStyle: "italic", ...SYS_FONT }}>
           ⚙ {toolActivity}
         </span>
       )}
@@ -1016,7 +1016,7 @@ function CodeBlock({ children, t }: { children: ReactNode; t: Theme }) {
           border: `1px solid ${copied ? t.green + "50" : t.borderMid}`,
           borderRadius: 4, color: copied ? t.green : t.label3,
           cursor: "pointer", fontSize: 10, padding: "2px 6px",
-          transition: "all 0.15s", ...SYS,
+          transition: "all 0.15s", ...SYS_FONT,
         }}
       >{copied ? "✓" : "Copy"}</button>
     </div>
@@ -1025,7 +1025,7 @@ function CodeBlock({ children, t }: { children: ReactNode; t: Theme }) {
 
 function MarkdownContent({ body, t }: { body: string; t: Theme }) {
   return (
-    <div className="kbc-md" style={{ fontSize: 12, color: t.label1, lineHeight: 1.7, ...SYS }}>
+    <div className="kbc-md" style={{ fontSize: 12, color: t.label1, lineHeight: 1.7, ...SYS_FONT }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{ pre: ({ children }) => <CodeBlock t={t}>{children}</CodeBlock> }}

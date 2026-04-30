@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "../ThemeContext";
+import { SYS_FONT } from "../theme";
 import type { Theme } from "../theme";
 
 interface NoteCard {
@@ -79,11 +80,10 @@ export function NotesDrawer({ onClose }: Props) {
     ? editing.title.trim() && (editing.type === "note" || editing.command.trim())
     : false;
 
-  const SYS = { fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" };
   const inputStyle = {
     background: t.surface1, border: `1px solid ${t.borderMid}`,
     borderRadius: 6, color: t.label1, fontSize: 12, padding: "6px 10px",
-    outline: "none", width: "100%", boxSizing: "border-box" as const, ...SYS,
+    outline: "none", width: "100%", boxSizing: "border-box" as const, ...SYS_FONT,
   };
 
   const isNoteTab = tab === "notes";
@@ -106,14 +106,14 @@ export function NotesDrawer({ onClose }: Props) {
         padding: "10px 14px", borderBottom: `1px solid ${t.border}`,
         flexShrink: 0, background: t.headerBg,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, flex: 1, ...SYS }}>Notes</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>Notes</span>
         <button
           onClick={startNew}
           style={{
             background: `${t.green}18`, border: `1px solid ${t.green}35`,
             borderRadius: 5, color: t.green,
             cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "2px 10px",
-            transition: "all 0.15s", flexShrink: 0, ...SYS,
+            transition: "all 0.15s", flexShrink: 0, ...SYS_FONT,
           }}
           onMouseEnter={(e) => { e.currentTarget.style.background = `${t.green}30`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = `${t.green}18`; }}
@@ -137,7 +137,7 @@ export function NotesDrawer({ onClose }: Props) {
               borderBottom: tab === id ? `2px solid ${t.purple}` : "2px solid transparent",
               color: tab === id ? t.purple : t.label3,
               cursor: "pointer", fontSize: 11, fontWeight: tab === id ? 700 : 500,
-              padding: "8px 4px 6px", transition: "all 0.15s", ...SYS,
+              padding: "8px 4px 6px", transition: "all 0.15s", ...SYS_FONT,
               textTransform: "capitalize",
             }}
           >
@@ -190,7 +190,7 @@ export function NotesDrawer({ onClose }: Props) {
                     background: preview ? `${t.purple}18` : "none",
                     border: `1px solid ${preview ? t.purple + "50" : t.borderSubtle}`,
                     borderRadius: 4, color: preview ? t.purple : t.label3,
-                    cursor: "pointer", fontSize: 10, padding: "2px 8px", ...SYS,
+                    cursor: "pointer", fontSize: 10, padding: "2px 8px", ...SYS_FONT,
                   }}
                 >{preview ? "Edit" : "Preview"}</button>
               </div>
@@ -222,12 +222,12 @@ export function NotesDrawer({ onClose }: Props) {
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
               onClick={() => setEditing(null)}
-              style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 5, color: t.label3, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 12px", ...SYS }}
+              style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 5, color: t.label3, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 12px", ...SYS_FONT }}
             >Cancel</button>
             <button
               onClick={save}
               disabled={!canSave}
-              style={{ background: t.blue, border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 14px", opacity: canSave ? 1 : 0.4, transition: "opacity 0.15s", ...SYS }}
+              style={{ background: t.blue, border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 14px", opacity: canSave ? 1 : 0.4, transition: "opacity 0.15s", ...SYS_FONT }}
             >Save</button>
           </div>
         </div>
@@ -236,13 +236,13 @@ export function NotesDrawer({ onClose }: Props) {
       {/* List */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {currentList.length === 0 && !editing ? (
-          <div style={{ padding: 20, color: t.label4, fontSize: 12, textAlign: "center", ...SYS }}>
+          <div style={{ padding: 20, color: t.label4, fontSize: 12, textAlign: "center", ...SYS_FONT }}>
             No {isNoteTab ? "notes" : "commands"} yet.{" "}
             <strong style={{ color: t.label3 }}>+ Add</strong> to create one.
           </div>
         ) : isNoteTab ? (
           currentList.map((card) => (
-            <NoteItem key={card.id} card={card} t={t} SYS={SYS}
+            <NoteItem key={card.id} card={card} t={t}
               isEditing={editing?.id === card.id}
               onEdit={() => startEdit(card)}
               onDelete={() => remove(card.id)}
@@ -250,7 +250,7 @@ export function NotesDrawer({ onClose }: Props) {
           ))
         ) : (
           currentList.map((card) => (
-            <CommandItem key={card.id} card={card} t={t} SYS={SYS}
+            <CommandItem key={card.id} card={card} t={t}
               isEditing={editing?.id === card.id}
               copied={copied}
               onEdit={() => startEdit(card)}
@@ -267,8 +267,8 @@ export function NotesDrawer({ onClose }: Props) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function CommandItem({ card, t, SYS, isEditing, copied, onEdit, onDelete, onCopy, onRun }: {
-  card: NoteCard; t: Theme; SYS: object; isEditing: boolean; copied: string | null;
+function CommandItem({ card, t, isEditing, copied, onEdit, onDelete, onCopy, onRun }: {
+  card: NoteCard; t: Theme; isEditing: boolean; copied: string | null;
   onEdit: () => void; onDelete: () => void; onCopy: (text: string) => void; onRun: (cmd: string) => void;
 }) {
   const [ran, setRan] = useState(false);
@@ -280,7 +280,7 @@ function CommandItem({ card, t, SYS, isEditing, copied, onEdit, onDelete, onCopy
   return (
     <div style={{ padding: "10px 14px", borderBottom: `1px solid ${t.borderSubtle}`, background: isEditing ? `${t.blue}08` : "transparent" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS }}>{card.title}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
         <button onClick={onEdit} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>
@@ -297,13 +297,13 @@ function CommandItem({ card, t, SYS, isEditing, copied, onEdit, onDelete, onCopy
           onMouseLeave={(e) => { if (!ran) { e.currentTarget.style.background = `${t.green}12`; e.currentTarget.style.borderColor = `${t.green}30`; } }}
         >{ran ? "✓" : "▶"}</button>
       </div>
-      {card.description && <div style={{ fontSize: 10, color: t.label4, marginTop: 4, ...SYS }}>{card.description}</div>}
+      {card.description && <div style={{ fontSize: 10, color: t.label4, marginTop: 4, ...SYS_FONT }}>{card.description}</div>}
     </div>
   );
 }
 
-function NoteItem({ card, t, SYS, isEditing, onEdit, onDelete }: {
-  card: NoteCard; t: Theme; SYS: object; isEditing: boolean; onEdit: () => void; onDelete: () => void;
+function NoteItem({ card, t, isEditing, onEdit, onDelete }: {
+  card: NoteCard; t: Theme; isEditing: boolean; onEdit: () => void; onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -314,7 +314,7 @@ function NoteItem({ card, t, SYS, isEditing, onEdit, onDelete }: {
         onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = `${t.purple}10`)}
         onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = isEditing ? `${t.blue}08` : "")}
       >
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS }}>{card.title}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
         <button onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>

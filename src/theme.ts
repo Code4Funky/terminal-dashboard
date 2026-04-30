@@ -1,3 +1,5 @@
+export const SYS_FONT = { fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" };
+
 export interface Theme {
   name: "dark" | "slack" | "light";
   isDark: boolean;

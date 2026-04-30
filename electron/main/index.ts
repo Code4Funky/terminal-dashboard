@@ -7,6 +7,8 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 import * as fs from "fs";
+
+const TOOL_ENV = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
 import * as pty from "node-pty";
 import os from "os";
 
@@ -1095,10 +1097,10 @@ ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]):
   const repoPath = join(githubDir, repo);
   const deleted: string[] = [];
   const failed: { branch: string; reason: string }[] = [];
-  const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   for (const branch of branches) {
     try {
-      await execAsync(`git branch -D "${branch}"`, { cwd: repoPath, env: ghEnv });
+      await execAsync(`git branch -D "${branch}"`, { cwd: repoPath, env: TOOL_ENV });
       deleted.push(branch);
     } catch (e: unknown) {
       failed.push({ branch, reason: e instanceof Error ? e.message : String(e) });
@@ -1110,7 +1112,7 @@ ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]):
 ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
   const repoPath = join(githubDir, repo);
   const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
-  const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   const deleted: string[] = [];
   const failed: { branch: string; reason: string }[] = [];
   try {
@@ -1118,19 +1120,19 @@ ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted:
     let defaultRef = "";
     for (const candidate of ["origin/main", "origin/master", "main", "master"]) {
       try {
-        await execAsync(`git rev-parse --verify "${candidate}"`, { cwd: repoPath, env: ghEnv });
+        await execAsync(`git rev-parse --verify "${candidate}"`, { cwd: repoPath, env: TOOL_ENV });
         defaultRef = candidate;
         break;
       } catch {}
     }
     if (!defaultRef) return { deleted: [], failed: [{ branch: "", reason: "Could not determine default branch" }] };
-    const { stdout } = await execAsync(`git branch --merged "${defaultRef}"`, { cwd: repoPath, env: ghEnv });
+    const { stdout } = await execAsync(`git branch --merged "${defaultRef}"`, { cwd: repoPath, env: TOOL_ENV });
     const merged = stdout.split("\n")
       .map((b) => b.trim().replace(/^\*\s*/, ""))
       .filter((b) => b && !skipBranches.has(b));
     for (const branch of merged) {
       try {
-        await execAsync(`git branch -d "${branch}"`, { cwd: repoPath, env: ghEnv });
+        await execAsync(`git branch -d "${branch}"`, { cwd: repoPath, env: TOOL_ENV });
         deleted.push(branch);
       } catch (e: unknown) {
         failed.push({ branch, reason: e instanceof Error ? e.message : String(e) });
@@ -1143,7 +1145,7 @@ ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted:
 ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string; repoUrl: string }[]> => {
   const results: { repo: string; branch: string; repoUrl: string }[] = [];
   const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
-  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   try {
     for (const dir of fs.readdirSync(githubDir)) {
       const repoPath = join(githubDir, dir);
@@ -1154,8 +1156,8 @@ ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; bran
         // Worktrees have .git as a file pointing back to the main repo — skip them
         if (!fs.statSync(gitEntry).isDirectory()) continue;
         const [branchOut, remoteOut] = await Promise.all([
-          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: gitEnv }),
-          execAsync(`git remote get-url origin`, { cwd: repoPath, env: gitEnv }).catch(() => ({ stdout: "" })),
+          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }),
+          execAsync(`git remote get-url origin`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
         ]);
         const rawUrl = remoteOut.stdout.trim();
         const match = rawUrl.match(/github\.com[/:](.+?)(?:\.git)?$/);
@@ -1190,7 +1192,7 @@ ipcMain.handle("prs:check-worktree", async (_, repoName: string, branchName: str
 
 ipcMain.handle("claude-worktrees:list", async (): Promise<{ repo: string; branch: string; path: string; merged: boolean }[]> => {
   const results: { repo: string; branch: string; path: string; merged: boolean }[] = [];
-  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   try {
     for (const dir of fs.readdirSync(githubDir)) {
       const repoPath = join(githubDir, dir);
@@ -1198,7 +1200,7 @@ ipcMain.handle("claude-worktrees:list", async (): Promise<{ repo: string; branch
         if (!fs.statSync(repoPath).isDirectory()) continue;
         const gitEntry = join(repoPath, ".git");
         if (!fs.existsSync(gitEntry) || !fs.statSync(gitEntry).isDirectory()) continue;
-        const { stdout } = await execAsync("git worktree list", { cwd: repoPath, env: gitEnv });
+        const { stdout } = await execAsync("git worktree list", { cwd: repoPath, env: TOOL_ENV });
         for (const line of stdout.split("\n")) {
           const parts = line.trim().split(/\s+/);
           if (parts.length < 3) continue;
@@ -1207,11 +1209,11 @@ ipcMain.handle("claude-worktrees:list", async (): Promise<{ repo: string; branch
           const branch = branchRef.replace(/^\[|\]$/g, "");
           let merged = false;
           try {
-            await execAsync(`git merge-base --is-ancestor "${branch}" main`, { cwd: repoPath, env: gitEnv });
+            await execAsync(`git merge-base --is-ancestor "${branch}" main`, { cwd: repoPath, env: TOOL_ENV });
             merged = true;
           } catch {
             try {
-              await execAsync(`git merge-base --is-ancestor "${branch}" master`, { cwd: repoPath, env: gitEnv });
+              await execAsync(`git merge-base --is-ancestor "${branch}" master`, { cwd: repoPath, env: TOOL_ENV });
               merged = true;
             } catch { /* not merged */ }
           }
@@ -1224,10 +1226,10 @@ ipcMain.handle("claude-worktrees:list", async (): Promise<{ repo: string; branch
 });
 
 ipcMain.handle("claude-worktrees:remove", async (_, repoName: string, wtPath: string): Promise<void> => {
-  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   const repoPath = join(githubDir, repoName);
   try {
-    await execAsync(`git worktree remove --force "${wtPath}"`, { cwd: repoPath, env: gitEnv });
+    await execAsync(`git worktree remove --force "${wtPath}"`, { cwd: repoPath, env: TOOL_ENV });
   } catch {
     try { fs.rmSync(wtPath, { recursive: true, force: true }); } catch {}
   }
@@ -1247,8 +1249,8 @@ ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: 
 ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
   try {
     const query = `{ viewer { pullRequests(first: 50, states: [OPEN]) { nodes { number title url headRefName headRefOid isDraft createdAt reviewDecision repository { name nameWithOwner } } } } }`;
-    const ghEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
-    const { stdout } = await execAsync(`gh api graphql -f query='${query}'`, { env: ghEnv });
+  
+    const { stdout } = await execAsync(`gh api graphql -f query='${query}'`, { env: TOOL_ENV });
     const data = JSON.parse(stdout);
     return data.data?.viewer?.pullRequests?.nodes ?? [];
   } catch {
@@ -1263,7 +1265,7 @@ ipcMain.handle("shell:open-external", (_, url: string) => {
 ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> => {
   const results: { name: string; branches: string[]; repoUrl: string }[] = [];
   const targetBranches = ["main", "dev", "master", "develop"];
-  const gitEnv = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
+
   try {
     for (const dir of fs.readdirSync(githubDir)) {
       const repoPath = join(githubDir, dir);
@@ -1273,8 +1275,8 @@ ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: 
         if (!fs.existsSync(gitEntry)) continue;
         if (!fs.statSync(gitEntry).isDirectory()) continue;
         const [branchOut, remoteOut] = await Promise.all([
-          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: gitEnv }),
-          execAsync(`git remote get-url origin`, { cwd: repoPath, env: gitEnv }).catch(() => ({ stdout: "" })),
+          execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }),
+          execAsync(`git remote get-url origin`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
         ]);
         const existing = new Set(branchOut.stdout.trim().split("\n").map((b) => b.trim()));
         const branches = targetBranches.filter((b) => existing.has(b));

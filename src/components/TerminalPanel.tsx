@@ -103,12 +103,6 @@ export function TerminalPanel({
               title="Double-click to rename"
             >{title}</span>
           )}
-          {cwd && <span style={{ color: t.label4 }}>{formatCwd(cwd)}</span>}
-          {gitBranch && (
-            <span style={{ color: t.teal, fontFamily: "monospace" }}>
-              git:({gitBranch})
-            </span>
-          )}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); if (canClose) onClose(); }}
@@ -127,6 +121,28 @@ export function TerminalPanel({
       <div style={{ flex: 1, padding: 4, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
       </div>
+
+      {/* Bottom status bar */}
+      {(cwd || gitBranch) && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "2px 10px",
+          background: t.isDark ? "rgba(28,28,30,0.85)" : "rgba(248,248,248,0.9)",
+          borderTop: `1px solid ${t.borderSubtle}`,
+          flexShrink: 0,
+          fontSize: 12, fontFamily: "monospace",
+          minWidth: 0,
+        }}>
+          {cwd && (
+            <span style={{ color: t.label4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {formatCwd(cwd)}
+            </span>
+          )}
+          {gitBranch && (
+            <span style={{ color: t.teal, flexShrink: 0 }}>git:({gitBranch})</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

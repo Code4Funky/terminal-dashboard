@@ -7,6 +7,7 @@ import { NotesDrawer } from "./NotesDrawer";
 import { ClaudeAgentsDrawer } from "./ClaudeAgentsDrawer";
 import { KBChatDrawer } from "./KBChatDrawer";
 import { useTheme } from "../ThemeContext";
+import { SYS_FONT } from "../theme";
 
 interface PanelState {
   id: string;
@@ -272,8 +273,6 @@ export function Dashboard() {
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
   });
 
-  const SYS = { fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: t.bg, overflow: "hidden" }}>
       {/* Toolbar */}
@@ -288,7 +287,7 @@ export function Dashboard() {
         WebkitAppRegion: "drag" as const,
         position: "relative", zIndex: 10,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, marginRight: 8, letterSpacing: 0.4, ...SYS }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, marginRight: 8, letterSpacing: 0.4, ...SYS_FONT }}>
           Terminal Dashboard
         </span>
 
@@ -309,7 +308,7 @@ export function Dashboard() {
           style={{
             borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
             padding: "4px 14px", WebkitAppRegion: "no-drag" as const, letterSpacing: 0.3,
-            background: t.blue, border: "none", color: "#FFFFFF", ...SYS,
+            background: t.blue, border: "none", color: "#FFFFFF", ...SYS_FONT,
             transition: "opacity 0.15s",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.82")}
@@ -401,10 +400,10 @@ export function Dashboard() {
             borderRadius: 16, padding: "24px 28px", width: 420,
             boxShadow: "0 8px 48px rgba(0,0,0,0.4)",
           }}>
-            <div style={{ color: t.label1, fontWeight: 700, fontSize: 15, marginBottom: 8, ...SYS }}>
+            <div style={{ color: t.label1, fontWeight: 700, fontSize: 15, marginBottom: 8, ...SYS_FONT }}>
               Create worktree?
             </div>
-            <div style={{ color: t.label2, fontSize: 12, marginBottom: 16, lineHeight: 1.6, ...SYS }}>
+            <div style={{ color: t.label2, fontSize: 12, marginBottom: 16, lineHeight: 1.6, ...SYS_FONT }}>
               No existing worktree found for{" "}
               <span style={{ color: t.purple, fontFamily: "monospace" }}>{worktreeConfirm.branchName}</span>
               {". A new one will be created at:"}
@@ -422,7 +421,7 @@ export function Dashboard() {
                 style={{
                   background: t.surface2, border: `1px solid ${t.border}`,
                   borderRadius: 8, color: t.label2, cursor: "pointer",
-                  fontSize: 12, fontWeight: 600, padding: "7px 18px", ...SYS,
+                  fontSize: 12, fontWeight: 600, padding: "7px 18px", ...SYS_FONT,
                 }}
               >Cancel</button>
               <button
@@ -430,7 +429,7 @@ export function Dashboard() {
                 style={{
                   background: t.blue, border: "none", borderRadius: 8,
                   color: "#FFFFFF", cursor: "pointer",
-                  fontSize: 12, fontWeight: 700, padding: "7px 20px", ...SYS,
+                  fontSize: 12, fontWeight: 700, padding: "7px 20px", ...SYS_FONT,
                 }}
               >Create &amp; Open</button>
             </div>
@@ -451,10 +450,10 @@ export function Dashboard() {
             borderRadius: 16, padding: "24px 28px", width: 440,
             boxShadow: "0 8px 48px rgba(0,0,0,0.4)",
           }}>
-            <div style={{ color: t.orange, fontWeight: 700, fontSize: 15, marginBottom: 8, ...SYS }}>
+            <div style={{ color: t.orange, fontWeight: 700, fontSize: 15, marginBottom: 8, ...SYS_FONT }}>
               Uncommitted changes detected
             </div>
-            <div style={{ color: t.label2, fontSize: 12, marginBottom: 12, lineHeight: 1.6, ...SYS }}>
+            <div style={{ color: t.label2, fontSize: 12, marginBottom: 12, lineHeight: 1.6, ...SYS_FONT }}>
               <span style={{ color: t.label1 }}>{dirtyConfirm.repoName}</span> has unsaved changes.
               Stage or stash them before checking out{" "}
               <span style={{ color: t.purple, fontFamily: "monospace" }}>{dirtyConfirm.branchName}</span>.
@@ -479,7 +478,7 @@ export function Dashboard() {
                 style={{
                   background: t.surface2, border: `1px solid ${t.border}`,
                   borderRadius: 8, color: t.label2, cursor: "pointer",
-                  fontSize: 12, fontWeight: 600, padding: "7px 18px", ...SYS,
+                  fontSize: 12, fontWeight: 600, padding: "7px 18px", ...SYS_FONT,
                 }}
               >Cancel</button>
               <button
@@ -487,7 +486,7 @@ export function Dashboard() {
                 style={{
                   background: t.orange, border: "none", borderRadius: 8,
                   color: "#FFFFFF", cursor: "pointer",
-                  fontSize: 12, fontWeight: 700, padding: "7px 20px", ...SYS,
+                  fontSize: 12, fontWeight: 700, padding: "7px 20px", ...SYS_FONT,
                 }}
               >Stash &amp; Checkout</button>
             </div>

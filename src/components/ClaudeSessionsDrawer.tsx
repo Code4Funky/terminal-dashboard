@@ -1,28 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "../ThemeContext";
+import { formatSize, formatDate, formatSessionLabel } from "../utils/format";
 
 interface SessionEntry { filename: string; size: number; lastModified: number; }
 interface Message { role: string; content: string; timestamp?: string; }
 interface Props { onClose: () => void; }
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDate(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function formatSessionLabel(filename: string): string {
-  const m = filename.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
-  if (m) {
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
-    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  }
-  return filename.replace(".jsonl", "");
-}
 
 export function ClaudeSessionsDrawer({ onClose }: Props) {
   const { theme: t } = useTheme();

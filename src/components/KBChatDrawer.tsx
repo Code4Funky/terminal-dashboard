@@ -80,6 +80,12 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
+function extractSourceCitation(content: string): { body: string; source: string | null } {
+  const match = content.match(/^From (?:the (?:wiki|knowledge base)|your knowledge base) \(([^)]+)\)[:\n]\n*/i);
+  if (match) return { body: content.slice(match[0].length), source: match[1] };
+  return { body: content, source: null };
+}
+
 function autoTitle(text: string): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > 36 ? clean.slice(0, 36) + "…" : clean;
@@ -881,6 +887,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
       setTimeout(() => setMsgCopied(false), 2000);
     });
   };
+  const { body: displayBody, source } = !isUser ? extractSourceCitation(msg.content) : { body: msg.content, source: null };
   return (
     <div style={{ padding: "3px 10px", display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
       <div style={{
@@ -895,6 +902,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
         color: t.label1,
         lineHeight: 1.6,
         wordBreak: "break-word",
+        boxShadow: !isUser && !t.isDark ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
       }}>
         {isUser ? (
           <span style={{ ...SYS_FONT, whiteSpace: "pre-wrap" }}>{msg.content}</span>
@@ -904,7 +912,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
               <TypingDots t={t} toolActivity={msg.toolActivity} />
             ) : (
               <>
-                <MarkdownContent body={msg.content} t={t} />
+                <MarkdownContent body={displayBody} t={t} />
                 {msg.streaming && msg.content && (
                   <>
                     {msg.toolActivity && (
@@ -942,6 +950,11 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
           )}
           <span style={{ fontSize: 9, color: t.label4, ...SYS_FONT }}>{relativeTime(msg.timestamp)}</span>
         </div>
+        {source && !msg.streaming && (
+          <div style={{ fontSize: 10, color: t.label4, marginTop: 4, borderTop: `1px solid ${t.borderSubtle}`, paddingTop: 4, ...SYS_FONT }}>
+            Source: {source}
+          </div>
+        )}
       </div>
     </div>
   );

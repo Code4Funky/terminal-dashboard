@@ -32,6 +32,7 @@ export function TerminalPanel({
   const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize, true);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(title);
+  const [panelHovered, setPanelHovered] = useState(false);
 
   useEffect(() => {
     if (!renaming) setRenameValue(title);
@@ -64,20 +65,18 @@ export function TerminalPanel({
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
       onClick={onFocus}
-      onMouseEnter={(e) => { if (!focused) e.currentTarget.style.borderColor = `${t.green}55`; }}
-      onMouseLeave={(e) => { if (!focused) e.currentTarget.style.borderColor = t.borderMid; }}
+      onMouseEnter={(e) => { setPanelHovered(true); if (!focused) e.currentTarget.style.borderColor = `${t.green}55`; }}
+      onMouseLeave={(e) => { setPanelHovered(false); if (!focused) e.currentTarget.style.borderColor = t.borderMid; }}
     >
       {/* Title bar */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "4px 10px",
-        background: t.isDark
-          ? (focused ? "rgba(44,44,46,0.9)" : "rgba(28,28,30,0.85)")
-          : (focused ? "rgba(242,242,247,0.95)" : "rgba(255,255,255,0.9)"),
-        borderBottom: `1px solid ${focused ? t.borderMid : t.borderSubtle}`,
+        padding: "0 8px", height: 24,
+        background: t.isDark ? t.surface2 : t.surface1,
+        borderBottom: `1px solid ${t.borderSubtle}`,
         userSelect: "none", flexShrink: 0,
       }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "monospace" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "monospace", minWidth: 0 }}>
           {renaming ? (
             <input
               autoFocus
@@ -92,13 +91,13 @@ export function TerminalPanel({
               style={{
                 background: "none", border: "none",
                 borderBottom: `1px solid ${t.green}`,
-                color: t.label1, fontSize: 12, fontFamily: "monospace",
+                color: t.label2, fontSize: 11, fontFamily: "monospace",
                 outline: "none", padding: "0 2px", minWidth: 60, maxWidth: 160,
               }}
             />
           ) : (
             <span
-              style={{ color: focused ? t.label1 : t.label3, cursor: "text" }}
+              style={{ color: t.label3, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
               onDoubleClick={() => { setRenaming(true); setRenameValue(title); }}
               title="Double-click to rename"
             >{title}</span>
@@ -107,13 +106,14 @@ export function TerminalPanel({
         <button
           onClick={(e) => { e.stopPropagation(); if (canClose) onClose(); }}
           style={{
-            background: "none", border: "none", color: canClose ? t.label4 : t.borderMid,
-            cursor: canClose ? "pointer" : "default", fontSize: 14, lineHeight: 1, padding: "0 2px",
-            transition: "color 0.15s",
+            background: "none", border: "none", color: t.red,
+            cursor: canClose ? "pointer" : "default", fontSize: 13, lineHeight: 1, padding: "0 2px",
+            opacity: (panelHovered || focused) && canClose ? 1 : 0,
+            pointerEvents: (panelHovered || focused) && canClose ? "auto" : "none",
+            transition: "opacity 0.15s",
+            flexShrink: 0,
           }}
-          onMouseEnter={(e) => { if (canClose) e.currentTarget.style.color = t.red; }}
-          onMouseLeave={(e) => { if (canClose) e.currentTarget.style.color = t.label4; }}
-          title={canClose ? "Close (⌃W)" : "Cannot close last panel"}
+          title="Close (⌃W)"
         >×</button>
       </div>
 

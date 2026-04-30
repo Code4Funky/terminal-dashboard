@@ -45,6 +45,7 @@ export function Dashboard() {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<SidePanel | null>("prs");
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
+  const [zenMode, setZenMode] = useState(false);
   const [worktreeConfirm, setWorktreeConfirm] = useState<{ repoName: string; branchName: string; wtPath: string } | null>(null);
   const [dirtyConfirm, setDirtyConfirm] = useState<{ repoName: string; branchName: string; files: string[] } | null>(null);
   const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
@@ -228,6 +229,7 @@ export function Dashboard() {
       const fromTerminal = (e.target as HTMLElement).classList?.contains("xterm-helper-textarea");
       if (e.metaKey && !e.shiftKey && !e.altKey) {
         if (e.key === "t") { e.preventDefault(); handleAddPanel(); return; }
+        if (e.key === "\\") { e.preventDefault(); setZenMode((v) => !v); return; }
         const col = parseInt(e.key);
         if (col >= 1 && col <= 4) { e.preventDefault(); setColumns(col as Columns); return; }
       }
@@ -245,8 +247,8 @@ export function Dashboard() {
         if (focusedId) handleClose(focusedId);
       }
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    window.addEventListener("keydown", handleKey, { capture: true });
+    return () => window.removeEventListener("keydown", handleKey, { capture: true });
   }, [focusedId, panels]);
 
   const colBtnStyle = (active: boolean) => ({
@@ -260,18 +262,6 @@ export function Dashboard() {
     transition: "all 0.15s",
   });
 
-  const drawerBtnStyle = (active: boolean, activeColor: string, activeBg: string, activeBorder: string) => ({
-    background: active ? activeBg : "none",
-    border: `1px solid ${active ? activeBorder : t.borderSubtle}`,
-    borderRadius: 6,
-    color: active ? activeColor : t.label3,
-    cursor: "pointer" as const,
-    fontSize: 12,
-    fontWeight: 600 as const,
-    padding: "4px 12px",
-    transition: "all 0.15s",
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
-  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: t.bg, overflow: "hidden" }}>
@@ -320,69 +310,20 @@ export function Dashboard() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Tab buttons */}
-        <div style={{ display: "flex", gap: 4, WebkitAppRegion: "no-drag" as const }}>
-          <button
-            onClick={() => togglePanel("prs")}
-            title="GitHub  ⌘⇧1"
-            style={drawerBtnStyle(activePanel === "prs", t.blue, t.isDark ? "rgba(10,132,255,0.18)" : "rgba(0,122,255,0.12)", t.isDark ? "rgba(10,132,255,0.5)" : "rgba(0,122,255,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "prs") { e.currentTarget.style.color = t.blue; e.currentTarget.style.borderColor = t.isDark ? "rgba(10,132,255,0.35)" : "rgba(0,122,255,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "prs") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >GitHub</button>
-          <button
-            onClick={() => togglePanel("stats")}
-            title="Stats  ⌘⇧2"
-            style={drawerBtnStyle(activePanel === "stats", t.orange, t.isDark ? "rgba(255,159,10,0.15)" : "rgba(255,149,0,0.1)", t.isDark ? "rgba(255,159,10,0.5)" : "rgba(255,149,0,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "stats") { e.currentTarget.style.color = t.orange; e.currentTarget.style.borderColor = t.isDark ? "rgba(255,159,10,0.35)" : "rgba(255,149,0,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "stats") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >Stats</button>
-          <button
-            onClick={() => togglePanel("history")}
-            title="History  ⌘⇧3"
-            style={drawerBtnStyle(activePanel === "history", t.teal, t.isDark ? "rgba(90,200,250,0.15)" : "rgba(50,173,230,0.1)", t.isDark ? "rgba(90,200,250,0.5)" : "rgba(50,173,230,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "history") { e.currentTarget.style.color = t.teal; e.currentTarget.style.borderColor = t.isDark ? "rgba(90,200,250,0.35)" : "rgba(50,173,230,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "history") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >History</button>
-          <button
-            onClick={() => togglePanel("notes")}
-            title="Notes  ⌘⇧4"
-            style={drawerBtnStyle(activePanel === "notes", t.purple, t.isDark ? "rgba(191,90,242,0.15)" : "rgba(175,82,222,0.1)", t.isDark ? "rgba(191,90,242,0.5)" : "rgba(175,82,222,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "notes") { e.currentTarget.style.color = t.purple; e.currentTarget.style.borderColor = t.isDark ? "rgba(191,90,242,0.35)" : "rgba(175,82,222,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "notes") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >Notes</button>
-          <button
-            onClick={() => togglePanel("claude-agents")}
-            title="Claude  ⌘⇧5"
-            style={drawerBtnStyle(activePanel === "claude-agents", t.green, t.isDark ? "rgba(48,209,88,0.15)" : "rgba(52,199,89,0.1)", t.isDark ? "rgba(48,209,88,0.5)" : "rgba(52,199,89,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "claude-agents") { e.currentTarget.style.color = t.green; e.currentTarget.style.borderColor = t.isDark ? "rgba(48,209,88,0.35)" : "rgba(52,199,89,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "claude-agents") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >Claude</button>
-          <button
-            onClick={() => togglePanel("kb-chat")}
-            title="KB Chat  ⌘⇧6"
-            style={drawerBtnStyle(activePanel === "kb-chat", t.purple, t.isDark ? "rgba(191,90,242,0.15)" : "rgba(175,82,222,0.1)", t.isDark ? "rgba(191,90,242,0.5)" : "rgba(175,82,222,0.4)")}
-            onMouseEnter={(e) => { if (activePanel !== "kb-chat") { e.currentTarget.style.color = t.purple; e.currentTarget.style.borderColor = t.isDark ? "rgba(191,90,242,0.35)" : "rgba(175,82,222,0.3)"; }}}
-            onMouseLeave={(e) => { if (activePanel !== "kb-chat") { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}}
-          >KB Chat</button>
-        </div>
-
-        {/* Theme toggle */}
         <button
-          onClick={toggleTheme}
-          title={{ dark: "Switch to Slack theme", slack: "Switch to light mode", light: "Switch to dark mode" }[t.name]}
+          onClick={() => setZenMode((v) => !v)}
+          title={zenMode ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"}
           style={{
             background: "none", border: `1px solid ${t.borderSubtle}`,
-            borderRadius: 6, color: t.label3, cursor: "pointer",
-            fontSize: 14, padding: "3px 8px", lineHeight: 1,
-            WebkitAppRegion: "no-drag" as const, transition: "all 0.15s", marginLeft: 4,
+            borderRadius: 6, color: zenMode ? t.blue : t.label3, cursor: "pointer",
+            fontSize: 13, padding: "3px 7px", lineHeight: 1,
+            WebkitAppRegion: "no-drag" as const, transition: "all 0.15s", marginRight: 6,
           }}
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}
-        >
-          {{ dark: "☀", slack: "◐", light: "☾" }[t.name]}
-        </button>
+          onMouseLeave={(e) => { e.currentTarget.style.color = zenMode ? t.blue : t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}
+        >{zenMode ? "▷" : "◁"}</button>
 
-        <span style={{ fontSize: 11, color: t.label3, marginLeft: 4, fontFamily: "monospace" }}>
+        <span style={{ fontSize: 11, color: t.label3, fontFamily: "monospace", WebkitAppRegion: "no-drag" as const }}>
           {panels.length} session{panels.length !== 1 ? "s" : ""}
         </span>
       </div>
@@ -521,14 +462,82 @@ export function Dashboard() {
           ))}
         </div>
 
-        {activePanel === "prs" && <PRsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenBranchTerminal} onOpenRepo={handleOpenRepoTerminal} onRunClaudeAction={handleRunClaudeAction} />}
-        {activePanel === "stats" && <StatsDrawer onClose={() => setActivePanel(null)} onOpenSession={handleOpenSessionTerminal} />}
-        {activePanel === "history" && (
+        {!zenMode && activePanel === "prs" && <PRsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenBranchTerminal} onOpenRepo={handleOpenRepoTerminal} onRunClaudeAction={handleRunClaudeAction} />}
+        {!zenMode && activePanel === "stats" && <StatsDrawer onClose={() => setActivePanel(null)} onOpenSession={handleOpenSessionTerminal} />}
+        {!zenMode && activePanel === "history" && (
           <HistoryDrawer openNumbers={panels.map((p) => p.number)} onReopen={handleReopen} onClose={() => setActivePanel(null)} />
         )}
-        {activePanel === "notes" && <NotesDrawer onClose={() => setActivePanel(null)} />}
-        {activePanel === "claude-agents" && <ClaudeAgentsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenSessionTerminal} />}
-        {activePanel === "kb-chat" && <KBChatDrawer onClose={() => setActivePanel(null)} />}
+        {!zenMode && activePanel === "notes" && <NotesDrawer onClose={() => setActivePanel(null)} />}
+        {!zenMode && activePanel === "claude-agents" && <ClaudeAgentsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenSessionTerminal} />}
+        {!zenMode && activePanel === "kb-chat" && <KBChatDrawer onClose={() => setActivePanel(null)} />}
+
+        {/* Vertical icon rail */}
+        {!zenMode && (
+          <div style={{
+            width: 48, flexShrink: 0,
+            background: t.surface1,
+            borderLeft: `1px solid ${t.border}`,
+            display: "flex", flexDirection: "column",
+            alignItems: "center", padding: "8px 0", gap: 2,
+          }}>
+            {([
+              { id: "prs",           icon: "⎇", color: t.blue,   label: "GitHub  ⌘⇧1" },
+              { id: "stats",         icon: "∑", color: t.orange, label: "Stats  ⌘⇧2" },
+              { id: "history",       icon: "⟳", color: t.teal,   label: "History  ⌘⇧3" },
+              { id: "notes",         icon: "✎", color: t.purple, label: "Notes  ⌘⇧4" },
+              { id: "claude-agents", icon: "⬡", color: t.green,  label: "Claude  ⌘⇧5" },
+              { id: "kb-chat",       icon: "◈", color: t.purple, label: "KB Chat  ⌘⇧6" },
+            ] as { id: SidePanel; icon: string; color: string; label: string }[]).map(({ id, icon, color, label }) => {
+              const active = activePanel === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => togglePanel(id)}
+                  title={label}
+                  style={{
+                    width: 36, height: 36,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: active ? `${color}18` : "none",
+                    border: `1px solid ${active ? color + "40" : "transparent"}`,
+                    borderRadius: 8,
+                    color: active ? color : t.label3,
+                    cursor: "pointer", fontSize: 16,
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; } }}
+                  onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; } }}
+                >{icon}</button>
+              );
+            })}
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => setZenMode((v) => !v)}
+              title="Zen mode (⌘\)"
+              style={{
+                width: 36, height: 36,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "none", border: "1px solid transparent",
+                borderRadius: 8, color: t.label4, cursor: "pointer", fontSize: 13,
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label4; }}
+            >⊡</button>
+            <button
+              onClick={toggleTheme}
+              title={{ dark: "Switch to Slack theme", slack: "Switch to light mode", light: "Switch to dark mode" }[t.name]}
+              style={{
+                width: 36, height: 36,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "none", border: "1px solid transparent",
+                borderRadius: 8, color: t.label4, cursor: "pointer", fontSize: 14,
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label1; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label4; }}
+            >{{ dark: "☀", slack: "◐", light: "☾" }[t.name]}</button>
+          </div>
+        )}
       </div>
     </div>
   );

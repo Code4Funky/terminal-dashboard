@@ -9,6 +9,7 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
   const { theme: t } = useTheme();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [clearing, setClearing] = useState(false);
+  const [hoveredNum, setHoveredNum] = useState<number | null>(null);
 
   useEffect(() => { window.terminal.listHistory().then(setEntries); }, []);
   useEffect(() => {
@@ -76,12 +77,18 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
           entries.map((e) => {
             const isOpen = openSet.has(e.number);
             return (
-              <div key={e.number} style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "8px 14px",
-                borderBottom: `1px solid ${t.borderSubtle}`, gap: 8,
-                background: isOpen ? `${t.teal}08` : "transparent",
-              }}>
+              <div
+                key={e.number}
+                onMouseEnter={() => setHoveredNum(e.number)}
+                onMouseLeave={() => setHoveredNum(null)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "8px 14px",
+                  borderBottom: `1px solid ${t.borderSubtle}`, gap: 8,
+                  background: isOpen ? `${t.teal}08` : hoveredNum === e.number ? (t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)") : "transparent",
+                  transition: "background 0.12s",
+                }}
+              >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: t.label2, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
                     {e.title ?? `terminal ${e.number}`}
@@ -106,6 +113,8 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
                     cursor: isOpen ? "default" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "2px 8px",
                     flexShrink: 0, transition: "all 0.15s",
+                    opacity: hoveredNum === e.number || isOpen ? 1 : 0,
+                    pointerEvents: hoveredNum === e.number && !isOpen ? "auto" : "none",
                   }}
                 >Reopen</button>
                 <button
@@ -117,6 +126,8 @@ export function HistoryDrawer({ openNumbers, onReopen, onClose }: Props) {
                     borderRadius: 4, color: isOpen ? t.label4 : t.red,
                     cursor: isOpen ? "default" : "pointer",
                     fontSize: 10, padding: "2px 8px", flexShrink: 0, transition: "all 0.15s",
+                    opacity: hoveredNum === e.number && !isOpen ? 1 : 0,
+                    pointerEvents: hoveredNum === e.number && !isOpen ? "auto" : "none",
                   }}
                 >×</button>
               </div>

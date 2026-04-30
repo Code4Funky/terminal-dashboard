@@ -481,13 +481,13 @@ export function Dashboard() {
             alignItems: "center", padding: "8px 0", gap: 2,
           }}>
             {([
-              { id: "prs",           icon: "⎇", color: t.blue,   label: "GitHub  ⌘⇧1" },
-              { id: "stats",         icon: "∑", color: t.orange, label: "Stats  ⌘⇧2" },
-              { id: "history",       icon: "⟳", color: t.teal,   label: "History  ⌘⇧3" },
-              { id: "notes",         icon: "✎", color: t.purple, label: "Notes  ⌘⇧4" },
-              { id: "claude-agents", icon: "⬡", color: t.green,  label: "Claude  ⌘⇧5" },
-              { id: "kb-chat",       icon: "◈", color: t.purple, label: "KB Chat  ⌘⇧6" },
-            ] as { id: SidePanel; icon: string; color: string; label: string }[]).map(({ id, icon, color, label }) => {
+              { id: "prs",           icon: "⎇",  shortLabel: "PRs",    color: t.blue,   label: "GitHub  ⌘⇧1" },
+              { id: "stats",         icon: "≡",  shortLabel: "Stats",  color: t.orange, label: "Stats  ⌘⇧2" },
+              { id: "history",       icon: "⏱",  shortLabel: "Log",    color: t.teal,   label: "History  ⌘⇧3" },
+              { id: "notes",         icon: "✏",  shortLabel: "Notes",  color: t.purple, label: "Notes  ⌘⇧4" },
+              { id: "claude-agents", icon: "⬡",  shortLabel: "Claude", color: t.green,  label: "Claude  ⌘⇧5" },
+              { id: "kb-chat",       icon: "◈",  shortLabel: "KB",     color: t.purple, label: "KB Chat  ⌘⇧6" },
+            ] as { id: SidePanel; icon: string; shortLabel: string; color: string; label: string }[]).map(({ id, icon, shortLabel, color, label }) => {
               const active = activePanel === id;
               return (
                 <button
@@ -495,18 +495,22 @@ export function Dashboard() {
                   onClick={() => togglePanel(id)}
                   title={label}
                   style={{
-                    width: 36, height: 36,
-                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 36, height: 44,
+                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                    gap: 1,
                     background: active ? `${color}18` : "none",
                     border: `1px solid ${active ? color + "40" : "transparent"}`,
                     borderRadius: 8,
                     color: active ? color : t.label3,
-                    cursor: "pointer", fontSize: 16,
+                    cursor: "pointer",
                     transition: "all 0.15s",
                   }}
                   onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; } }}
                   onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; } }}
-                >{icon}</button>
+                >
+                  <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
+                  <span style={{ fontSize: 7, letterSpacing: 0.2, fontWeight: active ? 700 : 400, ...SYS_FONT }}>{shortLabel}</span>
+                </button>
               );
             })}
             <div style={{ flex: 1 }} />

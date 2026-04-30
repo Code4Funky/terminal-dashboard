@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, isValidElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import mermaid from "mermaid";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT } from "../theme";
 import type { Theme } from "../theme";
@@ -579,7 +581,7 @@ export function KBChatDrawer({ onClose }: Props) {
             onClick={() => setSidebarOpen((v) => !v)}
             style={{ background: "none", border: "none", color: t.label3, cursor: "pointer", fontSize: 13, padding: "2px 4px" }}
             title={sidebarOpen ? "Hide sessions" : "Show sessions"}
-          >{sidebarOpen ? "◂" : "▸"}</button>
+          >{sidebarOpen ? "‹" : "›"}</button>
 
           <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, ...SYS_FONT }}>KB Chat</span>
 
@@ -1036,12 +1038,254 @@ function CodeBlock({ children, t }: { children: ReactNode; t: Theme }) {
   );
 }
 
+function MermaidBlock({ code, t }: { code: string; t: Theme }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [showCode, setShowCode] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
+  viewRef.current = view;
+  const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2, 10)}`);
+  const svgContentRef = useRef<HTMLDivElement>(null);
+  const panAreaRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; panX: number; panY: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: t.isDark ? "dark" : "default" });
+    setSvg(null);
+    setError(null);
+    const id = `${idRef.current}-${Date.now()}`;
+    mermaid.render(id, code)
+      .then(({ svg: rendered }) => { if (!cancelled) setSvg(rendered); })
+      .catch((err) => { if (!cancelled) setError(String(err)); });
+    return () => { cancelled = true; };
+  }, [code, t.isDark]);
+
+  // Strip fixed pixel dimensions so SVG fills the card
+  useEffect(() => {
+    if (!expanded || !svg) return;
+    const timer = setTimeout(() => {
+      const svgEl = svgContentRef.current?.querySelector("svg");
+      if (svgEl) {
+        svgEl.removeAttribute("width");
+        svgEl.removeAttribute("height");
+        svgEl.style.width = "100%";
+        svgEl.style.height = "100%";
+        svgEl.style.maxWidth = "100%";
+        svgEl.style.display = "block";
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [expanded, svg]);
+
+  // Escape to close
+  useEffect(() => {
+    if (!expanded) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [expanded]);
+
+  // Reset view + scroll-to-zoom at cursor (Figma/Miro convention)
+  useEffect(() => {
+    if (!expanded) return;
+    setView({ zoom: 1, panX: 0, panY: 0 });
+    const el = panAreaRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { zoom, panX, panY } = viewRef.current;
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newZoom = Math.max(0.1, Math.min(10, zoom * factor));
+      const scale = newZoom / zoom;
+      setView({ zoom: newZoom, panX: cx - (cx - panX) * scale, panY: cy - (cy - panY) * scale });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [expanded]);
+
+  // Drag handlers
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, panX: viewRef.current.panX, panY: viewRef.current.panY };
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.mouseX;
+    const dy = e.clientY - dragStartRef.current.mouseY;
+    setView((v) => ({ ...v, panX: dragStartRef.current!.panX + dx, panY: dragStartRef.current!.panY + dy }));
+  };
+  const onDragEnd = () => { setIsDragging(false); dragStartRef.current = null; };
+
+  if (error) {
+    return (
+      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: 6, padding: 8, margin: "4px 0" }}>
+        <pre style={{ color: t.label2, fontSize: 11, margin: 0, fontFamily: "monospace" }}>{code}</pre>
+        <div style={{ fontSize: 10, color: t.red, marginTop: 4, ...SYS_FONT }}>Failed to render diagram</div>
+      </div>
+    );
+  }
+  if (!svg) return <div style={{ color: t.label4, fontSize: 11, padding: "6px 0", ...SYS_FONT }}>Rendering…</div>;
+
+  return (
+    <>
+      {expanded && createPortal(
+        <div
+          onClick={() => setExpanded(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            gap: 10, padding: 32, boxSizing: "border-box",
+          }}
+        >
+          {/* Card: fixed 88vw × 80vh, SVG scales via CSS transform */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative", width: "88vw", height: "80vh",
+              borderRadius: 10, overflow: "hidden",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.07)",
+              display: "flex", flexDirection: "column",
+            }}
+          >
+            <button
+              onClick={() => setExpanded(false)}
+              style={{
+                position: "absolute", top: 8, right: 8, zIndex: 2,
+                background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 6, color: "#fff", cursor: "pointer",
+                fontSize: 11, padding: "3px 9px",
+                backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
+                ...SYS_FONT,
+              }}
+              title="Close (Esc)"
+            >✕</button>
+
+            {/* Pan area: overflow hidden, transform moves SVG */}
+            <div
+              ref={panAreaRef}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onDragEnd}
+              onMouseLeave={onDragEnd}
+              style={{ flex: 1, overflow: "hidden", minHeight: 0, cursor: isDragging ? "grabbing" : "grab" }}
+            >
+              <div
+                ref={svgContentRef}
+                dangerouslySetInnerHTML={{ __html: svg }}
+                style={{
+                  width: "100%", height: "100%",
+                  transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
+                  transformOrigin: "0 0",
+                  userSelect: "none", pointerEvents: "none",
+                }}
+              />
+            </div>
+          </div>
+
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", ...SYS_FONT, cursor: "default" }}
+          >
+            scroll to zoom · drag to pan · {Math.round(view.zoom * 100)}%
+          </div>
+        </div>,
+        document.body
+      )}
+
+      <div style={{ position: "relative" }}>
+        {showCode ? (
+          <pre style={{
+            background: t.surface3, border: `1px solid ${t.borderSubtle}`,
+            borderRadius: 8, padding: "12px 10px", margin: "4px 0",
+            fontSize: 11, color: t.label2, fontFamily: "monospace",
+            overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>{code}</pre>
+        ) : (
+          <div
+            dangerouslySetInnerHTML={{ __html: svg }}
+            style={{
+              background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
+              border: `1px solid ${t.borderSubtle}`,
+              borderRadius: 8, padding: "12px 8px", margin: "4px 0", overflowX: "auto",
+            }}
+          />
+        )}
+
+        {/* Button row: top-right */}
+        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+          {showCode && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(code).then(() => { setCodeCopied(true); setTimeout(() => setCodeCopied(false), 2000); }); }}
+              style={{
+                background: codeCopied ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
+                border: `1px solid ${codeCopied ? t.green + "50" : t.borderMid}`,
+                borderRadius: 4, color: codeCopied ? t.green : t.label3,
+                cursor: "pointer", fontSize: 10, padding: "2px 7px",
+                transition: "all 0.15s", ...SYS_FONT,
+              }}
+            >{codeCopied ? "✓" : "Copy"}</button>
+          )}
+          {!showCode && (
+            <button
+              onClick={() => setExpanded(true)}
+              style={{
+                background: t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+                border: `1px solid ${t.borderMid}`,
+                borderRadius: 4, color: t.label3,
+                cursor: "pointer", fontSize: 10, padding: "2px 7px",
+                transition: "all 0.15s", ...SYS_FONT,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.blue; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
+              title="Expand diagram"
+            >Expand</button>
+          )}
+          <button
+            onClick={() => setShowCode((v) => !v)}
+            style={{
+              background: showCode ? `${t.blue}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
+              border: `1px solid ${showCode ? t.blue + "50" : t.borderMid}`,
+              borderRadius: 4, color: showCode ? t.blue : t.label3,
+              cursor: "pointer", fontSize: 10, padding: "2px 7px",
+              transition: "all 0.15s", ...SYS_FONT,
+            }}
+            onMouseEnter={(e) => { if (!showCode) { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.blue; } }}
+            onMouseLeave={(e) => { if (!showCode) { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; } }}
+          >{showCode ? "Diagram" : "Code"}</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function MarkdownContent({ body, t }: { body: string; t: Theme }) {
   return (
     <div className="kbc-md" style={{ fontSize: 12, color: t.label1, lineHeight: 1.7, ...SYS_FONT }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{ pre: ({ children }) => <CodeBlock t={t}>{children}</CodeBlock> }}
+        components={{
+          pre: ({ children }) => {
+            if (isValidElement<{ className?: string; children?: ReactNode }>(children)) {
+              if ((children.props.className ?? "").includes("language-mermaid")) {
+                return <MermaidBlock code={String(children.props.children ?? "").trimEnd()} t={t} />;
+              }
+            }
+            return <CodeBlock t={t}>{children}</CodeBlock>;
+          },
+        }}
       >{body}</ReactMarkdown>
     </div>
   );

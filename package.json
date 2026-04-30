@@ -11,6 +11,7 @@
     "package": "electron-vite build && electron-builder --mac"
   },
   "dependencies": {
+    "mermaid": "^11.14.0",
     "node-pty": "^1.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"

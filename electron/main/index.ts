@@ -172,6 +172,29 @@ function calcCost(inp: number, cacheWrite: number, cacheRead: number, out: numbe
 }
 
 // ── Claude Stats ──────────────────────────────────────────────────────────────
+function computeStreaks(dailyCounts: Record<string, number>): { current: number; longest: number } {
+  const active = Object.keys(dailyCounts).filter(d => dailyCounts[d] > 0).sort();
+  if (active.length === 0) return { current: 0, longest: 0 };
+  let longest = 1, run = 1;
+  for (let i = 1; i < active.length; i++) {
+    const diff = (new Date(active[i]).getTime() - new Date(active[i - 1]).getTime()) / 86400000;
+    if (diff === 1) { run++; if (run > longest) longest = run; }
+    else run = 1;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const last = active[active.length - 1];
+  let current = 0;
+  if (last === today || last === yesterday) {
+    current = 1;
+    for (let i = active.length - 2; i >= 0; i--) {
+      const diff = (new Date(active[i + 1]).getTime() - new Date(active[i]).getTime()) / 86400000;
+      if (diff === 1) current++; else break;
+    }
+  }
+  return { current, longest };
+}
+
 // Collect all *.jsonl files across ~/.claude/projects/<project>/*.jsonl
 function collectClaudeJsonlFiles(): { file: string; projectDir: string }[] {
   const results: { file: string; projectDir: string }[] = [];
@@ -211,6 +234,9 @@ function computeClaudeStats(targetMonth?: string) {
   }
 
   const claudeRepoVisits: Record<string, { visits: number; lastSeen: number }> = {};
+  const hourCounts: Record<number, number> = {};
+  const allTimeDailyCounts: Record<string, number> = {};
+  const allTimeDailyModelTokens: Record<string, Record<string, number>> = {};
 
   let totalSessions = 0;
   let monthSessions = new Set<string>();
@@ -242,6 +268,11 @@ function computeClaudeStats(targetMonth?: string) {
           if (entry.type !== "user" && entry.type !== "assistant") continue;
           totalMessages++;
           const day: string = entry.timestamp ? (entry.timestamp as string).slice(0, 10) : "";
+          if (day) allTimeDailyCounts[day] = (allTimeDailyCounts[day] ?? 0) + 1;
+          if (entry.timestamp) {
+            const hr = new Date(entry.timestamp as string).getHours();
+            hourCounts[hr] = (hourCounts[hr] ?? 0) + 1;
+          }
           const isThisMonth = day.startsWith(month);
           if (isThisMonth) {
             monthMessages++;
@@ -265,6 +296,11 @@ function computeClaudeStats(targetMonth?: string) {
               totalOutputTokens += out;
               totalCacheReadTokens += cacheRead;
               totalCacheCreationTokens += cacheCreate;
+              const model: string = entry.message?.model ?? "unknown";
+              if (day) {
+                if (!allTimeDailyModelTokens[day]) allTimeDailyModelTokens[day] = {};
+                allTimeDailyModelTokens[day][model] = (allTimeDailyModelTokens[day][model] ?? 0) + inp + out;
+              }
               if (isThisMonth) {
                 monthInputTokens += inp;
                 monthOutputTokens += out;
@@ -272,7 +308,6 @@ function computeClaudeStats(targetMonth?: string) {
                 monthCacheCreationTokens += cacheCreate;
                 if (day in dayTokensInMonth) dayTokensInMonth[day] += inp + out;
                 // Per-model accumulation
-                const model: string = entry.message?.model ?? "unknown";
                 if (!monthModelUsage[model]) monthModelUsage[model] = { inp: 0, cacheWrite: 0, cacheRead: 0, out: 0 };
                 monthModelUsage[model].inp += inp;
                 monthModelUsage[model].cacheWrite += cacheCreate;
@@ -332,6 +367,15 @@ function computeClaudeStats(targetMonth?: string) {
     dailyCounts: Object.entries(daysInMonth).map(([date, count]) => ({ date, count })),
     dailyTokens: Object.entries(dayTokensInMonth).map(([date, tokens]) => ({ date, tokens })),
     claudeRepoVisits,
+    activeDays: Object.values(allTimeDailyCounts).filter(c => c > 0).length,
+    currentStreak: computeStreaks(allTimeDailyCounts).current,
+    longestStreak: computeStreaks(allTimeDailyCounts).longest,
+    peakHour: (() => {
+      const entry = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0];
+      return entry ? Number(entry[0]) : null;
+    })() as number | null,
+    allTimeDailyCounts,
+    allTimeDailyModelTokens,
   };
 }
 

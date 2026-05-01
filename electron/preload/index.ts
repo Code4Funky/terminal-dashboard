@@ -94,6 +94,12 @@ contextBridge.exposeInMainWorld("terminal", {
       modelBreakdown: { model: string; cost: number; costContent: number; costCache: number; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }[];
       dailyCounts: { date: string; count: number }[];
       dailyTokens: { date: string; tokens: number }[];
+      activeDays: number;
+      currentStreak: number;
+      longestStreak: number;
+      peakHour: number | null;
+      allTimeDailyCounts: Record<string, number>;
+      allTimeDailyModelTokens: Record<string, Record<string, number>>;
     };
     repos: { name: string; visits: number; lastSeen: number }[];
   }> => ipcRenderer.invoke("stats:get-data", month),

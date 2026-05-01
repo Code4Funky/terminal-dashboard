@@ -149,6 +149,7 @@ export function KBChatDrawer({ onClose }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(540);
   const [chatSettings, setChatSettings] = useState<ChatSettings>({ model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR });
@@ -476,7 +477,7 @@ export function KBChatDrawer({ onClose }: Props) {
             >+</button>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 6px" }} onMouseLeave={() => setHoveredId(null)}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "4px 6px" }} onMouseLeave={() => { setHoveredId(null); setConfirmDeleteId(null); }}>
             {filteredSessions.map((s) => {
               const mc = getModeColor(s.mode, t);
               const isSelected = s.id === currentId;
@@ -486,7 +487,7 @@ export function KBChatDrawer({ onClose }: Props) {
                   key={s.id}
                   onClick={() => switchSession(s.id)}
                   onMouseEnter={() => setHoveredId(s.id)}
-                  onMouseLeave={() => setHoveredId(null)}
+                  onMouseLeave={() => { setHoveredId(null); setConfirmDeleteId(null); }}
                   style={{
                     display: "flex", alignItems: "stretch", gap: 6,
                     padding: "7px 8px",
@@ -559,7 +560,20 @@ export function KBChatDrawer({ onClose }: Props) {
                   {(isSelected || isHovered) && editingId !== s.id && (
                     <div style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
                       <CircleIconButton t={t} title="Rename" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditingTitle(s.title); }}>✎</CircleIconButton>
-                      <CircleIconButton t={t} title="Delete" onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}>✕</CircleIconButton>
+                      {confirmDeleteId === s.id ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteSession(s.id); setConfirmDeleteId(null); }}
+                          title="Confirm delete"
+                          style={{
+                            background: `${t.red}28`, border: `1px solid ${t.red}60`,
+                            borderRadius: 4, color: t.red, cursor: "pointer",
+                            fontSize: 9, fontWeight: 700, padding: "1px 5px",
+                            flexShrink: 0, whiteSpace: "nowrap",
+                          }}
+                        >Sure?</button>
+                      ) : (
+                        <CircleIconButton t={t} title="Delete" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(s.id); }}>✕</CircleIconButton>
+                      )}
                     </div>
                   )}
                 </div>

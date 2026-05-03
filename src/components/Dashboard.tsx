@@ -46,6 +46,9 @@ export function Dashboard() {
   const [activePanel, setActivePanel] = useState<SidePanel | null>("prs");
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
   const [zenMode, setZenMode] = useState(false);
+  const [splitMode, setSplitMode] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const splitDragRef = useRef<{ startX: number; startRatio: number; totalWidth: number } | null>(null);
   const [worktreeConfirm, setWorktreeConfirm] = useState<{ repoName: string; branchName: string; wtPath: string } | null>(null);
   const [dirtyConfirm, setDirtyConfirm] = useState<{ repoName: string; branchName: string; files: string[] } | null>(null);
   const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
@@ -234,6 +237,16 @@ export function Dashboard() {
         if (col >= 1 && col <= 4) { e.preventDefault(); setColumns(col as Columns); return; }
       }
       if (e.metaKey && e.shiftKey && !e.altKey) {
+        if (e.key === "k") {
+          e.preventDefault();
+          if (activePanel !== "kb-chat") {
+            setActivePanel("kb-chat");
+            setSplitMode(true);
+          } else {
+            setSplitMode((v) => !v);
+          }
+          return;
+        }
         const TABS: SidePanel[] = ["prs", "stats", "history", "notes", "claude-agents", "kb-chat"];
         const idx = parseInt(e.key) - 1;
         if (idx >= 0 && idx < TABS.length) {
@@ -250,6 +263,29 @@ export function Dashboard() {
     window.addEventListener("keydown", handleKey, { capture: true });
     return () => window.removeEventListener("keydown", handleKey, { capture: true });
   }, [focusedId, panels]);
+
+  // Reset split mode when leaving KB chat
+  useEffect(() => {
+    if (activePanel !== "kb-chat") setSplitMode(false);
+  }, [activePanel]);
+
+  const handleSplitDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const totalWidth = (e.currentTarget.parentElement?.clientWidth ?? 1000) - 4;
+    splitDragRef.current = { startX: e.clientX, startRatio: splitRatio, totalWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!splitDragRef.current) return;
+      const dx = ev.clientX - splitDragRef.current.startX;
+      setSplitRatio(Math.max(0.25, Math.min(0.75, splitDragRef.current.startRatio + dx / splitDragRef.current.totalWidth)));
+    };
+    const onUp = () => {
+      splitDragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const colBtnStyle = (active: boolean) => ({
     background: active ? t.surface3 : "none",
@@ -438,10 +474,13 @@ export function Dashboard() {
       {/* Content row */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
         <div style={{
-          flex: 1, display: "grid",
+          flex: splitMode && activePanel === "kb-chat" ? splitRatio : 1,
+          minWidth: splitMode && activePanel === "kb-chat" ? 300 : undefined,
+          display: "grid",
           gridTemplateColumns: `repeat(${columns}, 1fr)`,
           gridAutoRows: `calc((100vh - ${TOOLBAR_HEIGHT}px) / ${Math.ceil(panels.length / columns)})`,
           gap: 4, padding: 4, minHeight: 0, overflowY: "auto",
+          transition: "flex 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
         }}>
           {panels.map((panel) => (
             <TerminalPanel
@@ -469,7 +508,21 @@ export function Dashboard() {
         )}
         {!zenMode && activePanel === "notes" && <NotesDrawer onClose={() => setActivePanel(null)} />}
         {!zenMode && activePanel === "claude-agents" && <ClaudeAgentsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenSessionTerminal} />}
-        {!zenMode && activePanel === "kb-chat" && <KBChatDrawer onClose={() => setActivePanel(null)} />}
+        {splitMode && !zenMode && activePanel === "kb-chat" && (
+          <div
+            onMouseDown={handleSplitDragStart}
+            style={{ width: 4, flexShrink: 0, cursor: "col-resize", background: "transparent", transition: "background 0.15s" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = `${t.purple}40`)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          />
+        )}
+        {!zenMode && activePanel === "kb-chat" && (
+          <KBChatDrawer
+            onClose={() => { setActivePanel(null); setSplitMode(false); }}
+            splitMode={splitMode}
+            onToggleSplit={() => setSplitMode((v) => !v)}
+          />
+        )}
 
         {/* Vertical icon rail */}
         {!zenMode && (

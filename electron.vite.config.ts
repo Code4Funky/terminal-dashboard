@@ -22,6 +22,9 @@ export default defineConfig({
   renderer: {
     plugins: [react()],
     root: ".",
+    optimizeDeps: {
+      include: ["@excalidraw/excalidraw"],
+    },
     build: {
       rollupOptions: {
         input: resolve(__dirname, "index.html"),

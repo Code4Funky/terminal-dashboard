@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, isValidElement, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, isValidElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -39,7 +39,7 @@ interface ChatSession {
 
 const DEFAULT_WIKI_DIR = "~/Documents/GitHub/knowledge-base/wiki";
 
-interface ChatSettings { model: string; wikiDir: string; }
+interface ChatSettings { model: string; wikiDir: string; drawerWidth?: number; }
 
 const MODELS: { id: string; label: string; desc: string }[] = [
   { id: "claude-sonnet-4-6",        label: "Sonnet 4.6",  desc: "Balanced — fast & capable" },
@@ -47,7 +47,7 @@ const MODELS: { id: string; label: string; desc: string }[] = [
   { id: "claude-haiku-4-5-20251001",label: "Haiku 4.5",   desc: "Fast & lightweight" },
 ];
 
-interface Props { onClose: () => void; }
+interface Props { onClose: () => void; splitMode?: boolean; onToggleSplit?: () => void; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const STOP_WORDS = new Set(["a","an","the","is","are","was","were","be","been","being","have","has","had","do","does","did","will","would","could","should","may","might","shall","can","of","in","on","at","to","for","with","by","from","as","into","through","during","before","after","above","below","up","down","out","off","over","under","again","further","then","once","i","you","he","she","it","we","they","what","which","who","when","where","why","how","and","but","or","not","my","your","his","her","its","our","their"]);
@@ -70,7 +70,8 @@ function selectWikiContext(pages: { name: string; content: string }[], query: st
 
 function buildSystemPrompt(pages: { name: string; content: string }[]): string {
   if (pages.length === 0) return "";
-  return "You are a helpful assistant with access to the following knowledge base:\n\n" +
+  return "You are a helpful assistant with access to the following knowledge base.\n\n" +
+    "CRITICAL RENDERING RULE: This chat natively renders Excalidraw diagrams inline. When a user asks to show, view, display, or preview an Excalidraw diagram, you MUST output the complete raw JSON content wrapped in a ```excalidraw fenced code block. Do NOT say you cannot render or display it — just output the JSON and the chat will render it automatically for the user.\n\n" +
     pages.map((p) => `# ${p.name}\n${p.content}`).join("\n\n---\n\n");
 }
 
@@ -137,12 +138,13 @@ function CircleIconButton({ onClick, title, children, t }: {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function KBChatDrawer({ onClose }: Props) {
+export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Props) {
   const { theme: t } = useTheme();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set());
+  const [activeRequests, setActiveRequests] = useState<Map<string, string>>(new Map());
   const [wikiPages, setWikiPages] = useState<{ name: string; content: string }[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [search, setSearch] = useState("");
@@ -150,7 +152,6 @@ export function KBChatDrawer({ onClose }: Props) {
   const [editingTitle, setEditingTitle] = useState("");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(540);
   const [chatSettings, setChatSettings] = useState<ChatSettings>({ model: "claude-sonnet-4-6", wikiDir: DEFAULT_WIKI_DIR });
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -159,6 +160,8 @@ export function KBChatDrawer({ onClose }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
+  const chatSettingsRef = useRef(chatSettings);
+  chatSettingsRef.current = chatSettings;
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -172,16 +175,22 @@ export function KBChatDrawer({ onClose }: Props) {
       dragState.current = null;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      setDrawerWidth((w) => {
+        const next = { ...chatSettingsRef.current, drawerWidth: w };
+        window.terminal.saveChatSettings(next);
+        return w;
+      });
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
 
   const current = sessions.find((s) => s.id === currentId) ?? null;
+  const loading = loadingSessions.has(currentId ?? "");
 
   // Load wiki pages + persisted sessions + settings on mount
   useEffect(() => {
-    window.terminal.getChatSettings().then(setChatSettings);
+    window.terminal.getChatSettings().then((s) => { setChatSettings(s); if (s.drawerWidth) setDrawerWidth(s.drawerWidth); });
     window.terminal.loadChatWikiPages().then(setWikiPages);
     window.terminal.loadChatSessions().then((saved) => {
       const typed = saved as ChatSession[];
@@ -195,6 +204,11 @@ export function KBChatDrawer({ onClose }: Props) {
       }
     });
   }, []);
+
+  // Collapse sidebar when entering split mode to reclaim horizontal space
+  useEffect(() => {
+    if (splitMode) setSidebarOpen(false);
+  }, [splitMode]);
 
   // Persist whenever sessions change, but skip mid-stream to avoid a disk write per chunk
   useEffect(() => {
@@ -261,16 +275,17 @@ export function KBChatDrawer({ onClose }: Props) {
   };
 
   const switchSession = (id: string) => {
-    if (loading) return;
     setCurrentId(id);
     setInput("");
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
   const stopChat = () => {
-    if (currentRequestId) {
-      window.terminal.stopChat(currentRequestId);
-      setCurrentRequestId(null);
+    if (!currentId) return;
+    const reqId = activeRequests.get(currentId);
+    if (reqId) {
+      window.terminal.stopChat(reqId);
+      setActiveRequests((prev) => { const next = new Map(prev); next.delete(currentId); return next; });
     }
   };
 
@@ -292,10 +307,10 @@ export function KBChatDrawer({ onClose }: Props) {
     }
 
     setInput("");
-    setLoading(true);
+    setLoadingSessions((prev) => new Set(prev).add(current.id));
 
     const requestId = crypto.randomUUID();
-    setCurrentRequestId(requestId);
+    setActiveRequests((prev) => new Map(prev).set(current.id, requestId));
 
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text, timestamp: Date.now() };
     const assistantMsg: ChatMessage = { id: requestId, role: "assistant", content: "", streaming: true, timestamp: Date.now() };
@@ -305,8 +320,10 @@ export function KBChatDrawer({ onClose }: Props) {
     // Selective wiki injection for KB mode on fresh sessions
     let wikiContext: string | undefined;
     if (current.mode === "kb" && !current.claudeSessionId) {
-      const topPages = selectWikiContext(wikiPages, text);
-      wikiContext = buildSystemPrompt(topPages);
+      const excalidrawPages = wikiPages.filter((p) => p.name.endsWith("(Excalidraw diagram)"));
+      const mdPages = wikiPages.filter((p) => !p.name.endsWith("(Excalidraw diagram)"));
+      const topMdPages = selectWikiContext(mdPages, text);
+      wikiContext = buildSystemPrompt([...topMdPages, ...excalidrawPages]);
     }
 
     const sessionId = current.id;
@@ -327,7 +344,10 @@ export function KBChatDrawer({ onClose }: Props) {
     });
 
     const cleanups: (() => void)[] = [];
-    const cleanup = () => { cleanups.forEach((fn) => fn()); setCurrentRequestId(null); };
+    const cleanup = () => {
+      cleanups.forEach((fn) => fn());
+      setActiveRequests((prev) => { const next = new Map(prev); next.delete(sessionId); return next; });
+    };
 
     cleanups.push(window.terminal.onChatSessionId(requestId, (sid) => {
       updateSession(sessionId, (s) => ({ ...s, claudeSessionId: sid }));
@@ -367,7 +387,7 @@ export function KBChatDrawer({ onClose }: Props) {
         ),
         updatedAt: Date.now(),
       }));
-      setLoading(false);
+      setLoadingSessions((prev) => { const next = new Set(prev); next.delete(sessionId); return next; });
       cleanup();
       inputRef.current?.focus();
     }));
@@ -380,7 +400,7 @@ export function KBChatDrawer({ onClose }: Props) {
         ),
         updatedAt: Date.now(),
       }));
-      setLoading(false);
+      setLoadingSessions((prev) => { const next = new Set(prev); next.delete(sessionId); return next; });
       cleanup();
     }));
   }, [input, loading, current, wikiPages, updateSession, chatSettings]);
@@ -422,25 +442,28 @@ export function KBChatDrawer({ onClose }: Props) {
 
   return (
     <div style={{
-      width: drawerWidth, flexShrink: 0,
+      ...(splitMode ? { flex: 1, minWidth: 320 } : { width: drawerWidth, flexShrink: 0 }),
       background: t.surface1,
       backdropFilter: t.backdropFilter,
       WebkitBackdropFilter: t.backdropFilter,
       borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "row", position: "relative",
       boxShadow: t.isDark ? "-4px 0 28px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.12)",
+      transition: "flex 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
     }}>
-      {/* Resize handle */}
-      <div
-        onMouseDown={onResizeMouseDown}
-        style={{
-          position: "absolute", left: 0, top: 0, bottom: 0, width: 5,
-          cursor: "col-resize", zIndex: 10,
-          background: "transparent",
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-      />
+      {/* Resize handle — hidden in split mode (Dashboard owns the width) */}
+      {!splitMode && (
+        <div
+          onMouseDown={onResizeMouseDown}
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0, width: 5,
+            cursor: "col-resize", zIndex: 10,
+            background: "transparent",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+        />
+      )}
       <ChatStyles t={t} />
       {/* Sidebar */}
       {sidebarOpen && (
@@ -597,9 +620,13 @@ export function KBChatDrawer({ onClose }: Props) {
             title={sidebarOpen ? "Hide sessions" : "Show sessions"}
           >{sidebarOpen ? "‹" : "›"}</button>
 
-          <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, ...SYS_FONT }}>KB Chat</span>
-
-          <div style={{ flex: 1 }} />
+          <span style={{
+            flex: 1, minWidth: 0,
+            fontSize: 14, fontWeight: 500, color: t.label1, ...SYS_FONT,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {current?.title ?? "KB Chat"}
+          </span>
 
           {totalTokens > 0 && (
             <span style={{
@@ -631,6 +658,27 @@ export function KBChatDrawer({ onClose }: Props) {
             onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}28`; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = `${t.blue}15`; }}
           >New</button>
+
+          {onToggleSplit && (
+            <button
+              onClick={onToggleSplit}
+              title="Split alongside terminal  ⌘⇧K"
+              style={{
+                background: splitMode ? "rgba(139,92,246,0.15)" : "none",
+                border: `1px solid ${splitMode ? "rgba(139,92,246,0.4)" : "transparent"}`,
+                borderRadius: 5, cursor: "pointer", padding: "3px 5px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: splitMode ? 1 : 0.5, transition: "all 0.15s", color: splitMode ? "rgb(139,92,246)" : t.label3,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; if (!splitMode) e.currentTarget.style.color = t.label1; }}
+              onMouseLeave={(e) => { if (!splitMode) { e.currentTarget.style.opacity = "0.5"; e.currentTarget.style.color = t.label3; } }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+              </svg>
+            </button>
+          )}
 
           <button
             onClick={onClose}
@@ -896,7 +944,9 @@ function EmptyState({ mode, t, wikiDir }: { mode: Mode; t: Theme; wikiDir: strin
 
 function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
   const isUser = msg.role === "user";
+  const isError = !isUser && !msg.streaming && msg.content.startsWith("Error: ");
   const [msgCopied, setMsgCopied] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const copyMessage = () => {
     navigator.clipboard.writeText(msg.content).then(() => {
       setMsgCopied(true);
@@ -910,8 +960,8 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
         maxWidth: isUser ? "90%" : "100%",
         background: isUser
           ? (t.isDark ? "rgba(10,132,255,0.2)" : "rgba(0,122,255,0.12)")
-          : t.surface2,
-        border: `1px solid ${isUser ? t.blue + "40" : t.borderSubtle}`,
+          : isError ? `${t.red}0a` : t.surface2,
+        border: `1px solid ${isUser ? t.blue + "40" : isError ? t.red + "30" : t.borderSubtle}`,
         borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
         padding: "7px 11px",
         fontSize: 12,
@@ -922,6 +972,25 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
       }}>
         {isUser ? (
           <span style={{ ...SYS_FONT, whiteSpace: "pre-wrap" }}>{msg.content}</span>
+        ) : isError ? (
+          <div style={{ ...SYS_FONT }}>
+            {showRaw ? (
+              <pre style={{ fontSize: 10, color: t.label3, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "monospace" }}>
+                {msg.content.replace(/^Error:\s*/, "")}
+              </pre>
+            ) : (
+              <span style={{ fontSize: 11, color: t.label3 }}>⚠ Could not get a response</span>
+            )}
+            <button
+              onClick={() => setShowRaw((v) => !v)}
+              style={{
+                display: "block", marginTop: 4, background: "none", border: "none",
+                color: t.label4, cursor: "pointer", fontSize: 10, padding: 0, ...SYS_FONT,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = t.label2)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+            >{showRaw ? "Hide raw" : "Show raw"}</button>
+          </div>
         ) : (
           <div style={{ ...SYS_FONT }}>
             {msg.streaming && !msg.content ? (
@@ -1285,22 +1354,258 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
   );
 }
 
+function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [showCode, setShowCode] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
+  viewRef.current = view;
+  const panAreaRef = useRef<HTMLDivElement>(null);
+  const svgContentRef = useRef<HTMLDivElement>(null);
+  const inlineRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; panX: number; panY: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSvg(null);
+    setError(null);
+    (async () => {
+      try {
+        const data = JSON.parse(code);
+        const { exportToSvg } = await import("@excalidraw/excalidraw");
+        const svgEl = await exportToSvg({
+          elements: data.elements ?? [],
+          appState: {
+            exportWithDarkMode: t.isDark,
+            viewBackgroundColor: data.appState?.viewBackgroundColor ?? (t.isDark ? "#1e1e1e" : "#ffffff"),
+          },
+          files: data.files ?? null,
+        });
+        if (!cancelled) setSvg(new XMLSerializer().serializeToString(svgEl));
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [code, t.isDark]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    setView({ zoom: 1, panX: 0, panY: 0 });
+    const el = panAreaRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { zoom, panX, panY } = viewRef.current;
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newZoom = Math.max(0.1, Math.min(10, zoom * factor));
+      const scale = newZoom / zoom;
+      setView({ zoom: newZoom, panX: cx - (cx - panX) * scale, panY: cy - (cy - panY) * scale });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [expanded]);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, panX: viewRef.current.panX, panY: viewRef.current.panY };
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.mouseX;
+    const dy = e.clientY - dragStartRef.current.mouseY;
+    setView((v) => ({ ...v, panX: dragStartRef.current!.panX + dx, panY: dragStartRef.current!.panY + dy }));
+  };
+  const onDragEnd = () => { setIsDragging(false); dragStartRef.current = null; };
+
+  // Fit inline SVG to card — let the viewBox + preserveAspectRatio handle scaling
+  useEffect(() => {
+    if (!svg || showCode) return;
+    const timer = setTimeout(() => {
+      const svgEl = inlineRef.current?.querySelector("svg");
+      if (!svgEl) return;
+      svgEl.setAttribute("width", "100%");
+      svgEl.setAttribute("height", "100%");
+      svgEl.style.display = "block";
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [svg, showCode]);
+
+  if (error) {
+    return (
+      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: 6, padding: 8, margin: "4px 0" }}>
+        <pre style={{ color: t.label2, fontSize: 11, margin: 0, fontFamily: "monospace" }}>{code}</pre>
+        <div style={{ fontSize: 10, color: t.red, marginTop: 4, ...SYS_FONT }}>Failed to render Excalidraw diagram</div>
+      </div>
+    );
+  }
+  if (!svg) return <div style={{ color: t.label4, fontSize: 11, padding: "6px 0", ...SYS_FONT }}>Rendering…</div>;
+
+  return (
+    <>
+      {expanded && createPortal(
+        <div
+          onClick={() => setExpanded(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            gap: 10, padding: 32, boxSizing: "border-box",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative", width: "88vw", height: "80vh",
+              borderRadius: 10, overflow: "hidden",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.07)",
+              display: "flex", flexDirection: "column",
+            }}
+          >
+            <button
+              onClick={() => setExpanded(false)}
+              style={{
+                position: "absolute", top: 8, right: 8, zIndex: 2,
+                background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 6, color: "#fff", cursor: "pointer",
+                fontSize: 11, padding: "3px 9px",
+                backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
+                ...SYS_FONT,
+              }}
+              title="Close (Esc)"
+            >✕</button>
+            <div
+              ref={panAreaRef}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onDragEnd}
+              onMouseLeave={onDragEnd}
+              style={{ flex: 1, overflow: "hidden", minHeight: 0, cursor: isDragging ? "grabbing" : "grab" }}
+            >
+              <div
+                ref={svgContentRef}
+                dangerouslySetInnerHTML={{ __html: svg }}
+                style={{
+                  width: "100%", height: "100%",
+                  transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
+                  transformOrigin: "0 0",
+                  userSelect: "none", pointerEvents: "none",
+                }}
+              />
+            </div>
+          </div>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", ...SYS_FONT, cursor: "default" }}
+          >
+            scroll to zoom · drag to pan · {Math.round(view.zoom * 100)}%
+          </div>
+        </div>,
+        document.body
+      )}
+
+      <div style={{ position: "relative" }}>
+        {showCode ? (
+          <pre style={{
+            background: t.surface3, border: `1px solid ${t.borderSubtle}`,
+            borderRadius: 8, padding: "12px 10px", margin: "4px 0",
+            fontSize: 11, color: t.label2, fontFamily: "monospace",
+            overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>{code}</pre>
+        ) : (
+          <div
+            ref={inlineRef}
+            dangerouslySetInnerHTML={{ __html: svg }}
+            style={{
+              background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
+              border: `1px solid ${t.borderSubtle}`,
+              borderRadius: 8, padding: "8px", margin: "4px 0",
+              overflow: "hidden", height: 240,
+            }}
+          />
+        )}
+        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+          {showCode && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(code).then(() => { setCodeCopied(true); setTimeout(() => setCodeCopied(false), 2000); }); }}
+              style={{
+                background: codeCopied ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
+                border: `1px solid ${codeCopied ? t.green + "50" : t.borderMid}`,
+                borderRadius: 4, color: codeCopied ? t.green : t.label3,
+                cursor: "pointer", fontSize: 10, padding: "2px 7px",
+                transition: "all 0.15s", ...SYS_FONT,
+              }}
+            >{codeCopied ? "✓" : "Copy"}</button>
+          )}
+          {!showCode && (
+            <button
+              onClick={() => setExpanded(true)}
+              style={{
+                background: t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+                border: `1px solid ${t.borderMid}`,
+                borderRadius: 4, color: t.label3,
+                cursor: "pointer", fontSize: 10, padding: "2px 7px",
+                transition: "all 0.15s", ...SYS_FONT,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.blue; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
+              title="Expand diagram"
+            >Expand</button>
+          )}
+          <button
+            onClick={() => setShowCode((v) => !v)}
+            style={{
+              background: showCode ? `${t.blue}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
+              border: `1px solid ${showCode ? t.blue + "50" : t.borderMid}`,
+              borderRadius: 4, color: showCode ? t.blue : t.label3,
+              cursor: "pointer", fontSize: 10, padding: "2px 7px",
+              transition: "all 0.15s", ...SYS_FONT,
+            }}
+            onMouseEnter={(e) => { if (!showCode) { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.blue; } }}
+            onMouseLeave={(e) => { if (!showCode) { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; } }}
+          >{showCode ? "Diagram" : "JSON"}</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function MarkdownContent({ body, t }: { body: string; t: Theme }) {
+  const components = useMemo(() => ({
+    pre: ({ children }: { children?: ReactNode }) => {
+      if (isValidElement<{ className?: string; children?: ReactNode }>(children)) {
+        const className = children.props.className ?? "";
+        if (className.includes("language-mermaid")) {
+          return <MermaidBlock code={String(children.props.children ?? "").trimEnd()} t={t} />;
+        }
+        if (className.includes("language-excalidraw")) {
+          return <ExcalidrawBlock code={String(children.props.children ?? "").trimEnd()} t={t} />;
+        }
+      }
+      return <CodeBlock t={t}>{children}</CodeBlock>;
+    },
+  }), [t]);
   return (
     <div className="kbc-md" style={{ fontSize: 12, color: t.label1, lineHeight: 1.7, ...SYS_FONT }}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children }) => {
-            if (isValidElement<{ className?: string; children?: ReactNode }>(children)) {
-              if ((children.props.className ?? "").includes("language-mermaid")) {
-                return <MermaidBlock code={String(children.props.children ?? "").trimEnd()} t={t} />;
-              }
-            }
-            return <CodeBlock t={t}>{children}</CodeBlock>;
-          },
-        }}
-      >{body}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{body}</ReactMarkdown>
     </div>
   );
 }

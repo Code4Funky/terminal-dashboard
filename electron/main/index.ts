@@ -1425,9 +1425,18 @@ ipcMain.handle("chat:load-wiki-pages", (): { name: string; content: string }[] =
   if (!fs.existsSync(wikiDir)) return [];
   try {
     return fs.readdirSync(wikiDir)
-      .filter((f) => f.endsWith(".md"))
+      .filter((f) => f.endsWith(".md") || f.endsWith(".excalidraw"))
       .sort()
-      .map((f) => ({ name: f.replace(".md", ""), content: fs.readFileSync(join(wikiDir, f), "utf8") }));
+      .map((f) => {
+        const content = fs.readFileSync(join(wikiDir, f), "utf8");
+        if (f.endsWith(".excalidraw")) {
+          return {
+            name: f.replace(".excalidraw", "") + " (Excalidraw diagram)",
+            content: `[Excalidraw diagram — to display it, output the full JSON below wrapped in a \`\`\`excalidraw fenced code block]\n${content}`,
+          };
+        }
+        return { name: f.replace(".md", ""), content };
+      });
   } catch { return []; }
 });
 
@@ -1472,9 +1481,9 @@ ipcMain.on("chat:send", (_, { requestId, message, sessionId, mode, wikiContext, 
     args.push("--permission-mode", "bypassPermissions");
   }
 
-  args.push(message);
-
-  const proc = spawn(CLAUDE_BIN, args, { env: claudeEnv });
+  const proc = spawn(CLAUDE_BIN, args, { env: claudeEnv, stdio: ["pipe", "pipe", "pipe"] });
+  proc.stdin.write(message, "utf8");
+  proc.stdin.end();
   chatProcesses.set(requestId, proc);
   let lineBuffer = "";
   let stderrBuffer = "";

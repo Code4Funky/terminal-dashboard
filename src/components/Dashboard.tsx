@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Component } from "react";
+import type { ReactNode } from "react";
 import { TerminalPanel } from "./TerminalPanel";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { StatsDrawer } from "./StatsDrawer";
-import { PRsDrawer } from "./PRsDrawer";
 import { NotesDrawer } from "./NotesDrawer";
 import { ClaudeAgentsDrawer } from "./ClaudeAgentsDrawer";
 import { KBChatDrawer } from "./KBChatDrawer";
+import { RepoSidebar, SelectedPR, TerminalTab } from "./RepoSidebar";
+import { NewTerminalModal } from "./NewTerminalModal";
+import { DiffDrawer } from "./DiffDrawer";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT } from "../theme";
 
@@ -18,17 +21,27 @@ interface PanelState {
   gitBranch?: string;
 }
 
-type Columns = 1 | 2 | 3 | 4;
-type SidePanel = "prs" | "stats" | "history" | "notes" | "claude-agents" | "kb-chat";
+type SidePanel = "stats" | "history" | "notes" | "claude-agents" | "kb-chat";
 
-const TOOLBAR_HEIGHT = 41;
-
-const COLUMN_OPTIONS: { cols: Columns; icon: string; label: string }[] = [
-  { cols: 1, icon: "▣", label: "1 col  ⌘1" },
-  { cols: 2, icon: "⬒", label: "2 cols  ⌘2" },
-  { cols: 3, icon: "⊟", label: "3 cols  ⌘3" },
-  { cols: 4, icon: "⊞", label: "4 cols  ⌘4" },
-];
+class KBChatErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 16, background: "#1c1c1e", color: "#FF453A", fontSize: 11, fontFamily: "monospace", width: 400, flexShrink: 0, overflowY: "auto" }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>KB Chat crashed:</div>
+          <div style={{ color: "#FF9F0A", marginBottom: 8, wordBreak: "break-word" }}>{this.state.error.message}</div>
+          <pre style={{ fontSize: 10, color: "rgba(235,235,245,0.45)", whiteSpace: "pre-wrap", margin: 0 }}>{this.state.error.stack}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function savePanels(panels: PanelState[]) {
   window.terminal.savePanels(
@@ -40,13 +53,20 @@ export function Dashboard() {
   const { theme, toggleTheme } = useTheme();
   const t = theme;
 
-  const [columns, setColumns] = useState<Columns>(1);
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<SidePanel | null>("prs");
+  const [activePanel, setActivePanel] = useState<SidePanel | null>(null);
+  const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [modalRepos, setModalRepos] = useState<{ name: string }[]>([]);
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
+  const handlePanelToggle = (panel: SidePanel) => {
+    if (panel === "kb-chat" && activePanel !== "kb-chat") setSplitMode(true);
+    togglePanel(panel);
+  };
   const [zenMode, setZenMode] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
+  const [termFitKey, setTermFitKey] = useState(0);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const splitDragRef = useRef<{ startX: number; startRatio: number; totalWidth: number } | null>(null);
   const [worktreeConfirm, setWorktreeConfirm] = useState<{ repoName: string; branchName: string; wtPath: string } | null>(null);
@@ -65,7 +85,7 @@ export function Dashboard() {
 
   async function initPanels() {
     window.terminal.getState().then(async ({ lastPanels }) => {
-      const toRestore = lastPanels.length > 0 ? lastPanels : null;
+      const toRestore = lastPanels.length > 0 ? lastPanels.slice(0, 8) : null;
       if (toRestore) {
         const restored: PanelState[] = [];
         for (const saved of toRestore) {
@@ -194,6 +214,12 @@ export function Dashboard() {
     }
   };
 
+  const handleOpenInRepo = async (repoName: string) => {
+    const repoPath = `$HOME/Documents/GitHub/${repoName}`;
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}"`);
+    addPanel(sessionId, number, repoName);
+  };
+
   const handleOpenSessionTerminal = async (resolvedPath: string) => {
     const name = resolvedPath.split("/").filter(Boolean).pop() ?? "session";
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${resolvedPath}"`);
@@ -233,8 +259,6 @@ export function Dashboard() {
       if (e.metaKey && !e.shiftKey && !e.altKey) {
         if (e.key === "t") { e.preventDefault(); handleAddPanel(); return; }
         if (e.key === "\\") { e.preventDefault(); setZenMode((v) => !v); return; }
-        const col = parseInt(e.key);
-        if (col >= 1 && col <= 4) { e.preventDefault(); setColumns(col as Columns); return; }
       }
       if (e.metaKey && e.shiftKey && !e.altKey) {
         if (e.key === "k") {
@@ -247,11 +271,11 @@ export function Dashboard() {
           }
           return;
         }
-        const TABS: SidePanel[] = ["prs", "stats", "history", "notes", "claude-agents", "kb-chat"];
+        const TABS: SidePanel[] = ["stats", "history", "notes", "claude-agents", "kb-chat"];
         const idx = parseInt(e.key) - 1;
         if (idx >= 0 && idx < TABS.length) {
           e.preventDefault();
-          togglePanel(TABS[idx]);
+          handlePanelToggle(TABS[idx]);
           return;
         }
       }
@@ -268,6 +292,13 @@ export function Dashboard() {
   useEffect(() => {
     if (activePanel !== "kb-chat") setSplitMode(false);
   }, [activePanel]);
+
+  // Refit terminal immediately when split mode changes, and again after layout settles
+  useEffect(() => {
+    setTermFitKey((k) => k + 1);
+    const id = setTimeout(() => setTermFitKey((k) => k + 1), 100);
+    return () => clearTimeout(id);
+  }, [splitMode]);
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -287,16 +318,6 @@ export function Dashboard() {
     window.addEventListener("mouseup", onUp);
   };
 
-  const colBtnStyle = (active: boolean) => ({
-    background: active ? t.surface3 : "none",
-    border: `1px solid ${active ? t.borderMid : t.borderSubtle}`,
-    borderRadius: 4,
-    color: active ? t.label1 : t.label3,
-    cursor: "pointer" as const,
-    fontSize: 14,
-    padding: "2px 8px",
-    transition: "all 0.15s",
-  });
 
 
   return (
@@ -317,20 +338,8 @@ export function Dashboard() {
           Terminal Dashboard
         </span>
 
-        <div style={{ display: "flex", gap: 4, marginRight: 8, WebkitAppRegion: "no-drag" as const }}>
-          {COLUMN_OPTIONS.map(({ cols, icon, label }) => (
-            <button
-              key={cols} onClick={() => setColumns(cols)} title={label} style={colBtnStyle(columns === cols)}
-              onMouseEnter={(e) => { if (columns !== cols) { e.currentTarget.style.background = t.surface2; e.currentTarget.style.borderColor = t.borderMid; e.currentTarget.style.color = t.label2; }}}
-              onMouseLeave={(e) => { if (columns !== cols) { e.currentTarget.style.background = "none"; e.currentTarget.style.borderColor = t.borderSubtle; e.currentTarget.style.color = t.label3; }}}
-            >
-              {icon}
-            </button>
-          ))}
-        </div>
-
         <button
-          onClick={handleAddPanel}
+          onClick={() => setShowModal(true)}
           style={{
             borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
             padding: "4px 14px", WebkitAppRegion: "no-drag" as const, letterSpacing: 0.3,
@@ -363,6 +372,15 @@ export function Dashboard() {
           {panels.length} session{panels.length !== 1 ? "s" : ""}
         </span>
       </div>
+
+      {showModal && (
+        <NewTerminalModal
+          onClose={() => setShowModal(false)}
+          onOpenRoot={handleAddPanel}
+          onOpenInRepo={handleOpenInRepo}
+          repos={modalRepos}
+        />
+      )}
 
       {/* Worktree confirmation modal */}
       {worktreeConfirm && (
@@ -473,35 +491,51 @@ export function Dashboard() {
 
       {/* Content row */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
+        {!zenMode && (
+          <RepoSidebar
+            tabs={panels.map((p): TerminalTab => ({ id: p.id, title: p.title, cwd: p.cwd, gitBranch: p.gitBranch }))}
+            focusedId={focusedId}
+            onFocusTab={(id) => { setFocusedId(id); const p = panels.find((x) => x.id === id); if (p) window.terminal.setFocused(p.sessionId); }}
+            onCloseTab={handleClose}
+            onAddTab={() => setShowModal(true)}
+            selected={selectedPR}
+            onSelectPR={setSelectedPR}
+            onOpenTerminal={handleOpenBranchTerminal}
+            onRunClaudeAction={(repo, branch, cmd) => { handleRunClaudeAction(repo, branch, cmd); }}
+            onReposLoaded={setModalRepos}
+            onCheckoutBranch={(_, branch) => { window.terminal.writeToFocusedTerminal(`git checkout ${branch}\n`); }}
+          />
+        )}
         <div style={{
           flex: splitMode && activePanel === "kb-chat" ? splitRatio : 1,
           minWidth: splitMode && activePanel === "kb-chat" ? 300 : undefined,
-          display: "grid",
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gridAutoRows: `calc((100vh - ${TOOLBAR_HEIGHT}px) / ${Math.ceil(panels.length / columns)})`,
-          gap: 4, padding: 4, minHeight: 0, overflowY: "auto",
-          transition: "flex 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+          display: "flex", flexDirection: "column",
+          minHeight: 0, overflow: "hidden",
         }}>
           {panels.map((panel) => (
-            <TerminalPanel
+            <div
               key={panel.id}
-              sessionId={panel.sessionId}
-              panelNumber={panel.number}
-              title={panel.title}
-              cwd={panel.cwd}
-              gitBranch={panel.gitBranch}
-              focused={panel.id === focusedId}
-              fontFamily={termFont?.family}
-              fontSize={termFont?.size}
-              onFocus={() => { setFocusedId(panel.id); window.terminal.setFocused(panel.sessionId); }}
-              onRename={(title) => handleRename(panel.id, title)}
-              canClose={panels.length > 1}
-              onClose={() => handleClose(panel.id)}
-            />
+              style={{ display: panel.id === focusedId ? "flex" : "none", flex: 1, minHeight: 0, padding: 4 }}
+            >
+              <TerminalPanel
+                sessionId={panel.sessionId}
+                panelNumber={panel.number}
+                title={panel.title}
+                cwd={panel.cwd}
+                gitBranch={panel.gitBranch}
+                focused={panel.id === focusedId}
+                fontFamily={termFont?.family}
+                fontSize={termFont?.size}
+                onFocus={() => { setFocusedId(panel.id); window.terminal.setFocused(panel.sessionId); }}
+                onRename={(title) => handleRename(panel.id, title)}
+                canClose={panels.length > 1}
+                onClose={() => handleClose(panel.id)}
+                fitTrigger={panel.id === focusedId ? termFitKey : undefined}
+              />
+            </div>
           ))}
         </div>
 
-        {!zenMode && activePanel === "prs" && <PRsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenBranchTerminal} onOpenRepo={handleOpenRepoTerminal} onRunClaudeAction={handleRunClaudeAction} />}
         {!zenMode && activePanel === "stats" && <StatsDrawer onClose={() => setActivePanel(null)} onOpenSession={handleOpenSessionTerminal} />}
         {!zenMode && activePanel === "history" && (
           <HistoryDrawer openNumbers={panels.map((p) => p.number)} onReopen={handleReopen} onClose={() => setActivePanel(null)} />
@@ -517,10 +551,22 @@ export function Dashboard() {
           />
         )}
         {!zenMode && activePanel === "kb-chat" && (
-          <KBChatDrawer
-            onClose={() => { setActivePanel(null); setSplitMode(false); }}
-            splitMode={splitMode}
-            onToggleSplit={() => setSplitMode((v) => !v)}
+          <KBChatErrorBoundary>
+            <KBChatDrawer
+              onClose={() => { setActivePanel(null); setSplitMode(false); }}
+              splitMode={splitMode}
+              onToggleSplit={() => setSplitMode((v) => !v)}
+            />
+          </KBChatErrorBoundary>
+        )}
+
+        {!zenMode && selectedPR && (
+          <DiffDrawer
+            prNumber={selectedPR.prNumber}
+            repoName={selectedPR.repoName}
+            prTitle={selectedPR.prTitle}
+            prUrl={selectedPR.prUrl}
+            onClose={() => setSelectedPR(null)}
           />
         )}
 
@@ -534,18 +580,17 @@ export function Dashboard() {
             alignItems: "center", padding: "8px 0", gap: 2,
           }}>
             {([
-              { id: "prs",           icon: "⎇",  shortLabel: "PRs",    color: t.blue,   label: "GitHub  ⌘⇧1" },
-              { id: "stats",         icon: "≡",  shortLabel: "Stats",  color: t.orange, label: "Stats  ⌘⇧2" },
-              { id: "history",       icon: "⏱",  shortLabel: "Log",    color: t.teal,   label: "History  ⌘⇧3" },
-              { id: "notes",         icon: "✏",  shortLabel: "Notes",  color: t.purple, label: "Notes  ⌘⇧4" },
-              { id: "claude-agents", icon: "⬡",  shortLabel: "Claude", color: t.green,  label: "Claude  ⌘⇧5" },
-              { id: "kb-chat",       icon: "◈",  shortLabel: "KB",     color: t.purple, label: "KB Chat  ⌘⇧6" },
+              { id: "stats",         icon: "≡",  shortLabel: "Stats",  color: t.orange, label: "Stats  ⌘⇧1" },
+              { id: "history",       icon: "⏱",  shortLabel: "Log",    color: t.teal,   label: "History  ⌘⇧2" },
+              { id: "notes",         icon: "✏",  shortLabel: "Notes",  color: t.purple, label: "Notes  ⌘⇧3" },
+              { id: "claude-agents", icon: "⬡",  shortLabel: "Claude", color: t.green,  label: "Claude  ⌘⇧4" },
+              { id: "kb-chat",       icon: "◈",  shortLabel: "KB",     color: t.purple, label: "KB Chat  ⌘⇧5" },
             ] as { id: SidePanel; icon: string; shortLabel: string; color: string; label: string }[]).map(({ id, icon, shortLabel, color, label }) => {
               const active = activePanel === id;
               return (
                 <button
                   key={id}
-                  onClick={() => togglePanel(id)}
+                  onClick={() => handlePanelToggle(id)}
                   title={label}
                   style={{
                     width: 36, height: 44,

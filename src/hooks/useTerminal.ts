@@ -82,7 +82,13 @@ declare global {
         reviewDecision: string | null;
         repository: { name: string; nameWithOwner: string };
       }[]>;
+      getPRDiff: (repoName: string, prNumber: number) => Promise<string>;
       openExternal: (url: string) => Promise<void>;
+      getRepoBranch: (repoName: string) => Promise<string | null>;
+      cloneRepository: (url: string, requestId: string) => void;
+      onCloneProgress: (requestId: string, cb: (text: string) => void) => () => void;
+      onCloneDone: (requestId: string, cb: (repoName: string) => void) => () => void;
+      onCloneError: (requestId: string, cb: (error: string) => void) => () => void;
       listClaudeWorktrees: () => Promise<{ repo: string; branch: string; path: string; merged: boolean }[]>;
       removeClaudeWorktree: (repoName: string, wtPath: string) => Promise<void>;
       listGithubRepos: () => Promise<{ name: string; branches: string[]; repoUrl: string }[]>;
@@ -147,6 +153,7 @@ export function useTerminal(
   isDark = true
 ) {
   const termRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
     if (termRef.current) {
@@ -169,6 +176,7 @@ export function useTerminal(
     });
 
     const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
@@ -244,9 +252,17 @@ export function useTerminal(
       cleanupRef.current();
       term.dispose();
       termRef.current = null;
+      fitAddonRef.current = null;
     };
   }, [sessionId, panelNumber]);
 
-  const focus = () => termRef.current?.focus();
-  return { focus };
+  const applyFit = (withFocus: boolean) => {
+    fitAddonRef.current?.fit();
+    if (withFocus) termRef.current?.focus();
+    if (termRef.current && sessionId) {
+      window.terminal.resize(sessionId, termRef.current.cols, termRef.current.rows);
+    }
+  };
+
+  return { focus: () => applyFit(true), refit: () => applyFit(false) };
 }

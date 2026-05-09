@@ -164,8 +164,35 @@ contextBridge.exposeInMainWorld("terminal", {
     repository: { name: string; nameWithOwner: string };
   }[]> => ipcRenderer.invoke("prs:list"),
 
+  getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
+    ipcRenderer.invoke("prs:get-diff", repoName, prNumber),
+
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
+
+  getRepoBranch: (repoName: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:current-branch", repoName),
+
+  cloneRepository: (url: string, requestId: string): void =>
+    ipcRenderer.send("git:clone", { url, requestId }),
+
+  onCloneProgress: (requestId: string, cb: (text: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, text: string) => { if (id === requestId) cb(text); };
+    ipcRenderer.on("git:clone-progress", handler);
+    return () => ipcRenderer.removeListener("git:clone-progress", handler);
+  },
+
+  onCloneDone: (requestId: string, cb: (repoName: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, name: string) => { if (id === requestId) cb(name); };
+    ipcRenderer.on("git:clone-done", handler);
+    return () => ipcRenderer.removeListener("git:clone-done", handler);
+  },
+
+  onCloneError: (requestId: string, cb: (error: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, err: string) => { if (id === requestId) cb(err); };
+    ipcRenderer.on("git:clone-error", handler);
+    return () => ipcRenderer.removeListener("git:clone-error", handler);
+  },
 
   listNotes: (): Promise<{ id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }[]> =>
     ipcRenderer.invoke("notes:list"),

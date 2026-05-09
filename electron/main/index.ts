@@ -1302,8 +1302,50 @@ ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
   }
 });
 
+ipcMain.handle("prs:get-diff", async (_, repoName: string, prNumber: number): Promise<string> => {
+  const repoPath = join(githubDir, repoName);
+  try {
+    const { stdout } = await execAsync(`gh pr diff ${prNumber}`, { cwd: repoPath, env: TOOL_ENV });
+    return stdout;
+  } catch {
+    return "";
+  }
+});
+
 ipcMain.handle("shell:open-external", (_, url: string) => {
   shell.openExternal(url);
+});
+
+ipcMain.handle("git:current-branch", async (_, repoName: string): Promise<string | null> => {
+  try {
+    const repoPath = join(githubDir, repoName);
+    const { stdout } = await execAsync("git branch --show-current", { cwd: repoPath, env: TOOL_ENV });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: string }) => {
+  const repoName = url.replace(/\.git$/, "").split("/").pop() ?? "repo";
+  const destPath = join(githubDir, repoName);
+  const proc = spawn("git", ["clone", "--progress", url, destPath], { env: TOOL_ENV });
+  proc.stderr.on("data", (chunk: Buffer) => {
+    event.sender.send("git:clone-progress", requestId, chunk.toString());
+  });
+  proc.stdout.on("data", (chunk: Buffer) => {
+    event.sender.send("git:clone-progress", requestId, chunk.toString());
+  });
+  proc.on("close", (code) => {
+    if (code === 0) {
+      event.sender.send("git:clone-done", requestId, repoName);
+    } else {
+      event.sender.send("git:clone-error", requestId, `git clone exited with code ${code}`);
+    }
+  });
+  proc.on("error", (err) => {
+    event.sender.send("git:clone-error", requestId, err.message);
+  });
 });
 
 ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> => {

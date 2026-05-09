@@ -16,6 +16,7 @@ interface Props {
   canClose?: boolean;
   focused: boolean;
   onFocus: () => void;
+  fitTrigger?: number;
 }
 
 function formatCwd(cwd: string): string {
@@ -25,11 +26,11 @@ function formatCwd(cwd: string): string {
 
 export function TerminalPanel({
   sessionId, panelNumber, title, cwd, gitBranch,
-  fontFamily, fontSize, onClose, onRename, canClose = true, focused, onFocus,
+  fontFamily, fontSize, onClose, onRename, canClose = true, focused, onFocus, fitTrigger,
 }: Props) {
   const { theme: t } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { focus } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize, true);
+  const { focus, refit } = useTerminal(containerRef, sessionId, panelNumber, fontFamily, fontSize, true);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(title);
   const [panelHovered, setPanelHovered] = useState(false);
@@ -42,6 +43,10 @@ export function TerminalPanel({
     if (focused) focus();
   }, [focused]);
 
+  useEffect(() => {
+    if (fitTrigger) refit();
+  }, [fitTrigger]);
+
   const commitRename = () => {
     const v = renameValue.trim();
     if (v && v !== title) onRename?.(v);
@@ -53,6 +58,7 @@ export function TerminalPanel({
     <div
       style={{
         display: "flex", flexDirection: "column",
+        flex: 1,
         border: focused
           ? `2px solid ${t.green}99`
           : `2px solid ${t.borderMid}`,

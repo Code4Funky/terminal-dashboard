@@ -193,7 +193,11 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
     window.terminal.getChatSettings().then((s) => { setChatSettings(s); if (s.drawerWidth) setDrawerWidth(s.drawerWidth); });
     window.terminal.loadChatWikiPages().then(setWikiPages);
     window.terminal.loadChatSessions().then((saved) => {
-      const typed = saved as ChatSession[];
+      const typed = (saved as ChatSession[])?.map((s) => ({
+        ...s,
+        messages: s.messages ?? [],
+        tokenUsage: s.tokenUsage ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      }));
       if (typed && typed.length > 0) {
         setSessions(typed);
         setCurrentId(typed[0].id);
@@ -212,7 +216,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
 
   // Persist whenever sessions change, but skip mid-stream to avoid a disk write per chunk
   useEffect(() => {
-    if (sessions.length > 0 && !sessions.some((s) => s.messages.some((m) => m.streaming))) {
+    if (sessions.length > 0 && !sessions.some((s) => s.messages?.some((m) => m.streaming))) {
       window.terminal.saveChatSessions(sessions as unknown[]);
     }
   }, [sessions]);
@@ -242,7 +246,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
   }, [onClose, loading, settingsOpen]);
 
   // Auto-scroll only when a new message is appended, not on every streaming chunk
-  const messageCount = current?.messages.length ?? 0;
+  const messageCount = current?.messages?.length ?? 0;
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount, currentId]);
@@ -436,7 +440,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
     search === "" || s.title.toLowerCase().includes(search.toLowerCase())
   );
 
-  const lastMsg = current?.messages[current.messages.length - 1];
+  const lastMsg = current?.messages?.[current.messages.length - 1];
   const showRetry = !loading && lastMsg?.role === "assistant" && !lastMsg.streaming;
   const totalTokens = current ? current.tokenUsage.inputTokens + current.tokenUsage.outputTokens : 0;
 

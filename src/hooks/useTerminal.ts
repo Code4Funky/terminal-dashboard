@@ -85,6 +85,20 @@ declare global {
       getPRDiff: (repoName: string, prNumber: number) => Promise<string>;
       openExternal: (url: string) => Promise<void>;
       getRepoBranch: (repoName: string) => Promise<string | null>;
+      getWorkingTree: (repoName: string) => Promise<{
+        staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+        unstaged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+      }>;
+      getChangeCount: (repoName: string) => Promise<number>;
+      getFileDiff: (repoName: string, filePath: string, staged: boolean) => Promise<string>;
+      stageFile: (repoName: string, filePath: string) => Promise<void>;
+      unstageFile: (repoName: string, filePath: string) => Promise<void>;
+      stageAll: (repoName: string) => Promise<void>;
+      unstageAll: (repoName: string) => Promise<void>;
+      discardUnstaged: (repoName: string) => Promise<void>;
+      gitCommit: (repoName: string, message: string) => Promise<void>;
+      getCommits: (repoName: string, headRefName: string) => Promise<{ hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number }[]>;
+      getCommitDiff: (repoName: string, hash: string) => Promise<string>;
       cloneRepository: (url: string, requestId: string) => void;
       onCloneProgress: (requestId: string, cb: (text: string) => void) => () => void;
       onCloneDone: (requestId: string, cb: (repoName: string) => void) => () => void;

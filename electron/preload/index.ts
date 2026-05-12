@@ -167,11 +167,58 @@ contextBridge.exposeInMainWorld("terminal", {
   getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
     ipcRenderer.invoke("prs:get-diff", repoName, prNumber),
 
+  getCIStatus: (repoNameWithOwner: string, prNumber: number): Promise<{
+    __typename: string;
+    name?: string;
+    context?: string;
+    status: string;
+    conclusion: string | null;
+    startedAt: string;
+    completedAt: string | null;
+    url: string;
+  }[]> => ipcRenderer.invoke("ci:get-status", repoNameWithOwner, prNumber),
+
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
 
   getRepoBranch: (repoName: string): Promise<string | null> =>
     ipcRenderer.invoke("git:current-branch", repoName),
+
+  getWorkingTree: (repoName: string): Promise<{
+    staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+    unstaged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+  }> => ipcRenderer.invoke("git:working-tree", repoName),
+
+  getChangeCount: (repoName: string): Promise<number> =>
+    ipcRenderer.invoke("git:change-count", repoName),
+
+  getFileDiff: (repoName: string, filePath: string, staged: boolean): Promise<string> =>
+    ipcRenderer.invoke("git:file-diff", repoName, filePath, staged),
+
+  stageFile: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("git:stage-file", repoName, filePath),
+
+  unstageFile: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("git:unstage-file", repoName, filePath),
+
+  stageAll: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:stage-all", repoName),
+
+  unstageAll: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:unstage-all", repoName),
+
+  discardUnstaged: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:discard-unstaged", repoName),
+
+  gitCommit: (repoName: string, message: string): Promise<void> =>
+    ipcRenderer.invoke("git:commit", repoName, message),
+
+  getCommits: (repoName: string, headRefName: string): Promise<{
+    hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number;
+  }[]> => ipcRenderer.invoke("git:commits", repoName, headRefName),
+
+  getCommitDiff: (repoName: string, hash: string): Promise<string> =>
+    ipcRenderer.invoke("git:commit-diff", repoName, hash),
 
   cloneRepository: (url: string, requestId: string): void =>
     ipcRenderer.send("git:clone", { url, requestId }),

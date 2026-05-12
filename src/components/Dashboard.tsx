@@ -43,6 +43,17 @@ class KBChatErrorBoundary extends Component<{ children: ReactNode }, { error: Er
   }
 }
 
+// Single-quote a string for safe use as a shell token.
+// Escapes embedded single quotes as: ' → '\''
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+// Strip characters invalid in filesystem paths (used for worktree directory names).
+function safeDirName(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
 function savePanels(panels: PanelState[]) {
   window.terminal.savePanels(
     panels.map((p) => ({ number: p.number, title: p.title }))
@@ -57,6 +68,7 @@ export function Dashboard() {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<SidePanel | null>(null);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
+  const [selectedRepoTree, setSelectedRepoTree] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [modalRepos, setModalRepos] = useState<{ name: string }[]>([]);
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
@@ -172,7 +184,7 @@ export function Dashboard() {
           setDirtyConfirm({ repoName, branchName, files });
         } else {
           const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-          const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${branchName}`);
+          const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${shellQuote(branchName)}`);
           addPanel(sessionId, number, `${repoName}:${branchName}`);
         }
       }
@@ -186,13 +198,13 @@ export function Dashboard() {
     const { repoName, branchName } = dirtyConfirm;
     setDirtyConfirm(null);
     const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git stash && git checkout ${branchName}`);
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git stash && git checkout ${shellQuote(branchName)}`);
     addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
 
   const handleOpenRepoTerminal = async (repoName: string, branchName: string) => {
     const repoPath = `$HOME/Documents/GitHub/${repoName}`;
-    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${branchName}`);
+    const { sessionId, number } = await window.terminal.create(220, 50, undefined, `cd "${repoPath}" && git checkout ${shellQuote(branchName)}`);
     addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
 
@@ -204,8 +216,8 @@ export function Dashboard() {
         cmd = `cd "${path}" && ${claudeCmd}`;
       } else {
         // Auto-create an isolated worktree so parallel branch runs never conflict
-        const wtPath = `$HOME/Documents/GitHub/${repoName}-worktrees/${branchName}`;
-        cmd = `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" "${branchName}" 2>/dev/null || true && cd "${wtPath}" && ${claudeCmd}`;
+        const wtPath = `$HOME/Documents/GitHub/${repoName}-worktrees/${safeDirName(branchName)}`;
+        cmd = `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" ${shellQuote(branchName)} 2>/dev/null || true && cd "${wtPath}" && ${claudeCmd}`;
       }
       const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
       addPanel(sessionId, number, `${repoName}:${branchName}`);
@@ -231,7 +243,7 @@ export function Dashboard() {
     const { repoName, branchName, wtPath } = worktreeConfirm;
     setWorktreeConfirm(null);
     const createCmd =
-      `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" "${branchName}" && cd "${wtPath}"`;
+      `git -C "$HOME/Documents/GitHub/${repoName}" worktree add "${wtPath}" ${shellQuote(branchName)} && cd "${wtPath}"`;
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, createCmd);
     addPanel(sessionId, number, `${repoName}:${branchName}`);
   };
@@ -335,7 +347,7 @@ export function Dashboard() {
         position: "relative", zIndex: 10,
       }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, marginRight: 8, letterSpacing: 0.4, ...SYS_FONT }}>
-          Terminal Dashboard
+          Dev Space
         </span>
 
         <button
@@ -499,11 +511,13 @@ export function Dashboard() {
             onCloseTab={handleClose}
             onAddTab={() => setShowModal(true)}
             selected={selectedPR}
-            onSelectPR={setSelectedPR}
+            onSelectPR={(pr) => { setSelectedPR(pr); if (pr) setSelectedRepoTree(null); }}
             onOpenTerminal={handleOpenBranchTerminal}
+            onOpenRepoTerminal={handleOpenInRepo}
+            onSelectRepoTree={(name) => { setSelectedRepoTree(name); setSelectedPR(null); }}
             onRunClaudeAction={(repo, branch, cmd) => { handleRunClaudeAction(repo, branch, cmd); }}
             onReposLoaded={setModalRepos}
-            onCheckoutBranch={(_, branch) => { window.terminal.writeToFocusedTerminal(`git checkout ${branch}\n`); }}
+            onCheckoutBranch={(repoName, branch) => { window.terminal.writeToFocusedTerminal(`cd ~/Documents/GitHub/${repoName} && git checkout ${branch}\n`); }}
           />
         )}
         <div style={{
@@ -560,13 +574,14 @@ export function Dashboard() {
           </KBChatErrorBoundary>
         )}
 
-        {!zenMode && selectedPR && (
+        {!zenMode && (selectedPR || selectedRepoTree) && (
           <DiffDrawer
-            prNumber={selectedPR.prNumber}
-            repoName={selectedPR.repoName}
-            prTitle={selectedPR.prTitle}
-            prUrl={selectedPR.prUrl}
-            onClose={() => setSelectedPR(null)}
+            repoName={selectedPR?.repoName ?? selectedRepoTree!}
+            prNumber={selectedPR?.prNumber}
+            prTitle={selectedPR?.prTitle}
+            prUrl={selectedPR?.prUrl}
+            headRefName={selectedPR?.branch}
+            onClose={() => { setSelectedPR(null); setSelectedRepoTree(null); }}
           />
         )}
 

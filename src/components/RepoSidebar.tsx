@@ -43,6 +43,8 @@ interface Props {
   selected: SelectedPR | null;
   onSelectPR: (sel: SelectedPR | null) => void;
   onOpenTerminal: (repoName: string, branchName: string) => void;
+  onOpenRepoTerminal: (repoName: string) => void;
+  onSelectRepoTree: (repoName: string) => void;
   onRunClaudeAction: (repoName: string, branchName: string, cmd: string) => void;
   onReposLoaded: (repos: { name: string }[]) => void;
   onCheckoutBranch: (repoName: string, branch: string) => void;
@@ -70,9 +72,28 @@ function isBranchTab(title: string): boolean {
   return !title.startsWith("terminal ");
 }
 
+interface CICheck {
+  __typename: string;
+  name?: string;
+  context?: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  url: string;
+}
+
+function aggregateCIChecks(checks: CICheck[]): "success" | "failure" | "pending" | "unknown" {
+  if (checks.length === 0) return "unknown";
+  if (checks.some(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED")) return "failure";
+  if (checks.some(c => c.status === "IN_PROGRESS" || c.status === "QUEUED" || c.status === "WAITING" || c.status === "PENDING")) return "pending";
+  if (checks.every(c => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED")) return "success";
+  return "unknown";
+}
+
 export function RepoSidebar({
   tabs, focusedId, onFocusTab, onCloseTab, onAddTab,
-  selected, onSelectPR, onOpenTerminal, onRunClaudeAction, onReposLoaded, onCheckoutBranch,
+  selected, onSelectPR, onOpenTerminal, onOpenRepoTerminal, onSelectRepoTree, onRunClaudeAction, onReposLoaded, onCheckoutBranch,
 }: Props) {
   const { theme: t } = useTheme();
 
@@ -84,8 +105,16 @@ export function RepoSidebar({
   const [loading, setLoading] = useState(true);
   const [repoExpanded, setRepoExpanded] = useState<Record<string, boolean>>({});
   const [hoveredPRKey, setHoveredPRKey] = useState<string | null>(null);
-  const [showActionsFor, setShowActionsFor] = useState<string | null>(null);
   const [claudeCooldown, setClaudeCooldown] = useState<Set<string>>(new Set());
+
+  // CI status per PR number
+  const [ciChecks, setCIChecks] = useState<Record<number, CICheck[]>>({});
+
+  // All local repos (including those without open PRs)
+  const [allLocalRepos, setAllLocalRepos] = useState<string[]>([]);
+
+  // Change counts (for pill badge)
+  const [repoChangeCounts, setRepoChangeCounts] = useState<Record<string, number>>({});
 
   // Branch picker
   const [localBranches, setLocalBranches] = useState<{ repo: string; branch: string }[]>([]);
@@ -105,6 +134,23 @@ export function RepoSidebar({
   const addRepoUrlRef = useRef<HTMLInputElement>(null);
   const progressRef = useRef<HTMLPreElement>(null);
 
+  const loadCI = (prs: PR[]) => {
+    if (prs.length === 0) return;
+    Promise.all(
+      prs.map(pr =>
+        window.terminal.getCIStatus(pr.repository.nameWithOwner, pr.number)
+          .then(checks => ({ prNumber: pr.number, checks }))
+          .catch(() => ({ prNumber: pr.number, checks: [] as CICheck[] }))
+      )
+    ).then(results => {
+      setCIChecks(prev => {
+        const next = { ...prev };
+        results.forEach(({ prNumber, checks }) => { next[prNumber] = checks; });
+        return next;
+      });
+    });
+  };
+
   const load = () => {
     setLoading(true);
     window.terminal.listPRs().then((data) => {
@@ -118,8 +164,27 @@ export function RepoSidebar({
         }
         return next;
       });
-      const repos = [...new Map(data.map((p) => [p.repository.name, { name: p.repository.name }])).values()];
-      onReposLoaded(repos);
+      window.terminal.listGithubRepos().then((localRepos) => {
+        const names = localRepos.map(r => r.name);
+        setAllLocalRepos(names);
+        const prRepoNames = new Set(data.map((p) => p.repository.name));
+        const allNames = [...new Set([...prRepoNames, ...names])];
+        onReposLoaded(allNames.map(name => ({ name })));
+      }).catch(() => {
+        const repos = [...new Map(data.map((p) => [p.repository.name, { name: p.repository.name }])).values()];
+        onReposLoaded(repos);
+      });
+      // Load change counts for all repos with PRs
+      const repoNames = [...new Set(data.map((p) => p.repository.name))];
+      Promise.all(repoNames.map(async (name) => {
+        const count = await window.terminal.getChangeCount(name).catch(() => 0);
+        return { name, count };
+      })).then((results) => {
+        const counts: Record<string, number> = {};
+        results.forEach(({ name, count }) => { counts[name] = count; });
+        setRepoChangeCounts(counts);
+      });
+      loadCI(data);
     }).catch(() => setLoading(false));
   };
 
@@ -128,6 +193,22 @@ export function RepoSidebar({
     const interval = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPRs(prev => {
+        // Only re-poll PRs whose CI is still in a non-terminal state
+        const pending = prev.filter(pr => {
+          const checks = ciChecks[pr.number];
+          if (!checks) return true; // not yet loaded
+          const state = aggregateCIChecks(checks);
+          return state === "pending";
+        });
+        loadCI(pending);
+        return prev;
+      });
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, [ciChecks]);
 
   const loadBranches = () => {
     window.terminal.listLocalBranches().then((data) => setLocalBranches(data)).catch(() => {});
@@ -182,7 +263,6 @@ export function RepoSidebar({
     setClaudeCooldown((p) => new Set(p).add(key));
     onRunClaudeAction(repoName, branch, cmd);
     setTimeout(() => setClaudeCooldown((p) => { const n = new Set(p); n.delete(key); return n; }), 2000);
-    setShowActionsFor(null);
   };
 
   const startClone = () => {
@@ -355,14 +435,14 @@ export function RepoSidebar({
               {addRepoStep === "input" && (
                 <>
                   <div style={{ marginBottom: 10, color: t.label3, fontSize: 11 }}>
-                    GitHub URL or local path to clone into <span style={{ color: t.teal, fontFamily: "monospace" }}>~/Documents/GitHub/</span>
+                    GitHub URL to clone, or repo name if already in <span style={{ color: t.teal, fontFamily: "monospace" }}>~/Documents/GitHub/</span>
                   </div>
                   <input
                     ref={addRepoUrlRef}
                     value={addRepoUrl}
                     onChange={(e) => { setAddRepoUrl(e.target.value); setAddRepoError(""); }}
                     onKeyDown={(e) => { if (e.key === "Enter") startClone(); }}
-                    placeholder="https://github.com/org/repo"
+                    placeholder="https://github.com/org/repo or my-repo"
                     style={{
                       width: "100%", boxSizing: "border-box",
                       background: t.surface2, border: `1px solid ${addRepoError ? t.red : t.border}`,
@@ -521,6 +601,14 @@ export function RepoSidebar({
                         <span style={{
                           flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                         }}>{curBranch ?? "select branch"}</span>
+                        {(repoChangeCounts[repoName] ?? 0) > 0 && (
+                          <span style={{
+                            background: `${t.red}20`, color: t.red,
+                            border: `1px solid ${t.red}30`,
+                            borderRadius: 10, fontSize: 8, padding: "0 5px",
+                            fontFamily: "monospace", flexShrink: 0, lineHeight: 1.6,
+                          }}>{repoChangeCounts[repoName]} changes</span>
+                        )}
                         <span style={{ fontSize: 8, color: t.label4, flexShrink: 0 }}>{isPickerOpen ? "∧" : "∨"}</span>
                       </button>
                     </div>
@@ -653,8 +741,21 @@ export function RepoSidebar({
                     const hKey = `${repoFullName}:${pr.number}`;
                     const isSelected = selected?.prNumber === pr.number && selected?.repoName === repoName;
                     const isHovered = hoveredPRKey === hKey;
-                    const showActions = showActionsFor === hKey;
                     const { label: statusLabel, color: statusColor } = prStatus(pr, t);
+                    const prCIChecks = ciChecks[pr.number];
+                    const ciState = prCIChecks ? aggregateCIChecks(prCIChecks) : null;
+                    const CI_ICON: Record<string, string> = { success: "✓", failure: "✗", pending: "⟳", unknown: "○" };
+                    const CI_COLOR: Record<string, string> = { success: t.green, failure: t.red, pending: t.orange, unknown: t.label4 };
+
+                    const inlineActions = [
+                      { label: "Review",   icon: "◎", cmd: `claude "/review"`,       primary: true  },
+                      { label: "Comments", icon: "≡", cmd: `claude "/pr-comments"`,  primary: false },
+                      { label: "Fix",      icon: "✎", cmd: `claude "/pr-fixer"`,     primary: false },
+                    ] as const;
+
+                    // #2: detect if a terminal for this branch is already open
+                    const branchTabTitle = `${repoName}:${pr.headRefName}`;
+                    const existingBranchTab = tabs.find((tab) => tab.title === branchTabTitle);
 
                     return (
                       <div key={pr.number}>
@@ -681,18 +782,8 @@ export function RepoSidebar({
                             {isHovered && (
                               <>
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); setShowActionsFor(showActions ? null : hKey); }}
-                                  title="Claude actions"
-                                  style={{
-                                    background: showActions ? `${t.green}18` : "none",
-                                    border: `1px solid ${showActions ? `${t.green}40` : "transparent"}`,
-                                    borderRadius: 3, color: showActions ? t.green : t.label4,
-                                    cursor: "pointer", fontSize: 10, padding: "0px 3px", lineHeight: 1.4,
-                                  }}
-                                >⬡</button>
-                                <button
                                   onClick={(e) => { e.stopPropagation(); onOpenTerminal(repoName, pr.headRefName); }}
-                                  title="Open terminal"
+                                  title="Open terminal on this branch"
                                   style={{
                                     background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
                                     borderRadius: 3, color: t.teal,
@@ -710,6 +801,12 @@ export function RepoSidebar({
                                 >↗</button>
                               </>
                             )}
+                            {ciState && (
+                              <span
+                                title={`CI: ${ciState} · ${prCIChecks?.length ?? 0} check${(prCIChecks?.length ?? 0) !== 1 ? "s" : ""}`}
+                                style={{ color: CI_COLOR[ciState], fontSize: 9, flexShrink: 0, fontFamily: "monospace" }}
+                              >{CI_ICON[ciState]}</span>
+                            )}
                             <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>{timeAgo(pr.createdAt)}</span>
                           </div>
                           <div
@@ -722,51 +819,84 @@ export function RepoSidebar({
                           >
                             {pr.title}
                           </div>
-                        </div>
 
-                        {/* Claude actions micro-panel */}
-                        {showActions && (
-                          <div
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ padding: "4px 12px 6px 26px", background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)" }}
-                          >
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                              {([
-                                { label: "PR Comments", icon: "✏", cmd: `claude "/pr-comments"`, color: t.orange },
-                                { label: "CodeRabbit",  icon: "◈", cmd: `claude "/action-coderabbit ${pr.number}"`, color: t.purple },
-                                { label: "Review",      icon: "◎", cmd: `claude "/review"`, color: t.blue },
-                                { label: "PR Fixer",    icon: "⚙", cmd: `claude "/pr-fixer"`, color: t.green },
-                              ] as const).map(({ label, icon, cmd, color }) => {
-                                const cKey = `${hKey}:${label}`;
-                                const busy = claudeCooldown.has(cKey);
-                                return (
+                          {/* Inline Claude action buttons — reveal on hover */}
+                          {isHovered && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ marginTop: 5 }}
+                            >
+                              {existingBranchTab ? (
+                                /* #2: branch tab already open — disable actions, offer focus */
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{ fontSize: 9, color: t.label4, fontStyle: "italic" }}>
+                                    Already open in a tab
+                                  </span>
                                   <button
-                                    key={label}
-                                    onClick={() => handleClaudeAction(repoName, pr.headRefName, cmd, cKey)}
-                                    disabled={busy}
+                                    onClick={(e) => { e.stopPropagation(); onFocusTab(existingBranchTab.id); }}
                                     style={{
-                                      display: "flex", alignItems: "center", gap: 4,
-                                      background: `${color}10`, border: `1px solid ${color}28`,
-                                      borderRadius: 5, color,
-                                      cursor: busy ? "not-allowed" : "pointer",
-                                      fontSize: 9, fontWeight: 600, padding: "4px 6px",
-                                      opacity: busy ? 0.5 : 1,
+                                      display: "flex", alignItems: "center", gap: 3,
+                                      background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
+                                      borderRadius: 5, color: t.teal,
+                                      cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "2px 7px",
                                     }}
-                                  >
-                                    <span style={{ fontSize: 10 }}>{busy ? "⟳" : icon}</span>
-                                    {label}
-                                  </button>
-                                );
-                              })}
+                                  >↗ Focus tab</button>
+                                </div>
+                              ) : (
+                                /* #1: show actions + "→ new tab" destination hint */
+                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  {inlineActions.map(({ label, icon, cmd, primary }) => {
+                                    const cKey = `${hKey}:${label}`;
+                                    const busy = claudeCooldown.has(cKey);
+                                    return (
+                                      <button
+                                        key={label}
+                                        onClick={(e) => { e.stopPropagation(); handleClaudeAction(repoName, pr.headRefName, cmd, cKey); }}
+                                        disabled={busy}
+                                        style={{
+                                          display: "flex", alignItems: "center", gap: 3,
+                                          background: primary ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"),
+                                          border: `1px solid ${primary ? t.green + "40" : t.border}`,
+                                          borderRadius: 5, color: primary ? t.green : t.label2,
+                                          cursor: busy ? "not-allowed" : "pointer",
+                                          fontSize: 10, fontWeight: primary ? 600 : 500,
+                                          padding: "2px 7px", opacity: busy ? 0.5 : 1,
+                                        }}
+                                      >
+                                        <span style={{ fontSize: 9 }}>{busy ? "⟳" : icon}</span>
+                                        {label}
+                                      </button>
+                                    );
+                                  })}
+                                  <span style={{ fontSize: 9, color: t.label4, marginLeft: 2 }}>→ new tab</span>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               );
             })}
+          {/* Repos without open PRs */}
+          {allLocalRepos.filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name)).map(name => (
+            <div
+              key={name}
+              onClick={(e) => { e.stopPropagation(); onSelectRepoTree(name); }}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = hoverBg)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill={t.label4} style={{ flexShrink: 0 }}>
+                <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+              </svg>
+              <span style={{ flex: 1, color: t.label3, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+              <span style={{ fontSize: 9, color: t.label4, fontFamily: "monospace" }}>no PRs</span>
+            </div>
+          ))}
+
           {/* Add repository row */}
           <div
             onClick={(e) => { e.stopPropagation(); setShowAddRepo(true); setTimeout(() => addRepoUrlRef.current?.focus(), 50); }}

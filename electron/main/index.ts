@@ -12,7 +12,7 @@ const TOOL_ENV = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/b
 import * as pty from "node-pty";
 import os from "os";
 
-app.name = "Terminal Dashboard";
+app.name = "Dev Space";
 
 // ── Resolve ccusage binary + a PATH that includes its node runtime ────────────
 function resolveCcusageEnv(): { bin: string; env: NodeJS.ProcessEnv } {
@@ -650,7 +650,7 @@ function createWindow() {
 }
 
 app.setAboutPanelOptions({
-  applicationName: "Terminal Dashboard",
+  applicationName: "Dev Space",
   applicationVersion: "0.1.0",
   copyright: "© 2026 Tung Tran <tranthaitung.inbox@gmail.com>",
   iconPath: join(__dirname, "../../build/icons/icon.icns"),
@@ -1188,7 +1188,7 @@ ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted:
 
 ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string; repoUrl: string }[]> => {
   const results: { repo: string; branch: string; repoUrl: string }[] = [];
-  const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
+  const skipBranches = new Set(["HEAD"]);
 
   try {
     for (const dir of fs.readdirSync(githubDir)) {
@@ -1199,16 +1199,25 @@ ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; bran
         if (!fs.existsSync(gitEntry)) continue;
         // Worktrees have .git as a file pointing back to the main repo — skip them
         if (!fs.statSync(gitEntry).isDirectory()) continue;
-        const [branchOut, remoteOut] = await Promise.all([
+        const [branchOut, remoteBranchOut, remoteOut] = await Promise.all([
           execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }),
+          execAsync(`git branch -r --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
           execAsync(`git remote get-url origin`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
         ]);
         const rawUrl = remoteOut.stdout.trim();
         const match = rawUrl.match(/github\.com[/:](.+?)(?:\.git)?$/);
         const repoUrl = match ? `https://github.com/${match[1]}` : "";
+        const seen = new Set<string>();
         for (const b of branchOut.stdout.trim().split("\n")) {
           const branch = b.trim();
           if (branch && !skipBranches.has(branch)) {
+            seen.add(branch);
+            results.push({ repo: dir, branch, repoUrl });
+          }
+        }
+        for (const b of remoteBranchOut.stdout.trim().split("\n")) {
+          const branch = b.trim().replace(/^origin\//, "");
+          if (branch && branch !== "HEAD" && !skipBranches.has(branch) && !seen.has(branch)) {
             results.push({ repo: dir, branch, repoUrl });
           }
         }
@@ -1312,6 +1321,18 @@ ipcMain.handle("prs:get-diff", async (_, repoName: string, prNumber: number): Pr
   }
 });
 
+ipcMain.handle("ci:get-status", async (_, repoNameWithOwner: string, prNumber: number) => {
+  try {
+    const { stdout } = await execAsync(
+      `gh pr view ${prNumber} --repo "${repoNameWithOwner}" --json statusCheckRollup`,
+      { env: TOOL_ENV, timeout: 15000 }
+    );
+    return (JSON.parse(stdout).statusCheckRollup ?? []);
+  } catch {
+    return [];
+  }
+});
+
 ipcMain.handle("shell:open-external", (_, url: string) => {
   shell.openExternal(url);
 });
@@ -1329,6 +1350,13 @@ ipcMain.handle("git:current-branch", async (_, repoName: string): Promise<string
 ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: string }) => {
   const repoName = url.replace(/\.git$/, "").split("/").pop() ?? "repo";
   const destPath = join(githubDir, repoName);
+
+  // Already exists as a git repo — nothing to clone, just surface it
+  if (fs.existsSync(join(destPath, ".git"))) {
+    event.sender.send("git:clone-done", requestId, repoName);
+    return;
+  }
+
   const proc = spawn("git", ["clone", "--progress", url, destPath], { env: TOOL_ENV });
   proc.stderr.on("data", (chunk: Buffer) => {
     event.sender.send("git:clone-progress", requestId, chunk.toString());
@@ -1346,6 +1374,125 @@ ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: st
   proc.on("error", (err) => {
     event.sender.send("git:clone-error", requestId, err.message);
   });
+});
+
+type WTFileResult = { path: string; filename: string; dir: string; status: string; additions: number; deletions: number };
+
+ipcMain.handle("git:working-tree", async (_, repoName: string): Promise<{ staged: WTFileResult[]; unstaged: WTFileResult[] }> => {
+  const repoPath = join(githubDir, repoName);
+  try {
+    const [statusRes, stagedNumRes, unstagedNumRes] = await Promise.all([
+      execAsync("git status --porcelain", { cwd: repoPath, env: TOOL_ENV }),
+      execAsync("git diff --numstat --cached", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
+      execAsync("git diff --numstat", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
+    ]);
+    const parseNumstat = (raw: string) => {
+      const m = new Map<string, { additions: number; deletions: number }>();
+      for (const line of raw.trim().split("\n")) {
+        const parts = line.split("\t");
+        if (parts.length < 3) continue;
+        const a = parseInt(parts[0]); const d = parseInt(parts[1]);
+        if (!isNaN(a) && !isNaN(d)) m.set(parts[2].trim(), { additions: a, deletions: d });
+      }
+      return m;
+    };
+    const stagedNums = parseNumstat(stagedNumRes.stdout);
+    const unstagedNums = parseNumstat(unstagedNumRes.stdout);
+    const makeFile = (path: string, status: string, nums: { additions: number; deletions: number }): WTFileResult => {
+      const segs = path.split("/"); const filename = segs.pop() ?? path; const dir = segs.join("/");
+      return { path, filename, dir, status, ...nums };
+    };
+    const staged: WTFileResult[] = [], unstaged: WTFileResult[] = [];
+    for (const line of statusRes.stdout.split("\n")) {
+      if (line.length < 3) continue;
+      const x = line[0], y = line[1];
+      const filePath = line.slice(3).trim();
+      if (!filePath) continue;
+      if (x !== " " && x !== "?") staged.push(makeFile(filePath, x, stagedNums.get(filePath) ?? { additions: 0, deletions: 0 }));
+      if (y === "?") unstaged.push(makeFile(filePath, "?", { additions: 0, deletions: 0 }));
+      else if (y !== " ") unstaged.push(makeFile(filePath, y, unstagedNums.get(filePath) ?? { additions: 0, deletions: 0 }));
+    }
+    return { staged, unstaged };
+  } catch { return { staged: [], unstaged: [] }; }
+});
+
+ipcMain.handle("git:change-count", async (_, repoName: string): Promise<number> => {
+  try {
+    const { stdout } = await execAsync("git status --porcelain", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+    return stdout.trim().split("\n").filter(Boolean).length;
+  } catch { return 0; }
+});
+
+ipcMain.handle("git:file-diff", async (_, repoName: string, filePath: string, staged: boolean): Promise<string> => {
+  try {
+    const { stdout } = await execAsync(
+      `git diff ${staged ? "--cached" : ""} -- "${filePath}"`,
+      { cwd: join(githubDir, repoName), env: TOOL_ENV }
+    );
+    return stdout;
+  } catch { return ""; }
+});
+
+ipcMain.handle("git:stage-file", async (_, repoName: string, filePath: string) => {
+  await execAsync(`git add -- "${filePath}"`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:unstage-file", async (_, repoName: string, filePath: string) => {
+  await execAsync(`git restore --staged -- "${filePath}"`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:stage-all", async (_, repoName: string) => {
+  await execAsync("git add -A", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:unstage-all", async (_, repoName: string) => {
+  await execAsync("git restore --staged .", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:discard-unstaged", async (_, repoName: string) => {
+  await execAsync("git restore .", { cwd: join(githubDir, repoName), env: TOOL_ENV }).catch(() => {});
+});
+ipcMain.handle("git:commit", async (_, repoName: string, message: string) => {
+  await execAsync(`git commit -m ${JSON.stringify(message)}`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+});
+
+interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; }
+
+ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string): Promise<CommitEntry[]> => {
+  const repoPath = join(githubDir, repoName);
+  try {
+    // Fetch the PR branch to ensure we have latest remote state
+    await execAsync(`git fetch origin ${headRefName}`, { cwd: repoPath, env: TOOL_ENV }).catch(() => {});
+    let base = "origin/main";
+    try { await execAsync(`git rev-parse ${base}`, { cwd: repoPath, env: TOOL_ENV }); }
+    catch { base = "origin/master"; }
+    const head = `origin/${headRefName}`;
+    const SEP = "|||GS|||";
+    const { stdout } = await execAsync(
+      `git log --numstat --pretty=tformat:"${SEP}%H|||%s|||%an|||%ad|||%P" --date=short ${base}..${head}`,
+      { cwd: repoPath, env: TOOL_ENV }
+    );
+    const commits: CommitEntry[] = [];
+    for (const chunk of stdout.split(SEP).filter(Boolean)) {
+      const lines = chunk.trim().split("\n");
+      const parts = lines[0].split("|||");
+      if (parts.length < 4) continue;
+      const [hash, subject, author, date, parents = ""] = parts;
+      const isMerge = parents.trim().split(/\s+/).filter(Boolean).length > 1;
+      let additions = 0, deletions = 0;
+      for (const line of lines.slice(1)) {
+        const cols = line.split("\t");
+        if (cols.length < 2) continue;
+        const a = parseInt(cols[0]), d = parseInt(cols[1]);
+        if (!isNaN(a) && !isNaN(d)) { additions += a; deletions += d; }
+      }
+      commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, additions, deletions });
+    }
+    return commits;
+  } catch { return []; }
+});
+
+ipcMain.handle("git:commit-diff", async (_, repoName: string, hash: string): Promise<string> => {
+  try {
+    const { stdout } = await execAsync(`git show ${hash}`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+    return stdout;
+  } catch { return ""; }
 });
 
 ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> => {

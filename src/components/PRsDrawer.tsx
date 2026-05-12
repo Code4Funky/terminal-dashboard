@@ -10,6 +10,7 @@ interface PR {
   isDraft: boolean;
   createdAt: string;
   reviewDecision: string | null;
+  author: { login: string };
   repository: { name: string; nameWithOwner: string };
 }
 
@@ -121,9 +122,10 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
         }}>
           #{pr.number}
         </span>
-        <span style={{ color: t.label1, fontSize: 12, fontWeight: 500, lineHeight: 1.5, flex: 1 }}>
-          {pr.title}
-        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: t.label1, fontSize: 12, fontWeight: 500, lineHeight: 1.5 }}>{pr.title}</div>
+          <div style={{ color: t.label4, fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>@{pr.author.login}</div>
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
@@ -343,6 +345,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
   const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [showRepos, setShowRepos] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
   const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("td_pinned_repos") ?? "[]")); }
     catch { return new Set(); }
@@ -363,6 +366,9 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     return ap !== bp ? ap - bp : a.name.localeCompare(b.name);
   });
 
+  const uniqueOwners = [...new Set(prs.map((p) => p.author.login))].sort();
+  const filteredPRs = ownerFilter ? prs.filter((p) => p.author.login === ownerFilter) : prs;
+
   const loadWorktrees = async () => {
     const wts = await window.terminal.listClaudeWorktrees().catch(() => []);
     const merged = wts.filter((w) => w.merged);
@@ -382,7 +388,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
 
   const load = () => {
     setLoading(true); setLocalLoading(true); setError(null); setSelected(new Set());
-    window.terminal.listPRs()
+    window.terminal.listPRs([...pinnedRepos])
       .then((data) => { setPRs(data); setLoading(false); setLastRefreshed(new Date()); })
       .catch((err: Error) => { setError(err.message ?? "Failed to load PRs"); setLoading(false); });
     window.terminal.listLocalBranches()
@@ -440,6 +446,10 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
+    if (pinnedRepos.size > 0) load();
+  }, [[...pinnedRepos].sort().join(",")]);
+
+  useEffect(() => {
     const interval = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
@@ -452,7 +462,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const byRepo = prs.reduce<Record<string, PR[]>>((acc, pr) => {
+  const byRepo = filteredPRs.reduce<Record<string, PR[]>>((acc, pr) => {
     const key = pr.repository.nameWithOwner;
     if (!acc[key]) acc[key] = [];
     acc[key].push(pr);
@@ -487,8 +497,33 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           <div style={{ fontWeight: 700, fontSize: 14, color: t.label1 }}>Pull Requests</div>
           {!loading && (
             <div style={{ color: t.green, fontSize: 11, marginTop: 3, fontFamily: "monospace" }}>
-              {prs.length} open PRs · {!localLoading ? `${localOnly.length} local` : "loading…"} · {repos.length} repos
+              {ownerFilter ? `${filteredPRs.length}/${prs.length}` : prs.length} open PRs · {pinnedRepos.size > 0 ? `${pinnedRepos.size} pinned` : `${repos.length} local repos`} · {!localLoading ? `${localOnly.length} branches` : "loading…"}
               <span style={{ color: t.label4 }}> · {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            </div>
+          )}
+          {!loading && uniqueOwners.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+              {uniqueOwners.map((login) => {
+                const active = ownerFilter === login;
+                return (
+                  <button
+                    key={login}
+                    onClick={() => setOwnerFilter(active ? null : login)}
+                    style={{
+                      fontSize: 10, fontWeight: 600, fontFamily: "monospace",
+                      padding: "2px 7px", borderRadius: 20, cursor: "pointer",
+                      border: `1px solid ${active ? t.blue : t.borderMid}`,
+                      background: active ? `${t.blue}20` : "transparent",
+                      color: active ? t.blue : t.label3,
+                      transition: "all 0.15s",
+                    }}
+                    onMouseEnter={(e) => { if (!active) { e.currentTarget.style.borderColor = t.blue; e.currentTarget.style.color = t.blue; } }}
+                    onMouseLeave={(e) => { if (!active) { e.currentTarget.style.borderColor = t.borderMid; e.currentTarget.style.color = t.label3; } }}
+                  >
+                    {login}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -519,11 +554,18 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           </div>
         )}
 
-        {!loading && !error && prs.length === 0 && (
+        {!loading && !error && prs.length === 0 && !ownerFilter && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
-            <div style={{ fontSize: 28 }}>🎉</div>
             <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No open PRs</div>
-            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>All caught up!</div>
+            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>
+              {pinnedRepos.size > 0 ? "All caught up in pinned repos!" : "All caught up!"}
+            </div>
+          </div>
+        )}
+        {!loading && !error && prs.length > 0 && filteredPRs.length === 0 && ownerFilter && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
+            <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No PRs by @{ownerFilter}</div>
+            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>Try a different owner filter</div>
           </div>
         )}
 

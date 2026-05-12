@@ -1134,6 +1134,7 @@ interface PRNode {
   isDraft: boolean;
   createdAt: string;
   reviewDecision: string | null;
+  author: { login: string };
   repository: { name: string; nameWithOwner: string };
 }
 
@@ -1299,13 +1300,34 @@ ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: 
   }
 });
 
-ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
+ipcMain.handle("prs:list", async (_, pinnedRepoNames: string[]): Promise<PRNode[]> => {
   try {
-    const query = `{ viewer { pullRequests(first: 50, states: [OPEN]) { nodes { number title url headRefName headRefOid isDraft createdAt reviewDecision repository { name nameWithOwner } } } } }`;
-  
-    const { stdout } = await execAsync(`gh api graphql -f query='${query}'`, { env: TOOL_ENV });
-    const data = JSON.parse(stdout);
-    return data.data?.viewer?.pullRequests?.nodes ?? [];
+    if (!pinnedRepoNames || pinnedRepoNames.length === 0) return [];
+
+    const repoInfos: { name: string; nameWithOwner: string }[] = [];
+    for (const name of pinnedRepoNames) {
+      const repoPath = join(githubDir, name);
+      try {
+        if (!fs.existsSync(join(repoPath, ".git"))) continue;
+        const { stdout } = await execAsync("git remote get-url origin", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" }));
+        const match = stdout.trim().match(/github\.com[/:](.+?)(?:\.git)?$/);
+        if (match) repoInfos.push({ name, nameWithOwner: match[1] });
+      } catch { continue; }
+    }
+
+    const results = await Promise.all(
+      repoInfos.map(({ name, nameWithOwner }) =>
+        execAsync(
+          `gh pr list --repo "${nameWithOwner}" --state open --json number,title,url,headRefName,headRefOid,isDraft,createdAt,reviewDecision,author`,
+          { env: TOOL_ENV, timeout: 20000 }
+        ).then(({ stdout }) => {
+          const prs = JSON.parse(stdout) as Omit<PRNode, "repository">[];
+          return prs.map(pr => ({ ...pr, repository: { name, nameWithOwner } }));
+        }).catch(() => [] as PRNode[])
+      )
+    );
+
+    return results.flat();
   } catch {
     return [];
   }

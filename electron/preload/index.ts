@@ -152,7 +152,7 @@ contextBridge.exposeInMainWorld("terminal", {
   cleanupMerged: (repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
     ipcRenderer.invoke("prs:cleanup-merged", repo),
 
-  listPRs: (): Promise<{
+  listPRs: (pinnedRepoNames: string[]): Promise<{
     number: number;
     title: string;
     url: string;
@@ -161,8 +161,9 @@ contextBridge.exposeInMainWorld("terminal", {
     isDraft: boolean;
     createdAt: string;
     reviewDecision: string | null;
+    author: { login: string };
     repository: { name: string; nameWithOwner: string };
-  }[]> => ipcRenderer.invoke("prs:list"),
+  }[]> => ipcRenderer.invoke("prs:list", pinnedRepoNames),
 
   getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
     ipcRenderer.invoke("prs:get-diff", repoName, prNumber),

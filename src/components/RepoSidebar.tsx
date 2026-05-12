@@ -105,7 +105,25 @@ export function RepoSidebar({
   const [loading, setLoading] = useState(true);
   const [repoExpanded, setRepoExpanded] = useState<Record<string, boolean>>({});
   const [hoveredPRKey, setHoveredPRKey] = useState<string | null>(null);
+  const [hoveredRepoKey, setHoveredRepoKey] = useState<string | null>(null);
   const [claudeCooldown, setClaudeCooldown] = useState<Set<string>>(new Set());
+
+  // Pinned repos — persisted to localStorage
+  const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("tdash:pinned-repos");
+      return new Set(saved ? JSON.parse(saved) : []);
+    } catch { return new Set(); }
+  });
+
+  const togglePin = (repoName: string) => {
+    setPinnedRepos((prev) => {
+      const next = new Set(prev);
+      if (next.has(repoName)) next.delete(repoName); else next.add(repoName);
+      localStorage.setItem("tdash:pinned-repos", JSON.stringify([...next]));
+      return next;
+    });
+  };
 
   // CI status per PR number
   const [ciChecks, setCIChecks] = useState<Record<number, CICheck[]>>({});
@@ -153,7 +171,7 @@ export function RepoSidebar({
 
   const load = () => {
     setLoading(true);
-    window.terminal.listPRs().then((data) => {
+    window.terminal.listPRs([...pinnedRepos]).then((data) => {
       setPRs(data);
       setLoading(false);
       setRepoExpanded((prev) => {
@@ -167,8 +185,7 @@ export function RepoSidebar({
       window.terminal.listGithubRepos().then((localRepos) => {
         const names = localRepos.map(r => r.name);
         setAllLocalRepos(names);
-        const prRepoNames = new Set(data.map((p) => p.repository.name));
-        const allNames = [...new Set([...prRepoNames, ...names])];
+        const allNames = [...new Set([...data.map((p) => p.repository.name), ...names])];
         onReposLoaded(allNames.map(name => ({ name })));
       }).catch(() => {
         const repos = [...new Map(data.map((p) => [p.repository.name, { name: p.repository.name }])).values()];
@@ -189,6 +206,7 @@ export function RepoSidebar({
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => { if (pinnedRepos.size > 0) load(); }, [[...pinnedRepos].sort().join(",")]);
   useEffect(() => {
     const interval = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(interval);
@@ -535,7 +553,14 @@ export function RepoSidebar({
           )}
 
           {!loading && Object.entries(byRepo)
-            .sort((a, b) => b[1].length - a[1].length)
+            .sort((a, b) => {
+              const aName = a[0].split("/").pop() ?? a[0];
+              const bName = b[0].split("/").pop() ?? b[0];
+              const aPinned = pinnedRepos.has(aName);
+              const bPinned = pinnedRepos.has(bName);
+              if (aPinned !== bPinned) return aPinned ? -1 : 1;
+              return b[1].length - a[1].length;
+            })
             .map(([repoFullName, repoPRs]) => {
               const repoName = repoFullName.split("/").pop() ?? repoFullName;
               const isExpanded = repoExpanded[repoFullName] !== false;
@@ -554,23 +579,39 @@ export function RepoSidebar({
                 ...otherBranches.map((b) => b.branch),
               ];
 
+              const isPinned = pinnedRepos.has(repoName);
+              const isRepoHovered = hoveredRepoKey === repoFullName;
+
               return (
                 <div key={repoFullName}>
                   {/* Repo header */}
                   <div
                     onClick={(e) => { e.stopPropagation(); setRepoExpanded((p) => ({ ...p, [repoFullName]: !p[repoFullName] })); }}
-                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = hoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    onMouseEnter={() => setHoveredRepoKey(repoFullName)}
+                    onMouseLeave={() => setHoveredRepoKey(null)}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer", background: isRepoHovered ? hoverBg : "transparent" }}
                   >
                     <span style={{ color: t.label4, fontSize: 9, width: 8, flexShrink: 0 }}>{isExpanded ? "▼" : "▶"}</span>
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill={t.label3} style={{ flexShrink: 0 }}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill={isPinned ? t.orange : t.label3} style={{ flexShrink: 0 }}>
                       <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
                     </svg>
                     <span style={{
-                      flex: 1, color: t.label1, fontSize: 12, fontWeight: 500,
+                      flex: 1, color: isPinned ? t.label1 : t.label1, fontSize: 12, fontWeight: isPinned ? 600 : 500,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     }}>{repoName}</span>
+                    {(isRepoHovered || isPinned) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(repoName); }}
+                        title={isPinned ? "Unpin repo" : "Pin repo"}
+                        style={{
+                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                          color: isPinned ? t.orange : t.label4, fontSize: 12, lineHeight: 1, flexShrink: 0,
+                          transition: "color 0.12s",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = isPinned ? t.orange : t.label4)}
+                      >⊙</button>
+                    )}
                     <span style={{
                       fontSize: 10, color: t.label3, background: t.surface2,
                       borderRadius: 10, padding: "1px 5px", fontFamily: "monospace", flexShrink: 0,
@@ -881,21 +922,148 @@ export function RepoSidebar({
               );
             })}
           {/* Repos without open PRs */}
-          {allLocalRepos.filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name)).map(name => (
-            <div
-              key={name}
-              onClick={(e) => { e.stopPropagation(); onSelectRepoTree(name); }}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer" }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = hoverBg)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill={t.label4} style={{ flexShrink: 0 }}>
-                <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
-              </svg>
-              <span style={{ flex: 1, color: t.label3, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-              <span style={{ fontSize: 9, color: t.label4, fontFamily: "monospace" }}>no PRs</span>
-            </div>
-          ))}
+          {allLocalRepos
+            .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
+            .sort((a, b) => {
+              const aPinned = pinnedRepos.has(a);
+              const bPinned = pinnedRepos.has(b);
+              if (aPinned !== bPinned) return aPinned ? -1 : 1;
+              return 0;
+            })
+            .map(name => {
+              const isPinned = pinnedRepos.has(name);
+              const rowKey = `nopr:${name}`;
+              const isRowHovered = hoveredRepoKey === rowKey;
+              const isPickerOpen = branchPickerRepo === rowKey;
+              const curBranch = repoCurBranch[name];
+              const repoBranches = localBranches.filter((b) => b.repo === name && b.branch !== curBranch);
+              const filteredBranches = branchSearch && isPickerOpen
+                ? repoBranches.filter((b) => b.branch.toLowerCase().includes(branchSearch.toLowerCase()))
+                : repoBranches;
+              const allPickerItems = filteredBranches.map((b) => b.branch);
+              return (
+                <div key={name} onClick={(e) => e.stopPropagation()}>
+                  <div
+                    onClick={(e) => { e.stopPropagation(); onSelectRepoTree(name); }}
+                    onMouseEnter={() => setHoveredRepoKey(rowKey)}
+                    onMouseLeave={() => setHoveredRepoKey(null)}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer", background: isRowHovered ? hoverBg : "transparent" }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill={isPinned ? t.orange : t.label4} style={{ flexShrink: 0 }}>
+                      <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+                    </svg>
+                    <span style={{ flex: 1, color: isPinned ? t.label2 : t.label3, fontSize: 12, fontWeight: isPinned ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                    {(isRowHovered || isPinned) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(name); }}
+                        title={isPinned ? "Unpin repo" : "Pin repo"}
+                        style={{
+                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                          color: isPinned ? t.orange : t.label4, fontSize: 12, lineHeight: 1, flexShrink: 0,
+                          transition: "color 0.12s",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = isPinned ? t.orange : t.label4)}
+                      >⊙</button>
+                    )}
+                    {!isPinned && <span style={{ fontSize: 9, color: t.label4, fontFamily: "monospace" }}>no PRs</span>}
+                  </div>
+
+                  {/* Branch picker trigger — pinned repos only */}
+                  {isPinned && (
+                    <div style={{ padding: "2px 12px 4px 26px" }} onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => {
+                          if (isPickerOpen) { setBranchPickerRepo(null); return; }
+                          setBranchPickerRepo(rowKey);
+                          setBranchSearch("");
+                          setBranchCursor(0);
+                          window.terminal.getRepoBranch(name).then((b) => {
+                            if (b) setRepoCurBranch((prev) => ({ ...prev, [name]: b }));
+                          }).catch(() => {});
+                          setTimeout(() => branchSearchRef.current?.focus(), 30);
+                        }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 5, width: "100%",
+                          background: isPickerOpen ? `${t.green}18` : `${t.surface2}80`,
+                          border: `1px solid ${isPickerOpen ? t.green + "50" : t.border}`,
+                          borderRadius: 5, color: isPickerOpen ? t.green : t.teal,
+                          cursor: "pointer", fontSize: 10, fontFamily: "monospace",
+                          padding: "3px 7px", textAlign: "left",
+                        }}
+                      >
+                        <span style={{ fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {curBranch ?? "select branch"}
+                        </span>
+                        <span style={{ fontSize: 8, color: t.label4, flexShrink: 0 }}>{isPickerOpen ? "∧" : "∨"}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Branch picker dropdown */}
+                  {isPinned && isPickerOpen && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ margin: "2px 8px 6px", background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 7, overflow: "hidden" }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderBottom: `1px solid ${t.border}` }}>
+                        <span style={{ color: t.label4, fontSize: 11 }}>⌕</span>
+                        <input
+                          ref={branchSearchRef}
+                          value={branchSearch}
+                          onChange={(e) => { setBranchSearch(e.target.value); setBranchCursor(0); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowDown") { e.preventDefault(); setBranchCursor((c) => Math.min(c + 1, allPickerItems.length - 1)); }
+                            else if (e.key === "ArrowUp") { e.preventDefault(); setBranchCursor((c) => Math.max(c - 1, 0)); }
+                            else if (e.key === "Enter") {
+                              const b = allPickerItems[branchCursor];
+                              if (b) { onCheckoutBranch(name, b); setBranchPickerRepo(null); }
+                            } else if (e.key === "Escape") { setBranchPickerRepo(null); }
+                          }}
+                          placeholder="Search branches"
+                          style={{ flex: 1, background: "none", border: "none", outline: "none", color: t.label1, fontSize: 11, fontFamily: "monospace" }}
+                        />
+                      </div>
+                      {curBranch && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px" }}>
+                          <span style={{ color: t.green, fontSize: 10, width: 10, flexShrink: 0 }}>✓</span>
+                          <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
+                          <span style={{ color: t.green, fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{curBranch}</span>
+                        </div>
+                      )}
+                      <div style={{ maxHeight: 180, overflowY: "auto" }}>
+                        {allPickerItems.map((b, i) => {
+                          const isActive = branchCursor === i;
+                          return (
+                            <div
+                              key={b}
+                              onMouseEnter={() => setBranchCursor(i)}
+                              onClick={() => { onCheckoutBranch(name, b); setBranchPickerRepo(null); }}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 6,
+                                padding: "4px 10px", cursor: "pointer",
+                                background: isActive ? `${t.blue}22` : "transparent",
+                              }}
+                            >
+                              <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
+                              <span style={{ color: t.label2, fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b}</span>
+                            </div>
+                          );
+                        })}
+                        {allPickerItems.length === 0 && (
+                          <div style={{ padding: "8px 10px", color: t.label4, fontSize: 11 }}>No branches found</div>
+                        )}
+                      </div>
+                      <div style={{ borderTop: `1px solid ${t.border}`, padding: "3px 10px", display: "flex", gap: 14, color: t.label4, fontSize: 9 }}>
+                        <span><span style={{ color: t.label2 }}>↑↓</span> navigate</span>
+                        <span><span style={{ color: t.label2 }}>↵</span> checkout</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
           {/* Add repository row */}
           <div

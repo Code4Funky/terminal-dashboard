@@ -163,6 +163,8 @@ contextBridge.exposeInMainWorld("terminal", {
     reviewDecision: string | null;
     author: { login: string };
     repository: { name: string; nameWithOwner: string };
+    additions?: number;
+    deletions?: number;
   }[]> => ipcRenderer.invoke("prs:list", pinnedRepoNames),
 
   getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
@@ -214,9 +216,9 @@ contextBridge.exposeInMainWorld("terminal", {
   gitCommit: (repoName: string, message: string): Promise<void> =>
     ipcRenderer.invoke("git:commit", repoName, message),
 
-  getCommits: (repoName: string, headRefName: string): Promise<{
+  getCommits: (repoName: string, headRefName: string, prNumber?: number): Promise<{
     hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number;
-  }[]> => ipcRenderer.invoke("git:commits", repoName, headRefName),
+  }[]> => ipcRenderer.invoke("git:commits", repoName, headRefName, prNumber),
 
   getCommitDiff: (repoName: string, hash: string): Promise<string> =>
     ipcRenderer.invoke("git:commit-diff", repoName, hash),

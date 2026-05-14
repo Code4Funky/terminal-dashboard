@@ -81,6 +81,8 @@ declare global {
         createdAt: string;
         reviewDecision: string | null;
         repository: { name: string; nameWithOwner: string };
+        additions?: number;
+        deletions?: number;
       }[]>;
       getPRDiff: (repoName: string, prNumber: number) => Promise<string>;
       openExternal: (url: string) => Promise<void>;
@@ -97,7 +99,7 @@ declare global {
       unstageAll: (repoName: string) => Promise<void>;
       discardUnstaged: (repoName: string) => Promise<void>;
       gitCommit: (repoName: string, message: string) => Promise<void>;
-      getCommits: (repoName: string, headRefName: string) => Promise<{ hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number }[]>;
+      getCommits: (repoName: string, headRefName: string, prNumber?: number) => Promise<{ hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number }[]>;
       getCommitDiff: (repoName: string, hash: string) => Promise<string>;
       cloneRepository: (url: string, requestId: string) => void;
       onCloneProgress: (requestId: string, cb: (text: string) => void) => () => void;

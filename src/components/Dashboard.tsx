@@ -9,6 +9,7 @@ import { KBChatDrawer } from "./KBChatDrawer";
 import { RepoSidebar, SelectedPR, TerminalTab } from "./RepoSidebar";
 import { NewTerminalModal } from "./NewTerminalModal";
 import { DiffDrawer } from "./DiffDrawer";
+import { SessionSwitcher } from "./SessionSwitcher";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT } from "../theme";
 
@@ -81,6 +82,7 @@ export function Dashboard() {
   const [termFitKey, setTermFitKey] = useState(0);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const splitDragRef = useRef<{ startX: number; startRatio: number; totalWidth: number } | null>(null);
+  const [showSwitcher, setShowSwitcher] = useState(false);
   const [worktreeConfirm, setWorktreeConfirm] = useState<{ repoName: string; branchName: string; wtPath: string } | null>(null);
   const [dirtyConfirm, setDirtyConfirm] = useState<{ repoName: string; branchName: string; files: string[] } | null>(null);
   const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
@@ -270,6 +272,7 @@ export function Dashboard() {
       const fromTerminal = (e.target as HTMLElement).classList?.contains("xterm-helper-textarea");
       if (e.metaKey && !e.shiftKey && !e.altKey) {
         if (e.key === "t") { e.preventDefault(); handleAddPanel(); return; }
+        if (e.key === "k") { e.preventDefault(); setShowSwitcher((v) => !v); return; }
         if (e.key === "\\") { e.preventDefault(); setZenMode((v) => !v); return; }
       }
       if (e.metaKey && e.shiftKey && !e.altKey) {
@@ -349,21 +352,6 @@ export function Dashboard() {
         <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, marginRight: 8, letterSpacing: 0.4, ...SYS_FONT }}>
           Dev Space
         </span>
-
-        <button
-          onClick={() => setShowModal(true)}
-          style={{
-            borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
-            padding: "4px 14px", WebkitAppRegion: "no-drag" as const, letterSpacing: 0.3,
-            background: t.blue, border: "none", color: "#FFFFFF", ...SYS_FONT,
-            transition: "opacity 0.15s",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.82")}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-          title="New Terminal (⌘T)"
-        >
-          + New Terminal
-        </button>
 
         <div style={{ flex: 1 }} />
 
@@ -582,6 +570,15 @@ export function Dashboard() {
             prUrl={selectedPR?.prUrl}
             headRefName={selectedPR?.branch}
             onClose={() => { setSelectedPR(null); setSelectedRepoTree(null); }}
+          />
+        )}
+
+        {showSwitcher && (
+          <SessionSwitcher
+            tabs={panels.map((p) => ({ id: p.id, title: p.title, cwd: p.cwd, gitBranch: p.gitBranch }))}
+            focusedId={focusedId}
+            onSelect={(id) => { setFocusedId(id); const p = panels.find((x) => x.id === id); if (p) window.terminal.setFocused(p.sessionId); }}
+            onClose={() => setShowSwitcher(false)}
           />
         )}
 

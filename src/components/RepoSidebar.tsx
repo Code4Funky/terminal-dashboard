@@ -22,6 +22,8 @@ interface PR {
   createdAt: string;
   reviewDecision: string | null;
   repository: { name: string; nameWithOwner: string };
+  additions?: number;
+  deletions?: number;
 }
 
 export interface SelectedPR {
@@ -134,6 +136,13 @@ export function RepoSidebar({
   // Change counts (for pill badge)
   const [repoChangeCounts, setRepoChangeCounts] = useState<Record<string, number>>({});
 
+  // Per-repo working tree line stats (adds + dels) for tab cards
+  const [repoTabStats, setRepoTabStats] = useState<Record<string, { adds: number; dels: number }>>({});
+
+  // PR lookup cache for tab branches not covered by the main prs list (e.g. other-author PRs)
+  const [tabPRCache, setTabPRCache] = useState<Record<string, PR>>({});
+
+
   // Branch picker
   const [localBranches, setLocalBranches] = useState<{ repo: string; branch: string }[]>([]);
   const [branchPickerRepo, setBranchPickerRepo] = useState<string | null>(null);
@@ -149,6 +158,7 @@ export function RepoSidebar({
   const [addRepoProgress, setAddRepoProgress] = useState("");
   const [addRepoError, setAddRepoError] = useState("");
   const [addRepoDoneName, setAddRepoDoneName] = useState("");
+  const [showNoPRRepos, setShowNoPRRepos] = useState(() => pinnedRepos.size === 0);
   const addRepoUrlRef = useRef<HTMLInputElement>(null);
   const progressRef = useRef<HTMLPreElement>(null);
 
@@ -232,6 +242,53 @@ export function RepoSidebar({
     window.terminal.listLocalBranches().then((data) => setLocalBranches(data)).catch(() => {});
   };
   useEffect(() => { loadBranches(); }, []);
+
+  // Fetch +/- line totals for repos currently open in tabs
+  useEffect(() => {
+    const repos = [...new Set(
+      tabs
+        .map(tab => tab.cwd?.includes("/GitHub/") ? tab.cwd.split("/GitHub/")[1]?.split("/")[0] : null)
+        .filter((r): r is string => !!r)
+    )];
+    if (repos.length === 0) return;
+    repos.forEach(repo => {
+      window.terminal.getWorkingTree(repo)
+        .then(({ staged, unstaged }) => {
+          const all = [...staged, ...unstaged];
+          const adds = all.reduce((s, f) => s + f.additions, 0);
+          const dels = all.reduce((s, f) => s + f.deletions, 0);
+          setRepoTabStats(prev => ({ ...prev, [repo]: { adds, dels } }));
+        })
+        .catch(() => {});
+    });
+  }, [tabs.map(t => t.cwd).join("|")]);
+
+  // Fetch PRs for tab branches not already in the main prs list (handles other-author PRs)
+  useEffect(() => {
+    const tabKey = tabs.map(t => `${t.cwd}:${t.gitBranch}`).join("|");
+    if (!tabKey) return;
+    const pairs = tabs
+      .map(tab => ({
+        repo: tab.cwd?.includes("/GitHub/") ? tab.cwd.split("/GitHub/")[1]?.split("/")[0] : null,
+        branch: tab.gitBranch ?? null,
+      }))
+      .filter((p): p is { repo: string; branch: string } => !!p.repo && !!p.branch);
+    // Only fetch for branches not already resolved
+    const missing = pairs.filter(p =>
+      !prs.some(pr => pr.repository.name === p.repo && pr.headRefName === p.branch) &&
+      !tabPRCache[`${p.repo}:${p.branch}`]
+    );
+    const reposToFetch = [...new Set(missing.map(p => p.repo))];
+    reposToFetch.forEach(repo => {
+      window.terminal.listPRs([repo]).then(data => {
+        data.forEach(pr => {
+          const key = `${pr.repository.name}:${pr.headRefName}`;
+          setTabPRCache(prev => ({ ...prev, [key]: pr }));
+        });
+      }).catch(() => {});
+    });
+  }, [tabs.map(t => `${t.cwd}:${t.gitBranch}`).join("|"), prs.length]);
+
 
   // Fetch current branch for each repo when picker opens
   useEffect(() => {
@@ -334,66 +391,184 @@ export function RepoSidebar({
       {/* ── TERMINALS section ── */}
       <div style={{ flexShrink: 0, borderBottom: `1px solid ${t.border}` }}>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 7px" }}>
+        <div style={{ display: "flex", alignItems: "center", padding: "7px 12px 5px" }}>
           <span style={{
-            flex: 1, color: t.label3, fontSize: 10,
-            letterSpacing: "0.04em", fontWeight: 600,
+            flex: 1, color: t.label4, fontSize: 9,
+            letterSpacing: "0.06em", fontWeight: 700, textTransform: "uppercase" as const,
           }}>Terminals</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddTab(); }}
+            title="New terminal (⌘T)"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: t.label4, fontSize: 14, padding: "0 3px", lineHeight: 1,
+              transition: "color 0.13s",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = t.blue)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+          >+</button>
         </div>
 
-        {/* Tab rows */}
-        {tabs.map((tab) => {
-          const isActive = tab.id === focusedId;
-          const isHovered = hoveredTabId === tab.id;
-          const branch = isBranchTab(tab.title);
+        {/* Tab cards */}
+        <div style={{ padding: "0 6px 6px" }}>
+          {tabs.map((tab) => {
+            const isActive = tab.id === focusedId;
+            const isHovered = hoveredTabId === tab.id;
 
-          return (
-            <div
-              key={tab.id}
-              onClick={(e) => { e.stopPropagation(); onFocusTab(tab.id); }}
-              onMouseEnter={() => setHoveredTabId(tab.id)}
-              onMouseLeave={() => setHoveredTabId(null)}
-              style={{
-                display: "flex", alignItems: "center", gap: 7,
-                padding: "5px 12px",
-                cursor: "pointer",
-                background: isActive ? `${t.blue}15` : isHovered ? hoverBg : "transparent",
-                borderLeft: `2px solid ${isActive ? t.blue : "transparent"}`,
-              }}
-            >
-              <span style={{ color: branch ? t.green : t.label4, fontSize: branch ? 8 : 10, flexShrink: 0 }}>
-                {branch ? "⬤" : "⬡"}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  color: isActive ? t.label1 : t.label2,
-                  fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                  {tab.title}
+            // Short path: last 2 components
+            const shortPath = (() => {
+              if (!tab.cwd) return null;
+              const home = tab.cwd.replace(/^\/Users\/[^/]+/, "~");
+              const parts = home.split("/").filter(Boolean);
+              if (parts.length <= 2) return home;
+              return parts.slice(-2).join("/");
+            })();
+
+            // Repo name — only trust the path if it's under GitHub dir
+            const gitRepoName = tab.cwd?.includes("/GitHub/")
+              ? tab.cwd.split("/GitHub/")[1]?.split("/")[0]
+              : null;
+
+            // Matching PR: check main prs list first, then per-tab cache (handles other-author PRs)
+            const cacheKey = gitRepoName && tab.gitBranch ? `${gitRepoName}:${tab.gitBranch}` : null;
+            const tabPR = tab.gitBranch
+              ? (prs.find(pr =>
+                  pr.headRefName === tab.gitBranch &&
+                  (!tab.cwd || tab.cwd.includes(pr.repository.name))
+                ) ?? (cacheKey ? tabPRCache[cacheKey] : null) ?? null)
+              : null;
+
+            const changeCount = gitRepoName ? (repoChangeCounts[gitRepoName] ?? 0) : 0;
+            const wtStats = gitRepoName ? repoTabStats[gitRepoName] : null;
+            // Show working tree stats if dirty, otherwise show PR total diff
+            const prStats = tabPR != null ? { adds: tabPR.additions ?? 0, dels: tabPR.deletions ?? 0 } : null;
+            const tabStats = (wtStats && (wtStats.adds > 0 || wtStats.dels > 0)) ? wtStats : prStats;
+
+            return (
+              <div
+                key={tab.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFocusTab(tab.id);
+                  if (tabPR && gitRepoName) {
+                    // Has PR → open branch diff (same as clicking the PR row)
+                    onSelectPR({ prNumber: tabPR.number, repoName: gitRepoName, prTitle: tabPR.title, branch: tabPR.headRefName, prUrl: tabPR.url });
+                  } else if (gitRepoName) {
+                    // No PR → open working tree
+                    onSelectPR(null);
+                    onSelectRepoTree(gitRepoName);
+                  }
+                }}
+                onMouseEnter={() => setHoveredTabId(tab.id)}
+                onMouseLeave={() => setHoveredTabId(null)}
+                style={{
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  marginTop: 3,
+                  cursor: "pointer",
+                  background: isActive
+                    ? t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"
+                    : isHovered ? hoverBg : "transparent",
+                  border: `1px solid ${isActive ? t.borderMid : "transparent"}`,
+                  transition: "background 0.12s, border-color 0.12s",
+                  position: "relative" as const,
+                }}
+              >
+                {/* Row 1: icon + title + close */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  {/* Claude-style asterisk icon */}
+                  <span style={{
+                    width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                    background: isActive ? "#e8510020" : t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+                    border: `1px solid ${isActive ? "#e8510040" : t.borderSubtle}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12, color: isActive ? "#e85100" : t.label3,
+                    transition: "all 0.12s",
+                  }}>✳</span>
+
+                  <span style={{
+                    flex: 1, minWidth: 0,
+                    color: isActive ? t.label1 : t.label2,
+                    fontSize: 12, fontWeight: isActive ? 600 : 400,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+                  }}>
+                    {tab.title}
+                  </span>
+
+                  {(isHovered || isActive) && tabs.length > 1 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1, flexShrink: 0,
+                        transition: "color 0.12s",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                    >×</button>
+                  )}
                 </div>
+
+                {/* Row 2: path */}
+                {shortPath && (
+                  <div style={{
+                    marginTop: 3, paddingLeft: 29,
+                    color: t.label4, fontSize: 10, fontFamily: "monospace",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{shortPath}</div>
+                )}
+
+                {/* Row 3: branch */}
                 {tab.gitBranch && (
                   <div style={{
-                    color: t.teal, fontSize: 9, fontFamily: "monospace",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    marginTop: 3, paddingLeft: 29,
+                    display: "flex", alignItems: "center", gap: 6,
+                    overflow: "hidden",
                   }}>
-                    ⎇ {tab.gitBranch}
+                    <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>⎇</span>
+                    <span style={{
+                      fontSize: 9, fontFamily: "monospace",
+                      color: isActive ? t.teal : t.label3,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      flex: 1, minWidth: 0,
+                    }}>{tab.gitBranch}</span>
+                  </div>
+                )}
+
+                {/* Row 4: diff stats + PR number */}
+                {(tabStats || tabPR) && (
+                  <div style={{
+                    marginTop: 4, paddingLeft: 29,
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    {tabStats && (tabStats.adds > 0 || tabStats.dels > 0) && (
+                      <span style={{ fontFamily: "monospace", fontSize: 10, display: "flex", gap: 4 }}>
+                        {tabStats.adds > 0 && (
+                          <span style={{ color: t.green, fontWeight: 600 }}>+{tabStats.adds}</span>
+                        )}
+                        {tabStats.dels > 0 && (
+                          <span style={{ color: t.red, fontWeight: 600 }}>-{tabStats.dels}</span>
+                        )}
+                      </span>
+                    )}
+                    {tabPR && (
+                      <span style={{
+                        fontSize: 9, fontFamily: "monospace", color: t.blue,
+                        display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+                      }}>
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+                          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                        </svg>
+                        #{tabPR.number}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
-              {(isHovered || isActive) && tabs.length > 1 && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                  style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1, flexShrink: 0,
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                >×</button>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {/* ── REPOSITORIES section ── */}
@@ -922,15 +1097,17 @@ export function RepoSidebar({
               );
             })}
           {/* Repos without open PRs */}
-          {allLocalRepos
-            .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
-            .sort((a, b) => {
-              const aPinned = pinnedRepos.has(a);
-              const bPinned = pinnedRepos.has(b);
-              if (aPinned !== bPinned) return aPinned ? -1 : 1;
-              return 0;
-            })
-            .map(name => {
+          {(() => {
+            const noPRRepos = allLocalRepos
+              .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
+              .sort((a, b) => {
+                const aPinned = pinnedRepos.has(a);
+                const bPinned = pinnedRepos.has(b);
+                if (aPinned !== bPinned) return aPinned ? -1 : 1;
+                return a.localeCompare(b);
+              });
+            const visibleNoPR = showNoPRRepos ? noPRRepos : noPRRepos.filter(n => pinnedRepos.has(n));
+            return visibleNoPR.map(name => {
               const isPinned = pinnedRepos.has(name);
               const rowKey = `nopr:${name}`;
               const isRowHovered = hoveredRepoKey === rowKey;
@@ -1063,7 +1240,33 @@ export function RepoSidebar({
                   )}
                 </div>
               );
-            })}
+            });
+          })()}
+
+          {/* Disclosure toggle for repos with no PRs */}
+          {(() => {
+            const noPRRepos = allLocalRepos.filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name));
+            const unpinnedNoPR = noPRRepos.filter(n => !pinnedRepos.has(n));
+            if (unpinnedNoPR.length === 0) return null;
+            return (
+              <div
+                onClick={() => setShowNoPRRepos(v => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "5px 12px", cursor: "pointer",
+                  borderTop: `1px solid ${showNoPRRepos ? t.border : "transparent"}`,
+                  color: t.label4,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = t.label2; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = t.label4; }}
+              >
+                <span style={{ fontSize: 9 }}>{showNoPRRepos ? "▾" : "▸"}</span>
+                <span style={{ fontSize: 10 }}>
+                  {showNoPRRepos ? "Hide" : `${unpinnedNoPR.length} repo${unpinnedNoPR.length !== 1 ? "s" : ""} with no open PRs`}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Add repository row */}
           <div

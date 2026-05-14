@@ -15,6 +15,19 @@ interface WTFile {
 
 interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; }
 
+// ── ANSI escape code stripper ─────────────────────────────────────────────────
+
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
+
+// ── Hunk header parser ────────────────────────────────────────────────────────
+
+function parseHunkHeader(header: string): { oldStart: number; newStart: number } {
+  const m = header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+  return m ? { oldStart: parseInt(m[1]), newStart: parseInt(m[2]) } : { oldStart: 1, newStart: 1 };
+}
+
 // ── Diff parser ───────────────────────────────────────────────────────────────
 
 function parseDiff(raw: string): DiffFile[] {
@@ -34,9 +47,9 @@ function parseDiff(raw: string): DiffFile[] {
         if (currentChunk) chunks.push(currentChunk);
         currentChunk = { header: line, lines: [] };
       } else if (currentChunk) {
-        if (line.startsWith("+") && !line.startsWith("+++")) { currentChunk.lines.push({ type: "add", content: line.slice(1) }); additions++; }
-        else if (line.startsWith("-") && !line.startsWith("---")) { currentChunk.lines.push({ type: "del", content: line.slice(1) }); deletions++; }
-        else if (line.startsWith(" ")) currentChunk.lines.push({ type: "ctx", content: line.slice(1) });
+        if (line.startsWith("+") && !line.startsWith("+++")) { currentChunk.lines.push({ type: "add", content: stripAnsi(line.slice(1)) }); additions++; }
+        else if (line.startsWith("-") && !line.startsWith("---")) { currentChunk.lines.push({ type: "del", content: stripAnsi(line.slice(1)) }); deletions++; }
+        else if (line.startsWith(" ")) currentChunk.lines.push({ type: "ctx", content: stripAnsi(line.slice(1)) });
       }
     }
     if (currentChunk) chunks.push(currentChunk);
@@ -49,41 +62,64 @@ function parseDiff(raw: string): DiffFile[] {
 }
 
 // ── Shared diff renderer ──────────────────────────────────────────────────────
-// FIX #3: removed overflow/ellipsis from content span so long lines scroll instead of truncate
 
 function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useTheme>["theme"] }) {
   return (
     <>
       {files.map((file, fi) => (
         <div key={fi}>
-          {file.chunks.map((chunk, ci) => (
-            <div key={ci}>
-              <div style={{
-                padding: "2px 12px",
-                background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
-                color: t.blue, fontSize: 10, fontFamily: "monospace",
-                borderTop: `1px solid ${t.border}`,
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              }}>{chunk.header}</div>
-              {chunk.lines.map((line, li) => (
-                <div key={li} style={{
-                  display: "flex",
-                  background: line.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee") : line.type === "del" ? (t.isDark ? "#2d1117" : "#fff0f0") : "transparent",
-                  borderLeft: `2px solid ${line.type === "add" ? t.green : line.type === "del" ? t.red : "transparent"}`,
-                }}>
-                  <span style={{ color: line.type === "add" ? t.green : line.type === "del" ? t.red : t.label4, fontSize: 11, fontFamily: "monospace", padding: "0 4px", flexShrink: 0, userSelect: "none" }}>
-                    {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-                  </span>
-                  {/* No truncation — parent container scrolls horizontally */}
-                  <span style={{
-                    color: line.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e") : line.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
-                    fontSize: 11, fontFamily: "monospace",
-                    whiteSpace: "pre", paddingRight: 16,
-                  }}>{line.content || " "}</span>
-                </div>
-              ))}
-            </div>
-          ))}
+          {file.chunks.map((chunk, ci) => {
+            const { oldStart, newStart } = parseHunkHeader(chunk.header);
+            let oldLine = oldStart, newLine = newStart;
+            return (
+              <div key={ci}>
+                <div style={{
+                  padding: "2px 8px",
+                  background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
+                  color: t.blue, fontSize: 12, fontFamily: "monospace",
+                  borderTop: `1px solid ${t.border}`,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}>{chunk.header}</div>
+                {chunk.lines.map((line, li) => {
+                  const oln = line.type !== "add" ? oldLine : null;
+                  const nln = line.type !== "del" ? newLine : null;
+                  if (line.type !== "add") oldLine++;
+                  if (line.type !== "del") newLine++;
+                  return (
+                    <div key={li} style={{
+                      display: "flex",
+                      background: line.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee") : line.type === "del" ? (t.isDark ? "#2d1117" : "#fff0f0") : "transparent",
+                      borderLeft: `2px solid ${line.type === "add" ? t.green : line.type === "del" ? t.red : "transparent"}`,
+                    }}>
+                      {/* Old line number */}
+                      <span style={{
+                        width: 38, flexShrink: 0, textAlign: "right" as const,
+                        color: t.label4, fontSize: 12, fontFamily: "monospace",
+                        padding: "0 4px 0 0", userSelect: "none",
+                        borderRight: `1px solid ${t.borderSubtle}`,
+                      }}>{oln ?? ""}</span>
+                      {/* New line number */}
+                      <span style={{
+                        width: 38, flexShrink: 0, textAlign: "right" as const,
+                        color: t.label4, fontSize: 12, fontFamily: "monospace",
+                        padding: "0 6px 0 0", userSelect: "none",
+                        borderRight: `1px solid ${t.borderSubtle}`, marginRight: 4,
+                      }}>{nln ?? ""}</span>
+                      {/* +/- gutter */}
+                      <span style={{ color: line.type === "add" ? t.green : line.type === "del" ? t.red : t.label4, fontSize: 13, fontFamily: "monospace", padding: "0 4px", flexShrink: 0, userSelect: "none" }}>
+                        {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
+                      </span>
+                      <span style={{
+                        color: line.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e") : line.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
+                        fontSize: 13, fontFamily: "monospace",
+                        whiteSpace: "pre", paddingRight: 16,
+                      }}>{line.content || " "}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       ))}
     </>
@@ -124,7 +160,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const { theme: t } = useTheme();
 
   // ── Resize ───────────────────────────────────────────────────────────────────
-  const [drawerWidth, setDrawerWidth] = useState(360);
+  const [drawerWidth, setDrawerWidth] = useState(720);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -149,29 +185,19 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     prNumber ? "branch-diff" : "working-tree"
   );
 
-  // ── File index refs (branch-diff jump-to-file) ───────────────────────────
-  const fileRefs = useRef<Record<number, HTMLDivElement | null>>({});
-
   // ── Branch diff state ─────────────────────────────────────────────────────
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedFiles, setExpandedFiles] = useState<Record<number, boolean>>({});
-  // per-file: true = show all lines, false/absent = compact (first 5 lines)
-  const [fileLineLimits, setFileLineLimits] = useState<Record<number, boolean>>({});
-  // how many files to show in the list
-  const [fileListLimit, setFileListLimit] = useState(6);
+  const [selectedBranchFileIdx, setSelectedBranchFileIdx] = useState<number | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setFiles([]);
-    setExpandedFiles({});
-    setFileLineLimits({});
-    setFileListLimit(6);
+    setSelectedBranchFileIdx(null);
     window.terminal.getPRDiff(repoName, prNumber).then((raw) => {
       const parsed = parseDiff(raw);
       setFiles(parsed);
-      // start all collapsed — user clicks to expand
-      setExpandedFiles({});
+      setSelectedBranchFileIdx(parsed.length > 0 ? 0 : null);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [prNumber, repoName]);
@@ -188,10 +214,14 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const [selectedFile, setSelectedFile] = useState<{ path: string; staged: boolean } | null>(null);
   const [parsedFileDiff, setParsedFileDiff] = useState<DiffFile[]>([]);
   const [fileDiffLoading, setFileDiffLoading] = useState(false);
-  const [fileListHeight, setFileListHeight] = useState<number | null>(null);
-  const fileListDrag = useRef<{ startY: number; startH: number } | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
+
+  // ── Current branch (working-tree mode) ───────────────────────────────────
+  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  useEffect(() => {
+    if (!prNumber) window.terminal.getRepoBranch(repoName).then(setCurrentBranch).catch(() => {});
+  }, [repoName, prNumber]);
 
   // ── Commits tab state ─────────────────────────────────────────────────────
   const [commits, setCommits] = useState<CommitEntry[]>([]);
@@ -238,7 +268,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     setCommits([]);
     setSelectedCommitHash(null);
     setCommitDiff([]);
-    window.terminal.getCommits(repoName, headRefName).then((c) => {
+    window.terminal.getCommits(repoName, headRefName, prNumber).then((c) => {
       setCommits(c);
       setCommitsLoading(false);
     }).catch(() => setCommitsLoading(false));
@@ -285,25 +315,6 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     if (selectedFile && !selectedFile.staged) setSelectedFile(null);
   };
 
-  const onFileListResizeMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const fileListEl = e.currentTarget.previousElementSibling as HTMLElement | null;
-    const currentH = fileListHeight ?? fileListEl?.offsetHeight ?? 160;
-    fileListDrag.current = { startY: e.clientY, startH: currentH };
-    const onMove = (ev: MouseEvent) => {
-      if (!fileListDrag.current) return;
-      const delta = ev.clientY - fileListDrag.current.startY;
-      setFileListHeight(Math.max(80, Math.min(400, fileListDrag.current.startH + delta)));
-    };
-    const onUp = () => {
-      fileListDrag.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
   const handleCommit = async () => {
     if (!commitMsg.trim() || committing) return;
     setCommitting(true);
@@ -320,13 +331,16 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
 
   const hoverBg = t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)";
 
-  // FIX #5: inline JSX instead of a nested component to prevent remount-on-hover
+  const [copiedFilePath, setCopiedFilePath] = useState<string | null>(null);
+
   const renderFileRow = (file: WTFile, isStaged: boolean) => {
     const rowKey = `${isStaged ? "s" : "u"}:${file.path}`;
     const isSelected = selectedFile?.path === file.path && selectedFile?.staged === isStaged;
     const isHov = wtHovered === rowKey;
     const col = statusColor(file.status);
     const selColor = isStaged ? t.green : t.orange;
+    const totalChanges = file.additions + file.deletions;
+    const addPct = totalChanges > 0 ? (file.additions / totalChanges) * 100 : 0;
     return (
       <div
         key={rowKey}
@@ -334,45 +348,103 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         onMouseEnter={() => setWtHovered(rowKey)}
         onMouseLeave={() => setWtHovered(null)}
         style={{
-          display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer",
-          background: isSelected ? `${selColor}12` : isHov ? hoverBg : "transparent",
-          borderLeft: `2px solid ${isSelected ? selColor : "transparent"}`,
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "6px 12px 6px 10px", cursor: "pointer",
+          background: isSelected ? `${selColor}10` : isHov ? hoverBg : "transparent",
+          borderLeft: `3px solid ${isSelected ? selColor : "transparent"}`,
+          transition: "background 0.1s",
         }}
       >
+        {/* Status badge */}
         <span style={{
           fontSize: 9, fontWeight: 700, color: col, background: `${col}18`,
-          border: `1px solid ${col}30`, borderRadius: 3, padding: "0 4px",
-          flexShrink: 0, lineHeight: 1.5, minWidth: 12, textAlign: "center" as const,
+          border: `1px solid ${col}30`, borderRadius: 4, padding: "1px 5px",
+          flexShrink: 0, lineHeight: 1.5, minWidth: 14, textAlign: "center" as const,
         }}>{file.status === "?" ? "A" : file.status}</span>
+
+        {/* Filename + dir */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            color: file.status === "D" ? t.red : t.label1, fontSize: 11,
+            color: file.status === "D" ? t.red : t.label1, fontSize: 11, fontWeight: 500,
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             textDecoration: file.status === "D" ? "line-through" : "none",
+            ...SYS_FONT,
           }}>{file.filename}</div>
           {file.dir && (() => {
             const parts = file.dir.split("/").filter(Boolean);
             const short = parts.length <= 2 ? file.dir : "…/" + parts.slice(-2).join("/");
-            return <div style={{ color: t.label4, fontSize: 9, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{short}/</div>;
+            return (
+              <div style={{
+                color: t.label4, fontSize: 9, fontFamily: "monospace",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{short}/</div>
+            );
           })()}
         </div>
-        {/* FIX #5: hover-reveal stage/unstage button */}
-        {isHov ? (
-          <button
-            onClick={(e) => { e.stopPropagation(); isStaged ? handleUnstageFile(file.path) : handleStageFile(file.path); }}
-            style={{
-              background: isStaged ? t.surface2 : `${t.green}18`,
-              border: `1px solid ${isStaged ? t.border : t.green + "40"}`,
-              borderRadius: 4, color: isStaged ? t.label2 : t.green,
-              cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px", flexShrink: 0,
-            }}
-          >{isStaged ? "Unstage" : "Stage"}</button>
-        ) : (
-          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-            {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{file.additions}</span>}
-            {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>-{file.deletions}</span>}
+
+        {/* Right section: always-visible stats badge + hover actions */}
+        <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, position: "relative" }}>
+          {/* Stats badge — hidden on hover */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 0,
+            opacity: isHov ? 0 : 1, transition: "opacity 0.1s",
+          }}>
+            {totalChanges > 0 && (
+              <span style={{
+                fontSize: 10, fontFamily: "monospace",
+                background: t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
+                border: `1px solid ${t.borderMid}`, borderRadius: 6,
+                padding: "1px 7px", display: "flex", gap: 4,
+              }}>
+                {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
+                {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
+                {file.deletions > 0 && <span style={{ color: t.red }}>-{file.deletions}</span>}
+              </span>
+            )}
+            {/* Mini change bar */}
+            {totalChanges > 0 && (
+              <div style={{
+                display: "flex", width: 32, height: 4, borderRadius: 2,
+                overflow: "hidden", marginLeft: 5,
+                background: t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+              }}>
+                {file.additions > 0 && <div style={{ width: `${addPct}%`, background: t.green }} />}
+                {file.deletions > 0 && <div style={{ flex: 1, background: t.red }} />}
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Hover action buttons — absolutely overlaid */}
+          {isHov && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              {/* Copy path */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(file.path);
+                  setCopiedFilePath(file.path);
+                  setTimeout(() => setCopiedFilePath(null), 1400);
+                }}
+                title="Copy path"
+                style={{
+                  background: t.surface2, border: `1px solid ${t.borderMid}`,
+                  borderRadius: 5, color: copiedFilePath === file.path ? t.green : t.label2,
+                  cursor: "pointer", fontSize: 9, padding: "2px 6px", transition: "all 0.12s",
+                }}
+              >{copiedFilePath === file.path ? "✓" : "⎘"}</button>
+              {/* Stage / Unstage */}
+              <button
+                onClick={(e) => { e.stopPropagation(); isStaged ? handleUnstageFile(file.path) : handleStageFile(file.path); }}
+                style={{
+                  background: isStaged ? t.surface2 : `${t.green}18`,
+                  border: `1px solid ${isStaged ? t.border : t.green + "40"}`,
+                  borderRadius: 5, color: isStaged ? t.label2 : t.green,
+                  cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px",
+                }}
+              >{isStaged ? "Unstage" : "Stage"}</button>
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -516,9 +588,54 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
             >↗</button>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: t.label2, fontSize: 11, fontWeight: 600, ...SYS_FONT }}>{repoName}</span>
-            <span style={{ color: t.label4, fontSize: 9, fontFamily: "monospace" }}>working tree</span>
+          /* Working-tree header: branch + stats + actions */
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {/* Repo + branch pill */}
+            <span style={{ color: t.label1, fontSize: 12, fontWeight: 700, ...SYS_FONT }}>{repoName}</span>
+            {currentBranch && (
+              <span style={{
+                fontSize: 10, fontFamily: "monospace", color: t.red,
+                background: `${t.red}12`, border: `1px solid ${t.red}30`,
+                borderRadius: 10, padding: "0 7px", lineHeight: 1.6,
+              }}>git:{currentBranch}</span>
+            )}
+            {/* File + stat counts */}
+            {totalWtChanges > 0 && (
+              <span style={{
+                fontSize: 10, fontFamily: "monospace", color: t.label3,
+                background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+                border: `1px solid ${t.borderMid}`,
+                borderRadius: 10, padding: "0 7px", lineHeight: 1.6, flexShrink: 0,
+              }}>
+                {totalWtChanges} · {wtStaged.length > 0 || wtUnstaged.length > 0 ? (
+                  <>
+                    <span style={{ color: t.green }}>+{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.additions, 0)}</span>
+                    {" "}
+                    <span style={{ color: t.red }}>-{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.deletions, 0)}</span>
+                  </>
+                ) : null}
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
+            {/* Uncommitted changes pill */}
+            <span style={{
+              fontSize: 9, color: t.orange, ...SYS_FONT, fontWeight: 600,
+              background: `${t.orange}12`, border: `1px solid ${t.orange}28`,
+              borderRadius: 10, padding: "1px 8px", flexShrink: 0,
+            }}>Uncommitted</span>
+            {/* Discard all */}
+            <button
+              onClick={handleDiscardUnstaged}
+              title="Discard all unstaged"
+              style={{
+                background: "none", border: `1px solid ${t.borderMid}`,
+                borderRadius: 6, color: t.label3, cursor: "pointer",
+                fontSize: 10, padding: "1px 7px", flexShrink: 0, ...SYS_FONT,
+                transition: "all 0.13s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = t.red; e.currentTarget.style.borderColor = `${t.red}50`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
+            >↺ Discard all</button>
           </div>
         )}
 
@@ -527,182 +644,145 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       {/* ── Branch diff tab ─────────────────────────────────────────────────── */}
       {activeTab === "branch-diff" && (
         <>
-          <div style={{ flex: 1, overflowY: "auto", overflowX: "auto" }}>
-            {loading && <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Fetching diff…</div>}
-            {!loading && files.length === 0 && (
-              <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11 }}>
-                No diff available.
-                <div style={{ marginTop: 6, fontSize: 10, fontFamily: "monospace" }}>Make sure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
-              </div>
-            )}
-            {!loading && files.length > 0 && (
-              <>
-                {/* Summary row */}
+          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+            {/* ── Left: file list ── */}
+            <div style={{
+              width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
+              display: "flex", flexDirection: "column", overflow: "hidden",
+            }}>
+              {/* Summary strip */}
+              {!loading && files.length > 0 && (
                 <div style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "6px 12px", borderBottom: `1px solid ${t.border}`,
+                  display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
+                  borderBottom: `1px solid ${t.border}`,
                   background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                  flexShrink: 0,
                 }}>
-                  <span style={{ color: t.label2, fontSize: 11, fontWeight: 600 }}>
-                    {files.length} file{files.length !== 1 ? "s" : ""} changed
+                  <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
+                    {files.length} file{files.length !== 1 ? "s" : ""}
                   </span>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>+{totalAdditions}</span>
-                    <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>−{totalDeletions}</span>
-                  </div>
+                  <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{totalAdditions}</span>
+                  <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{totalDeletions}</span>
                 </div>
+              )}
 
-                {/* File list */}
-                {files.slice(0, fileListLimit).map((file, fi) => {
-                  const isExpanded = !!expandedFiles[fi];
-                  const showAllLines = !!fileLineLimits[fi];
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                {loading && (
+                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Fetching diff…</div>
+                )}
+                {!loading && files.length === 0 && (
+                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>
+                    No diff available.
+                    <div style={{ marginTop: 5, fontFamily: "monospace" }}>Ensure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
+                  </div>
+                )}
+                {!loading && files.map((file, fi) => {
+                  const isSelected = fi === selectedBranchFileIdx;
                   const fileName = file.path.split("/").pop() ?? file.path;
-                  const fileDir = file.path.includes("/")
-                    ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-                  const isDeleted = file.status === "D";
-                  const statusColor = file.status === "A" ? t.green
-                    : file.status === "D" ? t.red
-                    : file.status === "M" ? t.orange : t.blue;
-
-                  // Flatten chunks → [{kind:"header"} | {kind:"line"}]
-                  type FlatItem =
-                    | { kind: "header"; content: string }
-                    | { kind: "line"; type: "add" | "del" | "ctx"; content: string };
-                  const flatItems: FlatItem[] = [];
-                  for (const chunk of file.chunks) {
-                    flatItems.push({ kind: "header", content: chunk.header });
-                    for (const line of chunk.lines) flatItems.push({ kind: "line", type: line.type, content: line.content });
-                  }
-                  const totalDiffLines = flatItems.filter(i => i.kind === "line").length;
-                  const LINE_LIMIT = 5;
-                  let linesSeen = 0;
-                  const visible: FlatItem[] = [];
-                  for (const item of flatItems) {
-                    if (!showAllLines && item.kind === "line" && linesSeen >= LINE_LIMIT) break;
-                    visible.push(item);
-                    if (item.kind === "line") linesSeen++;
-                  }
-                  const hiddenLines = totalDiffLines - linesSeen;
-
+                  const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
+                  const statusColor = file.status === "A" ? t.green : file.status === "D" ? t.red : file.status === "M" ? t.orange : t.blue;
                   return (
-                    <div key={fi} ref={(el) => { fileRefs.current[fi] = el; }} style={{ borderBottom: `1px solid ${t.border}` }}>
-                      {/* File row */}
-                      <div
-                        onClick={() => setExpandedFiles((p) => ({ ...p, [fi]: !p[fi] }))}
-                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer" }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = hoverBg)}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      >
-                        <span style={{ color: t.label4, fontSize: 9, width: 8, flexShrink: 0 }}>
-                          {isExpanded ? "▼" : "▶"}
-                        </span>
+                    <div
+                      key={fi}
+                      onClick={() => setSelectedBranchFileIdx(fi)}
+                      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = hoverBg; }}
+                      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+                      style={{
+                        padding: "6px 10px", cursor: "pointer",
+                        background: isSelected ? (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)") : "transparent",
+                        borderLeft: `3px solid ${isSelected ? statusColor : "transparent"}`,
+                        borderBottom: `1px solid ${t.border}`,
+                        transition: "background 0.1s",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
                         <span style={{
                           fontSize: 9, fontWeight: 700, color: statusColor,
                           background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
-                          borderRadius: 3, padding: "0 4px", lineHeight: 1.5,
-                          flexShrink: 0, minWidth: 12, textAlign: "center" as const,
+                          borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
                         }}>{file.status}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{
-                            color: isDeleted ? t.red : t.label1,
-                            fontSize: 11, fontFamily: "monospace",
-                            textDecoration: isDeleted ? "line-through" : "none",
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            display: "block",
-                          }}>{fileName}</span>
-                          {fileDir && (
-                            <span style={{
-                              color: t.label4, fontSize: 9, fontFamily: "monospace",
-                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                              display: "block",
-                            }}>{fileDir}</span>
-                          )}
-                        </div>
-                        <ChangeBar additions={file.additions} deletions={file.deletions} t={t} />
-                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                          {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{file.additions}</span>}
-                          {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{file.deletions}</span>}
-                        </div>
+                        <span style={{
+                          color: file.status === "D" ? t.red : isSelected ? t.label1 : t.label2,
+                          fontSize: 11, fontWeight: isSelected ? 600 : 400,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          textDecoration: file.status === "D" ? "line-through" : "none",
+                          flex: 1, ...SYS_FONT,
+                        }}>{fileName}</span>
                       </div>
-
-                      {/* Inline diff */}
-                      {isExpanded && (
-                        <div style={{ overflowX: "auto" }}>
-                          <div style={{ minWidth: "max-content" }}>
-                            {visible.map((item, idx) =>
-                              item.kind === "header" ? (
-                                <div key={idx} style={{
-                                  padding: "2px 12px",
-                                  background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
-                                  color: t.blue, fontSize: 10, fontFamily: "monospace",
-                                  borderTop: `1px solid ${t.border}`, whiteSpace: "nowrap",
-                                }}>{item.content}</div>
-                              ) : (
-                                <div key={idx} style={{
-                                  display: "flex",
-                                  background: item.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee")
-                                    : item.type === "del" ? (t.isDark ? "#2d1117" : "#fff0f0") : "transparent",
-                                  borderLeft: `2px solid ${item.type === "add" ? t.green : item.type === "del" ? t.red : "transparent"}`,
-                                }}>
-                                  <span style={{
-                                    color: item.type === "add" ? t.green : item.type === "del" ? t.red : t.label4,
-                                    fontSize: 11, fontFamily: "monospace", padding: "0 4px", flexShrink: 0, userSelect: "none",
-                                  }}>{item.type === "add" ? "+" : item.type === "del" ? "−" : " "}</span>
-                                  <span style={{
-                                    color: item.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e")
-                                      : item.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
-                                    fontSize: 11, fontFamily: "monospace",
-                                    whiteSpace: "pre", paddingRight: 16,
-                                  }}>{item.content || " "}</span>
-                                </div>
-                              )
-                            )}
-                            {hiddenLines > 0 && (
-                              <div
-                                onClick={(e) => { e.stopPropagation(); setFileLineLimits((p) => ({ ...p, [fi]: true })); }}
-                                style={{
-                                  padding: "4px 12px", color: t.label4, fontSize: 10,
-                                  cursor: "pointer", fontFamily: "monospace",
-                                  borderTop: `1px solid ${t.border}`,
-                                }}
-                                onMouseEnter={(e) => (e.currentTarget.style.color = t.blue)}
-                                onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                              >↕ show {hiddenLines} more line{hiddenLines !== 1 ? "s" : ""}</div>
-                            )}
-                          </div>
-                        </div>
+                      {fileDir && (
+                        <div style={{
+                          color: t.label4, fontSize: 9, fontFamily: "monospace",
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          marginBottom: 3, paddingLeft: 22,
+                        }}>{fileDir}</div>
                       )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
+                        {(file.additions > 0 || file.deletions > 0) && (
+                          <span style={{ display: "flex", gap: 3, fontSize: 9, fontFamily: "monospace" }}>
+                            {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
+                            {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
+                            {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
+                          </span>
+                        )}
+                        <ChangeBar additions={file.additions} deletions={file.deletions} t={t} />
+                      </div>
                     </div>
                   );
                 })}
+              </div>
 
-                {/* + N more files */}
-                {files.length > fileListLimit && (
-                  <div
-                    onClick={() => setFileListLimit(files.length)}
-                    style={{
-                      padding: "8px 12px", color: t.label4, fontSize: 11, cursor: "pointer",
-                      borderTop: `1px solid ${t.border}`,
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = t.blue)}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                  >+ {files.length - fileListLimit} more file{files.length - fileListLimit !== 1 ? "s" : ""}</div>
-                )}
-              </>
-            )}
-          </div>
-          <div style={{ borderTop: `1px solid ${t.border}`, padding: "8px 12px", flexShrink: 0 }}>
-            <button
-              onClick={() => prUrl && window.terminal.openExternal(prUrl)}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%",
-                background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                border: `1px solid ${t.border}`, borderRadius: 6,
-                color: t.label2, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 0",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.09)"; e.currentTarget.style.color = t.label1; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; }}
-            ><span style={{ fontSize: 12 }}>↗</span> Open in GitHub</button>
+              {/* Open in GitHub button */}
+              <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", flexShrink: 0 }}>
+                <button
+                  onClick={() => prUrl && window.terminal.openExternal(prUrl)}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5, width: "100%",
+                    background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+                    border: `1px solid ${t.border}`, borderRadius: 6,
+                    color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.09)"; e.currentTarget.style.color = t.label1; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; }}
+                >↗ Open in GitHub</button>
+              </div>
+            </div>
+
+            {/* ── Right: diff detail ── */}
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              {selectedBranchFileIdx == null ? (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
+                </div>
+              ) : (() => {
+                const file = files[selectedBranchFileIdx];
+                const fileName = file.path.split("/").pop() ?? file.path;
+                const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
+                return (
+                  <>
+                    {/* File header */}
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 7, padding: "5px 12px",
+                      borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+                      background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                    }}>
+                      {fileDir && (
+                        <span style={{ color: t.label4, fontSize: 10, fontFamily: "monospace" }}>{fileDir}</span>
+                      )}
+                      <span style={{ color: t.label1, fontSize: 11, fontWeight: 600, fontFamily: "monospace" }}>{fileName}</span>
+                      <div style={{ flex: 1 }} />
+                      {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{file.additions}</span>}
+                      {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{file.deletions}</span>}
+                    </div>
+                    {/* Diff content */}
+                    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+                      <div style={{ minWidth: "max-content" }}>
+                        <DiffChunks files={[file]} t={t} />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
           </div>
         </>
       )}
@@ -752,44 +832,42 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           {commit.author} · {commit.date}
                         </div>
                       </div>
-                      {/* Always-rendered right section — keeps row height stable */}
-                      <div style={{ position: "relative", flexShrink: 0 }}>
-                        {/* Hash + stats — always in DOM, hidden on hover */}
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, opacity: isHov ? 0 : 1 }}>
+                      {/* Right: hash chip + copy + stats */}
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, flexShrink: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <span
                             onClick={(e) => {
                               e.stopPropagation();
                               const commitUrl = prUrl?.replace(/\/pull\/\d+.*$/, `/commit/${commit.hash}`);
                               if (commitUrl) window.terminal.openExternal(commitUrl);
                             }}
+                            title="Open commit in GitHub"
                             style={{
                               color: t.blue, fontSize: 9, fontFamily: "monospace",
                               background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
                               borderRadius: 3, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
                             }}
                           >{shortHash}</span>
-                          <div style={{ display: "flex", gap: 3 }}>
-                            {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, fontFamily: "monospace" }}>+{commit.additions}</span>}
-                            {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, fontFamily: "monospace" }}>-{commit.deletions}</span>}
-                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(commit.hash);
+                              setCopiedHash(commit.hash);
+                              if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current);
+                              copiedHashTimer.current = setTimeout(() => setCopiedHash(null), 1500);
+                            }}
+                            title="Copy full commit hash"
+                            style={{
+                              background: t.surface2, border: `1px solid ${t.border}`,
+                              borderRadius: 4, color: isCopied ? t.green : t.label3,
+                              cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
+                            }}
+                          >{isCopied ? "✓" : "⎘"}</button>
                         </div>
-                        {/* Copy button — absolutely overlaid, shown on hover */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigator.clipboard.writeText(commit.hash);
-                            setCopiedHash(commit.hash);
-                            if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current);
-                            copiedHashTimer.current = setTimeout(() => setCopiedHash(null), 1500);
-                          }}
-                          style={{
-                            position: "absolute", inset: 0,
-                            opacity: isHov ? 1 : 0, pointerEvents: isHov ? "auto" : "none",
-                            background: t.surface2, border: `1px solid ${t.border}`,
-                            borderRadius: 4, color: isCopied ? t.green : t.label2,
-                            cursor: "pointer", fontSize: 9, fontWeight: 600,
-                          }}
-                        >{isCopied ? "✓" : "Copy"}</button>
+                        <div style={{ display: "flex", gap: 3 }}>
+                          {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, fontFamily: "monospace" }}>+{commit.additions}</span>}
+                          {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, fontFamily: "monospace" }}>-{commit.deletions}</span>}
+                        </div>
                       </div>
                     </div>
                   );
@@ -797,7 +875,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               </div>
 
               {selectedCommitHash && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", borderTop: `1px solid ${t.border}` }}>
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", borderTop: `1px solid ${t.border}` }}>
                   <div style={{
                     display: "flex", alignItems: "center", gap: 8, padding: "4px 12px",
                     background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
@@ -818,7 +896,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
                     >×</button>
                   </div>
-                  <div style={{ flex: 1, overflowY: "auto", overflowX: "auto" }}>
+                  <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
                     <div style={{ minWidth: "max-content" }}>
                       {commitDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading diff…</div>}
                       {!commitDiffLoading && commitDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
@@ -833,145 +911,127 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       )}
 
       {activeTab === "working-tree" && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {wtLoading && <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading…</div>}
-
-          {!wtLoading && (
-            <>
-              <div style={{
-                flexShrink: 0,
-                overflowY: "auto",
-                height: fileListHeight ?? undefined,
-                minHeight: 80,
-                maxHeight: fileListHeight ? undefined : (selectedFile ? 200 : undefined),
-                flex: fileListHeight ? "none" : (selectedFile ? "none" : 1),
-              }}>
-                {/* FIX #1: always render STAGED section; show empty state when no staged files */}
-                {renderSectionHeader("STAGED", wtStaged.length, "Unstage all", handleUnstageAll, wtStaged.length === 0)}
-                {wtStaged.length === 0 ? (
-                  <div style={{ padding: "8px 14px 6px 14px", color: t.label4, fontSize: 10, fontStyle: "italic" }}>
-                    No staged changes — select files below to stage
-                  </div>
-                ) : (
-                  wtStaged.map((f) => renderFileRow(f, true))
-                )}
-
-                {renderSectionHeader("UNSTAGED", wtUnstaged.length, "Stage all", handleStageAll, wtUnstaged.length === 0)}
-                {wtUnstaged.length === 0 ? (
-                  <div style={{ padding: "8px 14px 6px 14px", color: t.label4, fontSize: 10, fontStyle: "italic" }}>
-                    No unstaged changes
-                  </div>
-                ) : (
-                  wtUnstaged.map((f) => renderFileRow(f, false))
-                )}
-              </div>
-
-              {/* Resize handle between file list and diff preview */}
-              {selectedFile && (
-                <div
-                  onMouseDown={onFileListResizeMouseDown}
-                  style={{
-                    height: 5, flexShrink: 0, cursor: "row-resize", background: "transparent",
-                    borderTop: `1px solid ${t.border}`, borderBottom: `1px solid ${t.border}`,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                />
-              )}
-
-              {/* Diff preview */}
-              {selectedFile && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 8, padding: "4px 12px",
-                    background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
-                    borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                  }}>
-                    <span style={{
-                      fontSize: 9, fontWeight: 600,
-                      color: selectedFile.staged ? t.green : t.orange,
-                      background: selectedFile.staged ? `${t.green}18` : `${t.orange}18`,
-                      border: `1px solid ${selectedFile.staged ? t.green + "30" : t.orange + "30"}`,
-                      borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
-                    }}>{selectedFile.staged ? "staged" : "unstaged"}</span>
-                    <span style={{ flex: 1, color: t.label2, fontSize: 10, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {selectedFile.path.split("/").pop()}
-                    </span>
-                    {(() => {
-                      const f = (selectedFile.staged ? wtStaged : wtUnstaged).find((x) => x.path === selectedFile.path);
-                      return f ? (
-                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                          {f.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{f.additions}</span>}
-                          {f.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>-{f.deletions}</span>}
-                        </div>
-                      ) : null;
-                    })()}
-                    <button
-                      onClick={() => setSelectedFile(null)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1 }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                    >×</button>
-                  </div>
-                  <div style={{ flex: 1, overflowY: "auto", overflowX: "auto" }}>
-                    <div style={{ minWidth: "max-content" }}>
-                      {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading diff…</div>}
-                      {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
-                      {!fileDiffLoading && <DiffChunks files={parsedFileDiff} t={t} />}
+        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+          {/* ── Left: file list + actions ── */}
+          <div style={{
+            width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
+            display: "flex", flexDirection: "column", overflow: "hidden",
+          }}>
+            {wtLoading ? (
+              <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Loading…</div>
+            ) : (
+              <>
+                <div style={{ flex: 1, overflowY: "auto" }}>
+                  {renderSectionHeader("STAGED", wtStaged.length, "Unstage all", handleUnstageAll, wtStaged.length === 0)}
+                  {wtStaged.length === 0 ? (
+                    <div style={{ padding: "7px 10px 6px", color: t.label4, fontSize: 9, fontStyle: "italic" }}>
+                      No staged changes
                     </div>
+                  ) : wtStaged.map((f) => renderFileRow(f, true))}
+
+                  {renderSectionHeader("UNSTAGED", wtUnstaged.length, "Stage all", handleStageAll, wtUnstaged.length === 0)}
+                  {wtUnstaged.length === 0 ? (
+                    <div style={{ padding: "7px 10px 6px", color: t.label4, fontSize: 9, fontStyle: "italic" }}>
+                      No unstaged changes
+                    </div>
+                  ) : wtUnstaged.map((f) => renderFileRow(f, false))}
+                </div>
+
+                {/* Commit area */}
+                {wtStaged.length > 0 && (
+                  <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 5 }}>
+                    <textarea
+                      value={commitMsg}
+                      onChange={(e) => setCommitMsg(e.target.value)}
+                      placeholder="Commit message…"
+                      rows={2}
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCommit(); }}
+                      style={{
+                        width: "100%", boxSizing: "border-box", resize: "none",
+                        background: t.surface2, border: `1px solid ${t.border}`,
+                        borderRadius: 5, color: t.label1, fontSize: 11,
+                        fontFamily: "inherit", padding: "5px 8px", outline: "none",
+                      }}
+                    />
+                    <button
+                      onClick={handleCommit}
+                      disabled={!commitMsg.trim() || committing}
+                      style={{
+                        background: commitMsg.trim() && !committing ? `${t.green}18` : t.surface2,
+                        border: `1px solid ${commitMsg.trim() && !committing ? t.green + "40" : t.border}`,
+                        borderRadius: 5, color: commitMsg.trim() && !committing ? t.green : t.label4,
+                        cursor: commitMsg.trim() && !committing ? "pointer" : "not-allowed",
+                        fontSize: 11, fontWeight: 600, padding: "5px 0", opacity: committing ? 0.6 : 1,
+                      }}
+                    >{committing ? "Committing…" : "Commit staged"}</button>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", display: "flex", gap: 6, flexShrink: 0 }}>
+                  {([
+                    { label: "Stage all", action: handleStageAll, hoverCol: t.green },
+                    { label: "Discard", action: handleDiscardUnstaged, hoverCol: t.red },
+                  ] as const).map(({ label, action, hoverCol }) => (
+                    <button
+                      key={label}
+                      onClick={action}
+                      style={{
+                        flex: 1, background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+                        border: `1px solid ${t.border}`, borderRadius: 6,
+                        color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = `${hoverCol}18`; e.currentTarget.style.color = hoverCol; e.currentTarget.style.borderColor = `${hoverCol}40`; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; e.currentTarget.style.borderColor = t.border; }}
+                    >{label}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ── Right: diff detail ── */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            {!selectedFile ? (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
+              </div>
+            ) : (
+              <>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 7, padding: "5px 12px",
+                  borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                }}>
+                  <span style={{
+                    fontSize: 9, fontWeight: 600,
+                    color: selectedFile.staged ? t.green : t.orange,
+                    background: selectedFile.staged ? `${t.green}18` : `${t.orange}18`,
+                    border: `1px solid ${selectedFile.staged ? t.green + "30" : t.orange + "30"}`,
+                    borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
+                  }}>{selectedFile.staged ? "staged" : "unstaged"}</span>
+                  <span style={{ flex: 1, color: t.label1, fontSize: 11, fontWeight: 600, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {selectedFile.path.split("/").pop()}
+                  </span>
+                  {(() => {
+                    const f = (selectedFile.staged ? wtStaged : wtUnstaged).find((x) => x.path === selectedFile.path);
+                    return f ? (
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        {f.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{f.additions}</span>}
+                        {f.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>-{f.deletions}</span>}
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+                  <div style={{ minWidth: "max-content" }}>
+                    {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading diff…</div>}
+                    {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
+                    {!fileDiffLoading && <DiffChunks files={parsedFileDiff} t={t} />}
                   </div>
                 </div>
-              )}
-            </>
-          )}
-
-          {wtStaged.length > 0 && (
-            <div style={{ borderTop: `1px solid ${t.border}`, padding: "8px 12px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-              <textarea
-                value={commitMsg}
-                onChange={(e) => setCommitMsg(e.target.value)}
-                placeholder="Commit message…"
-                rows={2}
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCommit(); }}
-                style={{
-                  width: "100%", boxSizing: "border-box", resize: "none",
-                  background: t.surface2, border: `1px solid ${t.border}`,
-                  borderRadius: 5, color: t.label1, fontSize: 11,
-                  fontFamily: "inherit",
-                  padding: "5px 8px", outline: "none",
-                }}
-              />
-              <button
-                onClick={handleCommit}
-                disabled={!commitMsg.trim() || committing}
-                style={{
-                  background: commitMsg.trim() && !committing ? `${t.green}18` : t.surface2,
-                  border: `1px solid ${commitMsg.trim() && !committing ? t.green + "40" : t.border}`,
-                  borderRadius: 5, color: commitMsg.trim() && !committing ? t.green : t.label4,
-                  cursor: commitMsg.trim() && !committing ? "pointer" : "not-allowed",
-                  fontSize: 11, fontWeight: 600, padding: "5px 0",
-                  opacity: committing ? 0.6 : 1,
-                }}
-              >{committing ? "Committing…" : "Commit staged"}</button>
-            </div>
-          )}
-          <div style={{ borderTop: `1px solid ${t.border}`, padding: "8px 12px", display: "flex", gap: 8, flexShrink: 0 }}>
-            {([
-              { label: "Stage all changes", action: handleStageAll, hoverCol: t.green },
-              { label: "Discard unstaged", action: handleDiscardUnstaged, hoverCol: t.red },
-            ] as const).map(({ label, action, hoverCol }) => (
-              <button
-                key={label}
-                onClick={action}
-                style={{
-                  flex: 1, background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                  border: `1px solid ${t.border}`, borderRadius: 7,
-                  color: t.label2, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "7px 0",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = `${hoverCol}18`; e.currentTarget.style.color = hoverCol; e.currentTarget.style.borderColor = `${hoverCol}40`; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; e.currentTarget.style.borderColor = t.border; }}
-              >{label}</button>
-            ))}
+              </>
+            )}
           </div>
         </div>
       )}

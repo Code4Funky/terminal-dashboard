@@ -1136,6 +1136,8 @@ interface PRNode {
   reviewDecision: string | null;
   author: { login: string };
   repository: { name: string; nameWithOwner: string };
+  additions?: number;
+  deletions?: number;
 }
 
 ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
@@ -1318,7 +1320,7 @@ ipcMain.handle("prs:list", async (_, pinnedRepoNames: string[]): Promise<PRNode[
     const results = await Promise.all(
       repoInfos.map(({ name, nameWithOwner }) =>
         execAsync(
-          `gh pr list --repo "${nameWithOwner}" --state open --json number,title,url,headRefName,headRefOid,isDraft,createdAt,reviewDecision,author`,
+          `gh pr list --repo "${nameWithOwner}" --state open --json number,title,url,headRefName,headRefOid,isDraft,createdAt,reviewDecision,author,additions,deletions`,
           { env: TOOL_ENV, timeout: 20000 }
         ).then(({ stdout }) => {
           const prs = JSON.parse(stdout) as Omit<PRNode, "repository">[];
@@ -1476,10 +1478,47 @@ ipcMain.handle("git:commit", async (_, repoName: string, message: string) => {
 
 interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; }
 
-ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string): Promise<CommitEntry[]> => {
+ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, prNumber?: number): Promise<CommitEntry[]> => {
   const repoPath = join(githubDir, repoName);
+
+  // Helper: compute numstat additions/deletions for a commit hash from local git
+  const localStats = async (hash: string): Promise<{ additions: number; deletions: number }> => {
+    try {
+      const { stdout } = await execAsync(`git show --numstat --format="" ${hash}`, { cwd: repoPath, env: TOOL_ENV });
+      let additions = 0, deletions = 0;
+      for (const line of stdout.trim().split("\n")) {
+        const cols = line.split("\t");
+        if (cols.length < 2) continue;
+        const a = parseInt(cols[0]), d = parseInt(cols[1]);
+        if (!isNaN(a)) additions += a;
+        if (!isNaN(d)) deletions += d;
+      }
+      return { additions, deletions };
+    } catch { return { additions: 0, deletions: 0 }; }
+  };
+
+  // Primary: use gh pr view when we have a prNumber — works even if branch is deleted
+  if (prNumber) {
+    try {
+      const { stdout } = await execAsync(
+        `gh pr view ${prNumber} --json commits --jq '.commits[] | [.oid, .messageHeadline, (.authors[0].name // ""), .committedDate[0:10], (if (.parents | length) > 1 then "merge" else "" end)] | join("|||")'`,
+        { cwd: repoPath, env: TOOL_ENV }
+      );
+      const commits: CommitEntry[] = [];
+      for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        const parts = line.split("|||");
+        if (parts.length < 4) continue;
+        const [hash, subject, author, date, mergeFlag = ""] = parts;
+        const isMerge = mergeFlag === "merge";
+        const stats = await localStats(hash.trim());
+        commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, ...stats });
+      }
+      if (commits.length > 0) return commits;
+    } catch {}
+  }
+
+  // Fallback: git log (works when branch still exists on remote)
   try {
-    // Fetch the PR branch to ensure we have latest remote state
     await execAsync(`git fetch origin ${headRefName}`, { cwd: repoPath, env: TOOL_ENV }).catch(() => {});
     let base = "origin/main";
     try { await execAsync(`git rev-parse ${base}`, { cwd: repoPath, env: TOOL_ENV }); }

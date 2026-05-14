@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT } from "../theme";
 
@@ -11,12 +11,31 @@ interface Props {
 
 export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: Props) {
   const { theme: t } = useTheme();
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const filtered = query
+    ? repos.filter((r) => r.name.toLowerCase().includes(query.toLowerCase()))
+    : repos;
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { setCursor(0); }, [query]);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(c + 1, filtered.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const repo = filtered[cursor];
+        if (repo) { onOpenInRepo(repo.name); onClose(); }
+      }
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, filtered, cursor]);
 
   const rowStyle: React.CSSProperties = {
     background: t.surface2,
@@ -99,33 +118,73 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
           {/* Repo list */}
           {repos.length > 0 && (
             <>
+              {/* Section label + search */}
               <div style={{
                 color: t.label4, fontSize: 10, letterSpacing: "0.1em",
-                textTransform: "uppercase", padding: "6px 4px 2px", ...SYS_FONT,
+                textTransform: "uppercase", padding: "6px 4px 4px", ...SYS_FONT,
               }}>
                 Open terminal in repo
               </div>
-              <div style={{ maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-                {repos.map((repo) => (
+
+              {/* Search input */}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                background: t.surface2, border: `1px solid ${t.borderMid}`,
+                borderRadius: 8, padding: "7px 10px", marginBottom: 2,
+              }}>
+                <span style={{ fontSize: 13, color: t.label4, lineHeight: 1, flexShrink: 0 }}>⌕</span>
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search repos…"
+                  style={{
+                    flex: 1, background: "none", border: "none", outline: "none",
+                    color: t.label1, fontSize: 12, ...SYS_FONT,
+                  }}
+                />
+                {query && (
                   <button
-                    key={repo.name}
-                    onClick={() => { onOpenInRepo(repo.name); onClose(); }}
-                    style={{ ...rowStyle, padding: "8px 14px" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = t.surface3;
-                      e.currentTarget.style.borderColor = t.borderMid;
+                    onClick={() => setQuery("")}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      color: t.label4, fontSize: 13, padding: 0, lineHeight: 1, flexShrink: 0,
                     }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = t.surface2;
-                      e.currentTarget.style.borderColor = t.borderSubtle;
-                    }}
-                  >
-                    <span style={{ color: t.blue, fontSize: 13, flexShrink: 0 }}>⎇</span>
-                    <span style={{ color: t.label2, fontSize: 12, flex: 1, textAlign: "left", fontFamily: "monospace" }}>
-                      {repo.name}
-                    </span>
-                  </button>
-                ))}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = t.label2)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                  >×</button>
+                )}
+              </div>
+
+              <div style={{ maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                {filtered.length === 0 ? (
+                  <div style={{ padding: "10px 14px", color: t.label4, fontSize: 12, ...SYS_FONT }}>
+                    No repos match "{query}"
+                  </div>
+                ) : (
+                  filtered.map((repo, i) => {
+                    const isSelected = i === cursor;
+                    return (
+                      <button
+                        key={repo.name}
+                        onClick={() => { onOpenInRepo(repo.name); onClose(); }}
+                        onMouseEnter={() => setCursor(i)}
+                        style={{
+                          ...rowStyle, padding: "8px 14px",
+                          background: isSelected
+                            ? t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"
+                            : t.surface2,
+                          borderColor: isSelected ? t.borderMid : t.borderSubtle,
+                        }}
+                      >
+                        <span style={{ color: t.blue, fontSize: 13, flexShrink: 0 }}>⎇</span>
+                        <span style={{ color: t.label2, fontSize: 12, flex: 1, textAlign: "left", fontFamily: "monospace" }}>
+                          {repo.name}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </>
           )}

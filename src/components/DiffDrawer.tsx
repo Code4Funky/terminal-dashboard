@@ -88,7 +88,7 @@ function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useT
                   return (
                     <div key={li} style={{
                       display: "flex",
-                      background: line.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee") : line.type === "del" ? (t.isDark ? "#2d1117" : "#fff0f0") : "transparent",
+                      background: line.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee") : line.type === "del" ? (t.isDark ? `${t.red}28` : "#fff0f0") : "transparent",
                       borderLeft: `2px solid ${line.type === "add" ? t.green : line.type === "del" ? t.red : "transparent"}`,
                     }}>
                       {/* Old line number */}
@@ -112,7 +112,7 @@ function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useT
                       <span style={{
                         color: line.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e") : line.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
                         fontSize: 13, fontFamily: "monospace",
-                        whiteSpace: "pre", paddingRight: 16,
+                        whiteSpace: "pre", paddingRight: 16, flexShrink: 0,
                       }}>{line.content || " "}</span>
                     </div>
                   );
@@ -327,7 +327,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   };
 
   const statusColor = (s: string) =>
-    s === "M" ? t.orange : s === "A" || s === "?" ? t.green : s === "D" ? t.red : t.label3;
+    s === "M" ? t.blue : s === "A" || s === "?" ? t.teal : s === "D" ? t.red : t.label3;
 
   const hoverBg = t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)";
 
@@ -340,7 +340,6 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     const col = statusColor(file.status);
     const selColor = isStaged ? t.green : t.orange;
     const totalChanges = file.additions + file.deletions;
-    const addPct = totalChanges > 0 ? (file.additions / totalChanges) * 100 : 0;
     return (
       <div
         key={rowKey}
@@ -348,8 +347,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         onMouseEnter={() => setWtHovered(rowKey)}
         onMouseLeave={() => setWtHovered(null)}
         style={{
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "6px 12px 6px 10px", cursor: "pointer",
+          display: "flex", alignItems: "flex-start", gap: 8,
+          padding: "5px 12px 5px 10px", cursor: "pointer",
           background: isSelected ? `${selColor}10` : isHov ? hoverBg : "transparent",
           borderLeft: `3px solid ${isSelected ? selColor : "transparent"}`,
           transition: "background 0.1s",
@@ -360,16 +359,50 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           fontSize: 9, fontWeight: 700, color: col, background: `${col}18`,
           border: `1px solid ${col}30`, borderRadius: 4, padding: "1px 5px",
           flexShrink: 0, lineHeight: 1.5, minWidth: 14, textAlign: "center" as const,
+          marginTop: 1,
         }}>{file.status === "?" ? "A" : file.status}</span>
 
-        {/* Filename + dir */}
+        {/* Content column: filename row + dir + stats */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            color: file.status === "D" ? t.red : t.label1, fontSize: 11, fontWeight: 500,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            textDecoration: file.status === "D" ? "line-through" : "none",
-            ...SYS_FONT,
-          }}>{file.filename}</div>
+          {/* Row 1: filename + hover actions */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div style={{
+              flex: 1, minWidth: 0,
+              color: file.status === "D" ? t.red : t.label1, fontSize: 11, fontWeight: 500,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              textDecoration: file.status === "D" ? "line-through" : "none",
+              ...SYS_FONT,
+            }}>{file.filename}</div>
+            {isHov && (
+              <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(file.path);
+                    setCopiedFilePath(file.path);
+                    setTimeout(() => setCopiedFilePath(null), 1400);
+                  }}
+                  title="Copy path"
+                  style={{
+                    background: t.surface2, border: `1px solid ${t.borderMid}`,
+                    borderRadius: 5, color: copiedFilePath === file.path ? t.green : t.label2,
+                    cursor: "pointer", fontSize: 9, padding: "2px 6px", transition: "all 0.12s",
+                  }}
+                >{copiedFilePath === file.path ? "✓" : "⎘"}</button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); isStaged ? handleUnstageFile(file.path) : handleStageFile(file.path); }}
+                  style={{
+                    background: t.surface2,
+                    border: `1px solid ${isStaged ? t.border : t.green + "50"}`,
+                    borderRadius: 5, color: isStaged ? t.label2 : t.green,
+                    cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px",
+                  }}
+                >{isStaged ? "Unstage" : "Stage"}</button>
+              </div>
+            )}
+          </div>
+
+          {/* Row 2: dir path */}
           {file.dir && (() => {
             const parts = file.dir.split("/").filter(Boolean);
             const short = parts.length <= 2 ? file.dir : "…/" + parts.slice(-2).join("/");
@@ -377,71 +410,31 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               <div style={{
                 color: t.label4, fontSize: 9, fontFamily: "monospace",
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                marginTop: 1,
               }}>{short}/</div>
             );
           })()}
-        </div>
 
-        {/* Right section: always-visible stats badge + hover actions */}
-        <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, position: "relative" }}>
-          {/* Stats badge — hidden on hover */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 0,
-            opacity: isHov ? 0 : 1, transition: "opacity 0.1s",
-          }}>
-            {totalChanges > 0 && (
+          {/* Row 3: stats + change bar */}
+          {totalChanges > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3 }}>
               <span style={{
-                fontSize: 10, fontFamily: "monospace",
+                fontSize: 9, fontFamily: "monospace",
                 background: t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
-                border: `1px solid ${t.borderMid}`, borderRadius: 6,
-                padding: "1px 7px", display: "flex", gap: 4,
+                border: `1px solid ${t.borderMid}`, borderRadius: 5,
+                padding: "0 5px", display: "flex", gap: 3, lineHeight: 1.6,
               }}>
                 {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
                 {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
                 {file.deletions > 0 && <span style={{ color: t.red }}>-{file.deletions}</span>}
               </span>
-            )}
-            {/* Mini change bar */}
-            {totalChanges > 0 && (
               <div style={{
-                display: "flex", width: 32, height: 4, borderRadius: 2,
-                overflow: "hidden", marginLeft: 5,
+                display: "flex", width: 36, height: 3, borderRadius: 2, overflow: "hidden",
                 background: t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
               }}>
-                {file.additions > 0 && <div style={{ width: `${addPct}%`, background: t.green }} />}
+                {file.additions > 0 && <div style={{ width: `${(file.additions / totalChanges) * 100}%`, background: t.green }} />}
                 {file.deletions > 0 && <div style={{ flex: 1, background: t.red }} />}
               </div>
-            )}
-          </div>
-
-          {/* Hover action buttons — absolutely overlaid */}
-          {isHov && (
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              {/* Copy path */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigator.clipboard.writeText(file.path);
-                  setCopiedFilePath(file.path);
-                  setTimeout(() => setCopiedFilePath(null), 1400);
-                }}
-                title="Copy path"
-                style={{
-                  background: t.surface2, border: `1px solid ${t.borderMid}`,
-                  borderRadius: 5, color: copiedFilePath === file.path ? t.green : t.label2,
-                  cursor: "pointer", fontSize: 9, padding: "2px 6px", transition: "all 0.12s",
-                }}
-              >{copiedFilePath === file.path ? "✓" : "⎘"}</button>
-              {/* Stage / Unstage */}
-              <button
-                onClick={(e) => { e.stopPropagation(); isStaged ? handleUnstageFile(file.path) : handleStageFile(file.path); }}
-                style={{
-                  background: isStaged ? t.surface2 : `${t.green}18`,
-                  border: `1px solid ${isStaged ? t.border : t.green + "40"}`,
-                  borderRadius: 5, color: isStaged ? t.label2 : t.green,
-                  cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px",
-                }}
-              >{isStaged ? "Unstage" : "Stage"}</button>
             </div>
           )}
         </div>
@@ -457,18 +450,19 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     }}>
       <span style={{ color: t.label4, fontSize: 9, letterSpacing: "0.06em", fontWeight: 700, flex: 1 }}>{label}</span>
       <span style={{ color: t.label4, fontSize: 9, marginRight: 8 }}>{count} file{count !== 1 ? "s" : ""}</span>
-      <button
-        onClick={disabled ? undefined : onAction}
-        disabled={disabled}
-        style={{
-          background: t.surface2, border: `1px solid ${t.border}`,
-          borderRadius: 5, color: disabled ? t.label4 : t.label2,
-          cursor: disabled ? "not-allowed" : "pointer",
-          fontSize: 9, fontWeight: 600, padding: "2px 8px", opacity: disabled ? 0.45 : 1,
-        }}
-        onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.color = t.label1; }}
-        onMouseLeave={(e) => { if (!disabled) e.currentTarget.style.color = t.label2; }}
-      >{actionLabel}</button>
+      {!disabled && (
+        <button
+          onClick={onAction}
+          style={{
+            background: t.surface2, border: `1px solid ${t.border}`,
+            borderRadius: 5, color: t.label2,
+            cursor: "pointer",
+            fontSize: 9, fontWeight: 600, padding: "2px 8px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = t.label2; }}
+        >{actionLabel}</button>
+      )}
     </div>
   );
 
@@ -680,7 +674,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   const isSelected = fi === selectedBranchFileIdx;
                   const fileName = file.path.split("/").pop() ?? file.path;
                   const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-                  const statusColor = file.status === "A" ? t.green : file.status === "D" ? t.red : file.status === "M" ? t.orange : t.blue;
+                  const statusColor = file.status === "A" ? t.teal : file.status === "D" ? t.red : file.status === "M" ? t.blue : t.label3;
                   return (
                     <div
                       key={fi}
@@ -921,7 +915,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Loading…</div>
             ) : (
               <>
-                <div style={{ flex: 1, overflowY: "auto" }}>
+                <div style={{ flex: 1, overflowY: "auto" }} onMouseLeave={() => setWtHovered(null)}>
                   {renderSectionHeader("STAGED", wtStaged.length, "Unstage all", handleUnstageAll, wtStaged.length === 0)}
                   {wtStaged.length === 0 ? (
                     <div style={{ padding: "7px 10px 6px", color: t.label4, fontSize: 9, fontStyle: "italic" }}>

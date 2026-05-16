@@ -159,6 +159,7 @@ export function RepoSidebar({
   const [addRepoError, setAddRepoError] = useState("");
   const [addRepoDoneName, setAddRepoDoneName] = useState("");
   const [showNoPRRepos, setShowNoPRRepos] = useState(() => pinnedRepos.size === 0);
+  const [repoSearch, setRepoSearch] = useState("");
   const addRepoUrlRef = useRef<HTMLInputElement>(null);
   const progressRef = useRef<HTMLPreElement>(null);
 
@@ -595,6 +596,32 @@ export function RepoSidebar({
           >+</button>
         </div>
 
+        {/* Repo filter */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 5,
+          margin: "0 10px 6px", padding: "3px 8px",
+          background: t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)",
+          border: `1px solid ${t.borderSubtle}`, borderRadius: 6, flexShrink: 0,
+        }}>
+          <span style={{ color: t.label4, fontSize: 10, lineHeight: 1 }}>⌕</span>
+          <input
+            value={repoSearch}
+            onChange={(e) => setRepoSearch(e.target.value)}
+            placeholder="Filter repos…"
+            style={{
+              flex: 1, background: "none", border: "none", outline: "none",
+              color: t.label1, fontSize: 11,
+              fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+            }}
+          />
+          {repoSearch && (
+            <button
+              onClick={() => setRepoSearch("")}
+              style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 12, padding: 0, lineHeight: 1 }}
+            >×</button>
+          )}
+        </div>
+
         {/* Add repository modal */}
         {showAddRepo && (
           <div
@@ -728,6 +755,7 @@ export function RepoSidebar({
           )}
 
           {!loading && Object.entries(byRepo)
+            .filter(([repoFullName]) => !repoSearch || (repoFullName.split("/").pop() ?? repoFullName).toLowerCase().includes(repoSearch.toLowerCase()))
             .sort((a, b) => {
               const aName = a[0].split("/").pop() ?? a[0];
               const bName = b[0].split("/").pop() ?? b[0];
@@ -1100,6 +1128,7 @@ export function RepoSidebar({
           {(() => {
             const noPRRepos = allLocalRepos
               .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
+              .filter(name => !repoSearch || name.toLowerCase().includes(repoSearch.toLowerCase()))
               .sort((a, b) => {
                 const aPinned = pinnedRepos.has(a);
                 const bPinned = pinnedRepos.has(b);
@@ -1245,7 +1274,9 @@ export function RepoSidebar({
 
           {/* Disclosure toggle for repos with no PRs */}
           {(() => {
-            const noPRRepos = allLocalRepos.filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name));
+            const noPRRepos = allLocalRepos
+              .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
+              .filter(name => !repoSearch || name.toLowerCase().includes(repoSearch.toLowerCase()));
             const unpinnedNoPR = noPRRepos.filter(n => !pinnedRepos.has(n));
             if (unpinnedNoPR.length === 0) return null;
             return (

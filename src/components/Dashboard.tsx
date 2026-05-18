@@ -9,6 +9,7 @@ import { KBChatDrawer } from "./KBChatDrawer";
 import { RepoSidebar, SelectedPR, TerminalTab } from "./RepoSidebar";
 import { NewTerminalModal } from "./NewTerminalModal";
 import { DiffDrawer } from "./DiffDrawer";
+import { FileTreeDrawer } from "./FileTreeModal";
 import { SessionSwitcher } from "./SessionSwitcher";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT } from "../theme";
@@ -70,6 +71,28 @@ export function Dashboard() {
   const [activePanel, setActivePanel] = useState<SidePanel | null>(null);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
   const [selectedRepoTree, setSelectedRepoTree] = useState<string | null>(null);
+  const [fileBrowseRepo, setFileBrowseRepo] = useState<string | null>(null);
+  const [fileTreeLinked, setFileTreeLinked] = useState(true);
+
+  const FIXED_W = 240 + 48; // RepoSidebar + icon rail
+  const balancedThird = () => Math.floor((window.innerWidth - FIXED_W) / 3);
+  const [diffWidth, setDiffWidth] = useState<number>(() => Number(localStorage.getItem("tdash:diff-width")) || Math.floor((window.innerWidth - FIXED_W) * 0.4));
+  const [fileTreeWidth, setFileTreeWidth] = useState<number>(() => Number(localStorage.getItem("tdash:file-tree-width")) || Math.floor((window.innerWidth - FIXED_W) * 0.28));
+
+  const diffOpen = !!(selectedPR || selectedRepoTree);
+  const fileTreeOpen = !!fileBrowseRepo;
+  const prevBothOpen = useRef(false);
+
+  // Balance to equal thirds on the false→true transition (second panel just opened)
+  useEffect(() => {
+    const bothOpen = diffOpen && fileTreeOpen;
+    if (bothOpen && !prevBothOpen.current) {
+      const b = balancedThird();
+      setDiffWidth(b);
+      setFileTreeWidth(b);
+    }
+    prevBothOpen.current = bothOpen;
+  }, [diffOpen, fileTreeOpen]);
   const [showModal, setShowModal] = useState(false);
   const [modalRepos, setModalRepos] = useState<{ name: string }[]>([]);
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
@@ -134,6 +157,25 @@ export function Dashboard() {
     });
     return cleanup;
   }, []);
+
+  const focusedPanel = panels.find((p) => p.id === focusedId);
+  const focusedRepo = focusedPanel?.cwd?.match(/\/Documents\/GitHub\/([^/]+)/)?.[1] ?? null;
+
+  // Always-current ref — read inside effects without adding to deps
+  const diffOpenRef = useRef(diffOpen);
+  diffOpenRef.current = diffOpen;
+
+  useEffect(() => {
+    if (!fileTreeLinked || !focusedRepo) return;
+    setFileBrowseRepo((prev) => (prev !== null ? focusedRepo : prev));
+  }, [focusedRepo, fileTreeLinked]);
+
+  // When focused terminal navigates to a different repo, track it in the Git panel (only if already open)
+  useEffect(() => {
+    if (!focusedRepo || !diffOpenRef.current) return;
+    setSelectedRepoTree(focusedRepo);
+    setSelectedPR(null);
+  }, [focusedRepo]);
 
   useEffect(() => {
     const cleanup = window.terminal.onNewPanel((sessionId, number) => {
@@ -274,8 +316,30 @@ export function Dashboard() {
         if (e.key === "t") { e.preventDefault(); handleAddPanel(); return; }
         if (e.key === "k") { e.preventDefault(); setShowSwitcher((v) => !v); return; }
         if (e.key === "\\") { e.preventDefault(); setZenMode((v) => !v); return; }
+        const digit = parseInt(e.key);
+        if (digit >= 1 && digit <= 9 && panels[digit - 1]) {
+          e.preventDefault();
+          const target = panels[digit - 1];
+          setFocusedId(target.id);
+          window.terminal.setFocused(target.sessionId);
+          return;
+        }
       }
       if (e.metaKey && e.shiftKey && !e.altKey) {
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          const idx = panels.findIndex((p) => p.id === focusedId);
+          const prev = panels[(idx - 1 + panels.length) % panels.length];
+          if (prev) { setFocusedId(prev.id); window.terminal.setFocused(prev.sessionId); }
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const idx = panels.findIndex((p) => p.id === focusedId);
+          const next = panels[(idx + 1) % panels.length];
+          if (next) { setFocusedId(next.id); window.terminal.setFocused(next.sessionId); }
+          return;
+        }
         if (e.key === "k") {
           e.preventDefault();
           if (activePanel !== "kb-chat") {
@@ -506,6 +570,11 @@ export function Dashboard() {
             onRunClaudeAction={(repo, branch, cmd) => { handleRunClaudeAction(repo, branch, cmd); }}
             onReposLoaded={setModalRepos}
             onCheckoutBranch={(repoName, branch) => { window.terminal.writeToFocusedTerminal(`cd ~/Documents/GitHub/${repoName} && git checkout ${branch}\n`); }}
+            onBrowseFiles={(name) => {
+              if (fileBrowseRepo === name) { setFileBrowseRepo(null); return; }
+              setFileTreeLinked(false);
+              setFileBrowseRepo(name);
+            }}
           />
         )}
         <div style={{
@@ -562,6 +631,18 @@ export function Dashboard() {
           </KBChatErrorBoundary>
         )}
 
+        {!zenMode && fileBrowseRepo && (
+          <FileTreeDrawer
+            repoName={fileBrowseRepo}
+            onClose={() => setFileBrowseRepo(null)}
+            linked={fileTreeLinked}
+            onToggleLink={() => setFileTreeLinked((v) => !v)}
+            allRepos={modalRepos.map((r) => r.name)}
+            width={fileTreeWidth}
+            onWidthChange={(w) => { setFileTreeWidth(w); localStorage.setItem("tdash:file-tree-width", String(w)); }}
+          />
+        )}
+
         {!zenMode && (selectedPR || selectedRepoTree) && (
           <DiffDrawer
             repoName={selectedPR?.repoName ?? selectedRepoTree!}
@@ -570,6 +651,8 @@ export function Dashboard() {
             prUrl={selectedPR?.prUrl}
             headRefName={selectedPR?.branch}
             onClose={() => { setSelectedPR(null); setSelectedRepoTree(null); }}
+            width={diffWidth}
+            onWidthChange={(w) => { setDiffWidth(w); localStorage.setItem("tdash:diff-width", String(w)); }}
           />
         )}
 
@@ -623,6 +706,49 @@ export function Dashboard() {
                 </button>
               );
             })}
+            <div style={{ height: 1, width: 20, background: t.border, margin: "2px 0" }} />
+            {([
+              {
+                active: fileBrowseRepo !== null,
+                icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>,
+                shortLabel: "Files", color: t.blue, label: "Files",
+                onClick: () => {
+                  if (fileBrowseRepo) { setFileBrowseRepo(null); return; }
+                  if (focusedRepo) { setFileBrowseRepo(focusedRepo); setFileTreeLinked(true); }
+                },
+              },
+              {
+                active: selectedRepoTree !== null || selectedPR !== null,
+                icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>,
+                shortLabel: "Git", color: t.red, label: "Git",
+                onClick: () => {
+                  if (selectedRepoTree || selectedPR) { setSelectedRepoTree(null); setSelectedPR(null); return; }
+                  if (focusedRepo) { setSelectedRepoTree(focusedRepo); setSelectedPR(null); }
+                },
+              },
+            ] as { active: boolean; icon: React.ReactNode; shortLabel: string; color: string; label: string; onClick: () => void }[]).map(({ active, icon, shortLabel, color, label, onClick }) => (
+              <button
+                key={shortLabel}
+                onClick={onClick}
+                title={label}
+                style={{
+                  width: 36, height: 44,
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                  gap: 1,
+                  background: active ? `${color}18` : "none",
+                  border: `1px solid ${active ? color + "40" : "transparent"}`,
+                  borderRadius: 8,
+                  color: active ? color : t.label3,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; } }}
+                onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; } }}
+              >
+                <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
+                <span style={{ fontSize: 7, letterSpacing: 0.2, fontWeight: active ? 700 : 400, ...SYS_FONT }}>{shortLabel}</span>
+              </button>
+            ))}
             <div style={{ flex: 1 }} />
             <button
               onClick={() => setZenMode((v) => !v)}

@@ -1302,6 +1302,13 @@ ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: 
   }
 });
 
+ipcMain.handle("gh:current-user", async (): Promise<string | null> => {
+  try {
+    const { stdout } = await execAsync("gh api user --jq .login", { env: TOOL_ENV, timeout: 8000 });
+    return stdout.trim() || null;
+  } catch { return null; }
+});
+
 ipcMain.handle("prs:list", async (_, pinnedRepoNames: string[]): Promise<PRNode[]> => {
   try {
     if (!pinnedRepoNames || pinnedRepoNames.length === 0) return [];
@@ -1359,6 +1366,88 @@ ipcMain.handle("ci:get-status", async (_, repoNameWithOwner: string, prNumber: n
 
 ipcMain.handle("shell:open-external", (_, url: string) => {
   shell.openExternal(url);
+});
+
+ipcMain.handle("shell:open-folder", (_, repoName: string) => {
+  shell.openPath(join(githubDir, repoName));
+});
+
+const TREE_HIDDEN = new Set(["node_modules", "out", "build", "dist", ".gradle", ".cache", ".next", ".nuxt", "__pycache__", ".turbo", ".DS_Store"]);
+
+ipcMain.handle("repo:list-dir", async (_, repoName: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> => {
+  try {
+    const base = join(githubDir, repoName, subdir);
+    const entries = await fs.promises.readdir(base, { withFileTypes: true });
+    return entries
+      .filter((e) => e.name !== ".git" && !TREE_HIDDEN.has(e.name))
+      .map((e) => ({
+        name: e.name,
+        isDir: e.isDirectory(),
+        path: subdir ? `${subdir}/${e.name}` : e.name,
+      }))
+      .sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  } catch {
+    return [];
+  }
+});
+
+async function walkDir(dir: string, base: string, results: string[] = []): Promise<string[]> {
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return results; }
+  for (const e of entries) {
+    if (e.name === ".git" || TREE_HIDDEN.has(e.name)) continue;
+    const rel = base ? `${base}/${e.name}` : e.name;
+    if (e.isDirectory()) await walkDir(join(dir, e.name), rel, results);
+    else results.push(rel);
+  }
+  return results;
+}
+
+ipcMain.handle("repo:list-files", async (_, repoName: string): Promise<string[]> => {
+  try {
+    return await walkDir(join(githubDir, repoName), "");
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("repo:grep-files", async (_, repoName: string, query: string): Promise<string[]> => {
+  try {
+    const repoPath = join(githubDir, repoName);
+    const excludes = [".git", ...TREE_HIDDEN].map((d) => `--exclude-dir=${d}`).join(" ");
+    const { stdout } = await execAsync(`grep -ril ${excludes} ${JSON.stringify(query)} .`, { cwd: repoPath, env: TOOL_ENV });
+    return stdout.trim().split("\n").map((f) => f.replace(/^\.\//, "")).filter(Boolean);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("repo:open-file", (_, repoName: string, filePath: string) => {
+  shell.openPath(join(githubDir, repoName, filePath));
+});
+
+ipcMain.handle("repo:read-file", async (_, repoName: string, filePath: string): Promise<string> => {
+  try {
+    return fs.readFileSync(join(githubDir, repoName, filePath), "utf8");
+  } catch {
+    return "";
+  }
+});
+
+ipcMain.handle("repo:open-in-editor", (_, repoName: string, filePath: string, editor: string) => {
+  const fullPath = join(githubDir, repoName, filePath);
+  const appName = editor === "cursor" ? "Cursor" : "Visual Studio Code";
+  const proc = spawn("/usr/bin/open", ["-a", appName, fullPath]);
+  proc.on("error", (e) => console.error("[open-in-editor] spawn error:", e));
+  proc.on("close", (code) => { if (code !== 0) console.error("[open-in-editor] exit", code); });
+  proc.unref();
+});
+
+ipcMain.handle("repo:show-in-finder", (_, repoName: string, filePath: string) => {
+  shell.showItemInFolder(join(githubDir, repoName, filePath));
 });
 
 ipcMain.handle("git:current-branch", async (_, repoName: string): Promise<string | null> => {
@@ -1476,7 +1565,7 @@ ipcMain.handle("git:commit", async (_, repoName: string, message: string) => {
   await execAsync(`git commit -m ${JSON.stringify(message)}`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
 });
 
-interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; }
+interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; isLocal: boolean; }
 
 ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, prNumber?: number): Promise<CommitEntry[]> => {
   const repoPath = join(githubDir, repoName);
@@ -1497,6 +1586,18 @@ ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, p
     } catch { return { additions: 0, deletions: 0 }; }
   };
 
+  // If no prNumber given, try to find one via gh pr list for this branch
+  if (!prNumber && headRefName) {
+    try {
+      const { stdout } = await execAsync(
+        `gh pr list --head "${headRefName}" --json number --jq '.[0].number'`,
+        { cwd: repoPath, env: TOOL_ENV }
+      );
+      const n = parseInt(stdout.trim(), 10);
+      if (!isNaN(n)) prNumber = n;
+    } catch {}
+  }
+
   // Primary: use gh pr view when we have a prNumber — works even if branch is deleted
   if (prNumber) {
     try {
@@ -1511,7 +1612,7 @@ ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, p
         const [hash, subject, author, date, mergeFlag = ""] = parts;
         const isMerge = mergeFlag === "merge";
         const stats = await localStats(hash.trim());
-        commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, ...stats });
+        commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, isLocal: false, ...stats });
       }
       if (commits.length > 0) return commits;
     } catch {}
@@ -1521,16 +1622,31 @@ ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, p
   try {
     await execAsync(`git fetch origin ${headRefName}`, { cwd: repoPath, env: TOOL_ENV }).catch(() => {});
     let base = "origin/main";
-    try { await execAsync(`git rev-parse ${base}`, { cwd: repoPath, env: TOOL_ENV }); }
-    catch { base = "origin/master"; }
-    const head = `origin/${headRefName}`;
+    try {
+      const { stdout: symRef } = await execAsync(`git symbolic-ref refs/remotes/origin/HEAD`, { cwd: repoPath, env: TOOL_ENV });
+      base = symRef.trim().replace("refs/remotes/", "");
+    } catch {
+      for (const candidate of ["origin/main", "origin/master"]) {
+        try { await execAsync(`git rev-parse ${candidate}`, { cwd: repoPath, env: TOOL_ENV }); base = candidate; break; } catch {}
+      }
+    }
+    const defaultBranchName = base.replace("origin/", "");
+    const isDefaultBranch = headRefName === defaultBranchName;
+    const range = isDefaultBranch ? `-50 ${headRefName}` : `${base}..${headRefName}`;
     const SEP = "|||GS|||";
+    let rawOut = "";
     const { stdout } = await execAsync(
-      `git log --numstat --pretty=tformat:"${SEP}%H|||%s|||%an|||%ad|||%P" --date=short ${base}..${head}`,
+      `git log --numstat --pretty=tformat:"${SEP}%H|||%s|||%an|||%ad|||%P" --date=short ${range}`,
       { cwd: repoPath, env: TOOL_ENV }
     );
+    rawOut = stdout;
+    const pushedHashes = new Set<string>();
+    try {
+      const { stdout: pushed } = await execAsync(`git log origin/${headRefName} --format=%H`, { cwd: repoPath, env: TOOL_ENV });
+      for (const h of pushed.trim().split("\n").filter(Boolean)) pushedHashes.add(h.trim());
+    } catch {}
     const commits: CommitEntry[] = [];
-    for (const chunk of stdout.split(SEP).filter(Boolean)) {
+    for (const chunk of rawOut.split(SEP).filter(Boolean)) {
       const lines = chunk.trim().split("\n");
       const parts = lines[0].split("|||");
       if (parts.length < 4) continue;
@@ -1543,7 +1659,7 @@ ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, p
         const a = parseInt(cols[0]), d = parseInt(cols[1]);
         if (!isNaN(a) && !isNaN(d)) { additions += a; deletions += d; }
       }
-      commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, additions, deletions });
+      commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, additions, deletions, isLocal: !pushedHashes.has(hash.trim()) });
     }
     return commits;
   } catch { return []; }

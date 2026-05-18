@@ -167,6 +167,9 @@ contextBridge.exposeInMainWorld("terminal", {
     deletions?: number;
   }[]> => ipcRenderer.invoke("prs:list", pinnedRepoNames),
 
+  getGhLogin: (): Promise<string | null> =>
+    ipcRenderer.invoke("gh:current-user"),
+
   getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
     ipcRenderer.invoke("prs:get-diff", repoName, prNumber),
 
@@ -183,6 +186,30 @@ contextBridge.exposeInMainWorld("terminal", {
 
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
+
+  openFolder: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("shell:open-folder", repoName),
+
+  listDir: (repoName: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> =>
+    ipcRenderer.invoke("repo:list-dir", repoName, subdir),
+
+  listFiles: (repoName: string): Promise<string[]> =>
+    ipcRenderer.invoke("repo:list-files", repoName),
+
+  grepFiles: (repoName: string, query: string): Promise<string[]> =>
+    ipcRenderer.invoke("repo:grep-files", repoName, query),
+
+  openRepoFile: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-file", repoName, filePath),
+
+  readRepoFile: (repoName: string, filePath: string): Promise<string> =>
+    ipcRenderer.invoke("repo:read-file", repoName, filePath),
+
+  openInEditor: (repoName: string, filePath: string, editor: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-in-editor", repoName, filePath, editor),
+
+  showInFinder: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:show-in-finder", repoName, filePath),
 
   getRepoBranch: (repoName: string): Promise<string | null> =>
     ipcRenderer.invoke("git:current-branch", repoName),

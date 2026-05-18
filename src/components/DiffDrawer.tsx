@@ -13,7 +13,7 @@ interface WTFile {
   status: string; additions: number; deletions: number;
 }
 
-interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; }
+interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; isLocal: boolean; }
 
 // ── ANSI escape code stripper ─────────────────────────────────────────────────
 
@@ -152,15 +152,18 @@ interface Props {
   prTitle?: string;
   prUrl?: string;
   headRefName?: string;
+  width?: number;
+  onWidthChange?: (w: number) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, onClose }: Props) {
+export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, onClose, width: controlledWidth, onWidthChange }: Props) {
   const { theme: t } = useTheme();
 
   // ── Resize ───────────────────────────────────────────────────────────────────
-  const [drawerWidth, setDrawerWidth] = useState(720);
+  const [internalWidth, setInternalWidth] = useState(controlledWidth ?? 720);
+  const drawerWidth = controlledWidth ?? internalWidth;
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -169,7 +172,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     const onMove = (ev: MouseEvent) => {
       if (!dragState.current) return;
       const delta = dragState.current.startX - ev.clientX;
-      setDrawerWidth(Math.max(280, Math.min(900, dragState.current.startWidth + delta)));
+      const w = Math.max(280, Math.min(900, dragState.current.startWidth + delta));
+      if (controlledWidth !== undefined) { onWidthChange?.(w); } else { setInternalWidth(w); }
     };
     const onUp = () => {
       dragState.current = null;
@@ -222,6 +226,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   useEffect(() => {
     if (!prNumber) window.terminal.getRepoBranch(repoName).then(setCurrentBranch).catch(() => {});
   }, [repoName, prNumber]);
+  const effectiveBranch = headRefName ?? currentBranch ?? undefined;
 
   // ── Commits tab state ─────────────────────────────────────────────────────
   const [commits, setCommits] = useState<CommitEntry[]>([]);
@@ -233,6 +238,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const copiedHashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitsLoadedFor = useRef<string | null>(null);
+  const [selectedCommitFileIdx, setSelectedCommitFileIdx] = useState<number | null>(null);
 
   useEffect(() => () => { if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current); }, []);
 
@@ -260,24 +266,25 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   }, [selectedFile?.path, selectedFile?.staged]);
 
   useEffect(() => {
-    if (activeTab !== "commits") return;
-    const key = `${repoName}/${headRefName}`;
-    if (commitsLoadedFor.current === key) return; // already loaded for this PR
+    if (activeTab !== "commits" || !effectiveBranch) return;
+    const key = `${repoName}/${effectiveBranch}`;
+    if (commitsLoadedFor.current === key) return;
     commitsLoadedFor.current = key;
     setCommitsLoading(true);
     setCommits([]);
     setSelectedCommitHash(null);
     setCommitDiff([]);
-    window.terminal.getCommits(repoName, headRefName, prNumber).then((c) => {
+    window.terminal.getCommits(repoName, effectiveBranch, prNumber).then((c) => {
       setCommits(c);
       setCommitsLoading(false);
     }).catch(() => setCommitsLoading(false));
-  }, [activeTab, repoName, headRefName]);
+  }, [activeTab, repoName, effectiveBranch]);
 
   useEffect(() => {
     if (!selectedCommitHash) return;
     setCommitDiffLoading(true);
     setCommitDiff([]);
+    setSelectedCommitFileIdx(null);
     window.terminal.getCommitDiff(repoName, selectedCommitHash).then((raw) => {
       setCommitDiff(parseDiff(raw));
       setCommitDiffLoading(false);
@@ -528,7 +535,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         {/* Tab bar */}
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
           {(["branch-diff", "working-tree", "commits"] as const)
-            .filter((tab) => prNumber || tab === "working-tree")
+            .filter((tab) => tab === "branch-diff" ? !!prNumber : tab === "commits" ? !!effectiveBranch : true)
             .map((tab) => {
             const isActive = activeTab === tab;
             const label = tab === "branch-diff" ? "Branch diff" : tab === "working-tree" ? "Working tree" : "Commits";
@@ -611,25 +618,29 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               </span>
             )}
             <div style={{ flex: 1 }} />
-            {/* Uncommitted changes pill */}
-            <span style={{
-              fontSize: 9, color: t.orange, ...SYS_FONT, fontWeight: 600,
-              background: `${t.orange}12`, border: `1px solid ${t.orange}28`,
-              borderRadius: 10, padding: "1px 8px", flexShrink: 0,
-            }}>Uncommitted</span>
-            {/* Discard all */}
-            <button
-              onClick={handleDiscardUnstaged}
-              title="Discard all unstaged"
-              style={{
-                background: "none", border: `1px solid ${t.borderMid}`,
-                borderRadius: 6, color: t.label3, cursor: "pointer",
-                fontSize: 10, padding: "1px 7px", flexShrink: 0, ...SYS_FONT,
-                transition: "all 0.13s",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = t.red; e.currentTarget.style.borderColor = `${t.red}50`; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
-            >↺ Discard all</button>
+            {activeTab !== "commits" && (
+              <>
+                {/* Uncommitted changes pill */}
+                <span style={{
+                  fontSize: 9, color: t.orange, ...SYS_FONT, fontWeight: 600,
+                  background: `${t.orange}12`, border: `1px solid ${t.orange}28`,
+                  borderRadius: 10, padding: "1px 8px", flexShrink: 0,
+                }}>Uncommitted</span>
+                {/* Discard all */}
+                <button
+                  onClick={handleDiscardUnstaged}
+                  title="Discard all unstaged"
+                  style={{
+                    background: "none", border: `1px solid ${t.borderMid}`,
+                    borderRadius: 6, color: t.label3, cursor: "pointer",
+                    fontSize: 10, padding: "1px 7px", flexShrink: 0, ...SYS_FONT,
+                    transition: "all 0.13s",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = t.red; e.currentTarget.style.borderColor = `${t.red}50`; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
+                >↺ Discard all</button>
+              </>
+            )}
           </div>
         )}
 
@@ -789,118 +800,283 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           {!commitsLoading && commits.length === 0 && (
             <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11 }}>No commits found on this branch.</div>
           )}
-          {!commitsLoading && commits.length > 0 && (
-            <>
-              <div style={{
-                flexShrink: 0, overflowY: "auto",
-                flex: selectedCommitHash ? "none" : 1,
-                maxHeight: selectedCommitHash ? 240 : undefined,
-              }}>
-                {commits.map((commit, i) => {
-                  const isBase = i === commits.length - 1;
-                  const dotColor = commit.isMerge ? t.purple : isBase ? t.label4 : t.green;
-                  const isSelected = selectedCommitHash === commit.hash;
-                  const isHov = hoveredCommitHash === commit.hash;
-                  const isCopied = copiedHash === commit.hash;
-                  const shortHash = commit.hash.slice(0, 7);
-                  return (
-                    <div
-                      key={commit.hash}
-                      onClick={() => setSelectedCommitHash(commit.hash)}
-                      onMouseEnter={() => setHoveredCommitHash(commit.hash)}
-                      onMouseLeave={() => setHoveredCommitHash(null)}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
-                        cursor: "pointer",
-                        background: isSelected ? `${t.green}10` : isHov ? hoverBg : "transparent",
-                        borderLeft: `2px solid ${isSelected ? t.green : "transparent"}`,
-                        borderBottom: `1px solid ${t.border}`,
-                      }}
-                    >
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ color: t.label1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {commit.subject}
-                        </div>
-                        <div style={{ color: t.label4, fontSize: 9, fontFamily: "monospace" }}>
-                          {commit.author} · {commit.date}
-                        </div>
-                      </div>
-                      {/* Right: hash chip + copy + stats */}
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, flexShrink: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <span
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const commitUrl = prUrl?.replace(/\/pull\/\d+.*$/, `/commit/${commit.hash}`);
-                              if (commitUrl) window.terminal.openExternal(commitUrl);
-                            }}
-                            title="Open commit in GitHub"
-                            style={{
-                              color: t.blue, fontSize: 9, fontFamily: "monospace",
-                              background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
-                              borderRadius: 3, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
-                            }}
-                          >{shortHash}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(commit.hash);
-                              setCopiedHash(commit.hash);
-                              if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current);
-                              copiedHashTimer.current = setTimeout(() => setCopiedHash(null), 1500);
-                            }}
-                            title="Copy full commit hash"
-                            style={{
-                              background: t.surface2, border: `1px solid ${t.border}`,
-                              borderRadius: 4, color: isCopied ? t.green : t.label3,
-                              cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
-                            }}
-                          >{isCopied ? "✓" : "⎘"}</button>
-                        </div>
-                        <div style={{ display: "flex", gap: 3 }}>
-                          {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, fontFamily: "monospace" }}>+{commit.additions}</span>}
-                          {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, fontFamily: "monospace" }}>-{commit.deletions}</span>}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
 
-              {selectedCommitHash && (
-                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", borderTop: `1px solid ${t.border}` }}>
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 8, padding: "4px 12px",
-                    background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
-                    borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                  }}>
-                    <span style={{
-                      color: t.blue, fontSize: 9, fontFamily: "monospace",
-                      background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
-                      borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
-                    }}>{selectedCommitHash.slice(0, 7)}</span>
-                    <span style={{ flex: 1, color: t.label2, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {commits.find((c) => c.hash === selectedCommitHash)?.subject}
-                    </span>
-                    <button
-                      onClick={() => setSelectedCommitHash(null)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1 }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                    >×</button>
-                  </div>
-                  <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
-                    <div style={{ minWidth: "max-content" }}>
-                      {commitDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading diff…</div>}
-                      {!commitDiffLoading && commitDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
-                      {!commitDiffLoading && commitDiff.length > 0 && <DiffChunks files={commitDiff} t={t} />}
+          {/* ── Commit list (no commit selected) ── */}
+          {!commitsLoading && commits.length > 0 && !selectedCommitHash && (
+            <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+              {commits.map((commit, i) => {
+                const isBase = i === commits.length - 1;
+                const dotColor = commit.isMerge ? t.purple : isBase ? t.label4 : t.green;
+                const dotTooltip = commit.isMerge ? "Merge commit" : isBase ? "Merge base (branch point)" : "Commit on this branch";
+                const isHov = hoveredCommitHash === commit.hash;
+                const isCopied = copiedHash === commit.hash;
+                const shortHash = commit.hash.slice(0, 7);
+                return (
+                  <div
+                    key={commit.hash}
+                    onClick={() => setSelectedCommitHash(commit.hash)}
+                    onMouseEnter={() => setHoveredCommitHash(commit.hash)}
+                    onMouseLeave={() => setHoveredCommitHash(null)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
+                      cursor: "pointer",
+                      background: isHov ? hoverBg : "transparent",
+                      borderLeft: "2px solid transparent",
+                      borderBottom: `1px solid ${t.border}`,
+                    }}
+                  >
+                    <div title={dotTooltip} style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: t.label1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {commit.subject}
+                      </div>
+                      <div style={{ color: t.label4, fontSize: 9, fontFamily: "monospace" }}>
+                        {commit.author} · {commit.date}
+                      </div>
                     </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, flexShrink: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {commit.isLocal && (
+                          <span title="Not yet pushed to remote" style={{
+                            color: t.orange, fontSize: 9, fontFamily: "monospace",
+                            background: `${t.orange}18`, border: `1px solid ${t.orange}30`,
+                            borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
+                          }}>local</span>
+                        )}
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const commitUrl = prUrl?.replace(/\/pull\/\d+.*$/, `/commit/${commit.hash}`);
+                            if (commitUrl) window.terminal.openExternal(commitUrl);
+                          }}
+                          title="Open commit in GitHub"
+                          style={{
+                            color: t.blue, fontSize: 9, fontFamily: "monospace",
+                            background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
+                            borderRadius: 3, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
+                          }}
+                        >{shortHash}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(commit.hash);
+                            setCopiedHash(commit.hash);
+                            if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current);
+                            copiedHashTimer.current = setTimeout(() => setCopiedHash(null), 1500);
+                          }}
+                          title="Copy full commit hash"
+                          style={{
+                            background: t.surface2, border: `1px solid ${t.border}`,
+                            borderRadius: 4, color: isCopied ? t.green : t.label3,
+                            cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
+                          }}
+                        >{isCopied ? "✓" : "⎘"}</button>
+                      </div>
+                      <div style={{ display: "flex", gap: 3 }}>
+                        {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, fontFamily: "monospace" }}>+{commit.additions}</span>}
+                        {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, fontFamily: "monospace" }}>-{commit.deletions}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Commit detail view (commit selected) ── */}
+          {!commitsLoading && commits.length > 0 && selectedCommitHash && (() => {
+            const selectedCommit = commits.find(c => c.hash === selectedCommitHash)!;
+            const selectedIdx = commits.findIndex(c => c.hash === selectedCommitHash);
+            const hasPrev = selectedIdx > 0;
+            const hasNext = selectedIdx < commits.length - 1;
+            const commitGitHubUrl = prUrl?.replace(/\/pull\/\d+.*$/, `/commit/${selectedCommitHash}`);
+            const isCopiedNav = copiedHash === selectedCommitHash;
+            const selectedFileData = selectedCommitFileIdx != null ? commitDiff[selectedCommitFileIdx] : null;
+            const navBtnStyle = (enabled: boolean) => ({
+              background: "none", border: `1px solid ${t.border}`,
+              borderRadius: 3, color: enabled ? t.label2 : t.label4,
+              cursor: enabled ? "pointer" : "default" as const,
+              fontSize: 10, padding: "1px 6px", lineHeight: 1.4,
+            });
+            return (
+              <>
+                {/* Top nav bar */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 5, padding: "5px 10px",
+                  borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                }}>
+                  <button
+                    onClick={() => { setSelectedCommitHash(null); setSelectedCommitFileIdx(null); }}
+                    title="Back to commits list"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: t.label3, fontSize: 14, padding: "0 2px", lineHeight: 1 }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+                  >←</button>
+                  <span style={{
+                    color: t.blue, fontSize: 9, fontFamily: "monospace",
+                    background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
+                    borderRadius: 3, padding: "0 5px", lineHeight: 1.5, flexShrink: 0,
+                  }}>{selectedCommitHash.slice(0, 7)}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedCommitHash);
+                      setCopiedHash(selectedCommitHash);
+                      if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current);
+                      copiedHashTimer.current = setTimeout(() => setCopiedHash(null), 1500);
+                    }}
+                    title="Copy full commit hash"
+                    style={{
+                      background: isCopiedNav ? `${t.green}20` : t.surface2,
+                      border: `1px solid ${isCopiedNav ? t.green + "40" : t.border}`,
+                      borderRadius: 4, color: isCopiedNav ? t.green : t.label3,
+                      cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
+                      transition: "all 0.15s",
+                    }}
+                  >{isCopiedNav ? "✓" : "⎘"}</button>
+                  {commitGitHubUrl && (
+                    <button
+                      onClick={() => window.terminal.openExternal(commitGitHubUrl)}
+                      title="Open commit in GitHub"
+                      style={{
+                        background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
+                        borderRadius: 4, color: t.blue, cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
+                      }}
+                    >↗</button>
+                  )}
+                  <div style={{ flex: 1 }} />
+                  <button
+                    onClick={() => { if (hasPrev) setSelectedCommitHash(commits[selectedIdx - 1].hash); }}
+                    disabled={!hasPrev} title="Newer commit"
+                    style={navBtnStyle(hasPrev)}
+                  >↑</button>
+                  <button
+                    onClick={() => { if (hasNext) setSelectedCommitHash(commits[selectedIdx + 1].hash); }}
+                    disabled={!hasNext} title="Older commit"
+                    style={navBtnStyle(hasNext)}
+                  >↓</button>
+                </div>
+
+                {/* Commit header */}
+                <div style={{
+                  padding: "8px 12px", borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                }}>
+                  <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, lineHeight: 1.4, marginBottom: 5, ...SYS_FONT }}>
+                    {selectedCommit.subject}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: t.label4, fontSize: 10, fontFamily: "monospace" }}>
+                      {selectedCommit.author} · {selectedCommit.date}
+                    </span>
+                    <div style={{ flex: 1 }} />
+                    {selectedCommit.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>+{selectedCommit.additions}</span>}
+                    {selectedCommit.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>-{selectedCommit.deletions}</span>}
                   </div>
                 </div>
-              )}
-            </>
-          )}
+
+                {/* Split: file list (left) + diff (right) */}
+                <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+                  {/* Left: file list */}
+                  <div style={{
+                    width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
+                    display: "flex", flexDirection: "column", overflow: "hidden",
+                  }}>
+                    {!commitDiffLoading && commitDiff.length > 0 && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
+                        borderBottom: `1px solid ${t.border}`,
+                        background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                        flexShrink: 0,
+                      }}>
+                        <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
+                          {commitDiff.length} file{commitDiff.length !== 1 ? "s" : ""}
+                        </span>
+                        <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{commitDiff.reduce((s, f) => s + f.additions, 0)}</span>
+                        <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{commitDiff.reduce((s, f) => s + f.deletions, 0)}</span>
+                      </div>
+                    )}
+                    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+                      {commitDiffLoading && (
+                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Loading diff…</div>
+                      )}
+                      {!commitDiffLoading && commitDiff.length === 0 && (
+                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>No diff available.</div>
+                      )}
+                      {!commitDiffLoading && commitDiff.map((file, fi) => {
+                        const isFileSel = fi === selectedCommitFileIdx;
+                        const fileName = file.path.split("/").pop() ?? file.path;
+                        const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
+                        const statusColor = file.status === "A" ? t.teal : file.status === "D" ? t.red : t.blue;
+                        return (
+                          <div
+                            key={fi}
+                            onClick={() => setSelectedCommitFileIdx(fi)}
+                            onMouseEnter={(e) => { if (!isFileSel) e.currentTarget.style.background = hoverBg; }}
+                            onMouseLeave={(e) => { if (!isFileSel) e.currentTarget.style.background = "transparent"; }}
+                            style={{
+                              padding: "6px 10px", cursor: "pointer",
+                              background: isFileSel ? (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)") : "transparent",
+                              borderLeft: `3px solid ${isFileSel ? statusColor : "transparent"}`,
+                              borderBottom: `1px solid ${t.border}`,
+                              transition: "background 0.1s",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+                              <span style={{
+                                fontSize: 9, fontWeight: 700, color: statusColor,
+                                background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
+                                borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
+                              }}>{file.status}</span>
+                              <span style={{
+                                color: file.status === "D" ? t.red : isFileSel ? t.label1 : t.label2,
+                                fontSize: 11, fontWeight: isFileSel ? 600 : 400,
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                textDecoration: file.status === "D" ? "line-through" : "none",
+                                flex: 1, ...SYS_FONT,
+                              }}>{fileName}</span>
+                            </div>
+                            {fileDir && (
+                              <div style={{
+                                color: t.label4, fontSize: 9, fontFamily: "monospace",
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                marginBottom: 3, paddingLeft: 22,
+                              }}>{fileDir}</div>
+                            )}
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
+                              {(file.additions > 0 || file.deletions > 0) && (
+                                <span style={{ display: "flex", gap: 3, fontSize: 9, fontFamily: "monospace" }}>
+                                  {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
+                                  {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
+                                  {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
+                                </span>
+                              )}
+                              <ChangeBar additions={file.additions} deletions={file.deletions} t={t} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Right: diff detail */}
+                  <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                    {selectedFileData == null ? (
+                      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
+                      </div>
+                    ) : (
+                      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+                        <div style={{ minWidth: "max-content" }}>
+                          <DiffChunks files={[selectedFileData]} t={t} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 

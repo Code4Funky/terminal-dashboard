@@ -21,3 +21,35 @@ html, body, #root {
 /* Light scrollbars */
 [data-theme="light"] ::-webkit-scrollbar-track { background: #F2F2F7; }
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: #C7C7CC; }
+
+/* highlight.js: let container control background */
+.hljs { background: transparent !important; }
+
+/* Above-anchored tooltip via data-tooltip attribute */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(28, 28, 30, 0.97);
+  border: 1px solid rgba(84, 84, 88, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  padding: 3px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+[data-tooltip]:hover::after { opacity: 1; }
+
+/* Below-anchored tooltip variant */
+[data-tooltip][data-tooltip-pos="below"]::after {
+  bottom: auto;
+  top: calc(100% + 5px);
+}

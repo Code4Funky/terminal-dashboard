@@ -85,7 +85,16 @@ declare global {
         deletions?: number;
       }[]>;
       getPRDiff: (repoName: string, prNumber: number) => Promise<string>;
+      getGhLogin: () => Promise<string | null>;
       openExternal: (url: string) => Promise<void>;
+      openFolder: (repoName: string) => Promise<void>;
+      listDir: (repoName: string, subdir: string) => Promise<{ name: string; isDir: boolean; path: string }[]>;
+      listFiles: (repoName: string) => Promise<string[]>;
+      grepFiles: (repoName: string, query: string) => Promise<string[]>;
+      openRepoFile: (repoName: string, filePath: string) => Promise<void>;
+      readRepoFile: (repoName: string, filePath: string) => Promise<string>;
+      openInEditor: (repoName: string, filePath: string, editor: string) => Promise<void>;
+      showInFinder: (repoName: string, filePath: string) => Promise<void>;
       getRepoBranch: (repoName: string) => Promise<string | null>;
       getWorkingTree: (repoName: string) => Promise<{
         staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTheme } from "../ThemeContext";
-import { Theme } from "../theme";
+import { MONO_FONT, Theme } from "../theme";
+import { RADIUS, drawerHeader, drawerTitle } from "../chrome";
 
 interface RepoEntry { name: string; visits: number; lastSeen: number }
 
@@ -158,14 +159,14 @@ function Ring({ pct, color, label, sub, t }: { pct: number; color: string; label
           />
         </svg>
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ fontSize: 17, fontWeight: 700, color: textColor, fontFamily: "monospace", lineHeight: 1 }}>
+          <span style={{ fontSize: 17, fontWeight: 600, color: textColor, ...MONO_FONT, lineHeight: 1 }}>
             {Math.round(pct)}%
           </span>
         </div>
       </div>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: t.label1 }}>{label}</div>
-        <div style={{ fontSize: 11, color: t.label3, fontFamily: "monospace", marginTop: 1 }}>{sub}</div>
+        <div style={{ fontSize: 11, color: t.label3, ...MONO_FONT, marginTop: 1 }}>{sub}</div>
       </div>
     </div>
   );
@@ -182,8 +183,8 @@ function RepoChart({ repos, t }: { repos: RepoEntry[]; t: Theme }) {
         return (
           <div key={r.name}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-              <span style={{ fontSize: 12, color: t.label1, fontFamily: "monospace" }}>{r.name}</span>
-              <span style={{ fontSize: 11, color: t.label3, fontFamily: "monospace" }}>
+              <span style={{ fontSize: 12, color: t.label1, ...MONO_FONT }}>{r.name}</span>
+              <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT }}>
                 {r.visits} visit{r.visits !== 1 ? "s" : ""} · {timeAgo(r.lastSeen)}
               </span>
             </div>
@@ -201,10 +202,10 @@ function StatCard({ label, value, t }: { label: string; value: string | number; 
   return (
     <div style={{
       background: t.surface2, border: `1px solid ${t.borderMid}`,
-      borderRadius: 8, padding: "10px 12px", flex: 1, minWidth: 0,
+      borderRadius: RADIUS, padding: "10px 12px", flex: 1, minWidth: 0,
     }}>
       <div style={{ fontSize: 10, color: t.label3, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: t.label1, fontFamily: "monospace", lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 600, color: t.label1, ...MONO_FONT, lineHeight: 1 }}>{value}</div>
     </div>
   );
 }
@@ -360,14 +361,14 @@ function ModelBarChart({
         <div style={{
           position: "fixed", left: tooltip.x + 12, top: tooltip.y - 50,
           background: t.surface2, border: `1px solid ${t.borderMid}`,
-          borderRadius: 6, padding: "6px 10px", fontSize: 11, zIndex: 9999,
+          borderRadius: RADIUS, padding: "6px 10px", fontSize: 11, zIndex: 9999,
           pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
         }}>
-          <div style={{ fontWeight: 700, color: t.label1, marginBottom: 4, fontFamily: "monospace" }}>{tooltip.date}</div>
+          <div style={{ fontWeight: 600, color: t.label1, marginBottom: 4, ...MONO_FONT }}>{tooltip.date}</div>
           {models.filter(m => tooltip.values[m]).map((m, mi) => (
             <div key={m} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 2 }}>
               <div style={{ width: 8, height: 8, borderRadius: 1, background: MODEL_COLORS[mi % MODEL_COLORS.length], flexShrink: 0 }} />
-              <span style={{ color: t.label2 ?? t.label1, fontFamily: "monospace" }}>
+              <span style={{ color: t.label2 ?? t.label1, ...MONO_FONT }}>
                 {shortModelName(m)} {fmtTokens(tooltip.values[m])}
               </span>
             </div>
@@ -383,10 +384,10 @@ function ModelBarChart({
             <div key={m.model} style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ width: 10, height: 10, borderRadius: 2, background: MODEL_COLORS[mi % MODEL_COLORS.length], flexShrink: 0 }} />
               <span style={{ fontSize: 12, color: t.label1, minWidth: 90 }}>{shortModelName(m.model)}</span>
-              <span style={{ fontSize: 11, color: t.label3, fontFamily: "monospace", flex: 1 }}>
+              <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT, flex: 1 }}>
                 {fmtTokens(m.tokens)}
               </span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, fontFamily: "monospace", minWidth: 42, textAlign: "right" }}>{pct}%</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, ...MONO_FONT, minWidth: 42, textAlign: "right" }}>{pct}%</span>
             </div>
           );
         })}
@@ -416,12 +417,12 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
     window.terminal.getUsageSessions().then((s) => { setSessions(s); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
   }, [refreshKey]);
 
-  const card = { background: t.surface2, border: `1px solid ${t.borderMid}`, borderRadius: 10, padding: "12px 14px" };
+  const card = { background: t.surface2, border: `1px solid ${t.borderMid}`, borderRadius: RADIUS, padding: "12px 14px" };
 
   const SectionLabel = ({ icon, title, sub, color }: { icon: string; title: string; sub?: string; color?: string }) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
       <span style={{ color: color ?? t.green, fontSize: 13 }}>{icon}</span>
-      <span style={{ fontSize: 13, fontWeight: 700, color: t.label1 }}>{title}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: t.label1 }}>{title}</span>
       {sub && <span style={{ fontSize: 11, color: t.label3 }}>· {sub}</span>}
     </div>
   );
@@ -475,7 +476,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
   const btnStyle = (active: boolean): React.CSSProperties => ({
     background: active ? t.surface3 : "none",
     border: `1px solid ${active ? t.borderMid : "transparent"}`,
-    borderRadius: 5, color: active ? t.label1 : t.label3,
+    borderRadius: RADIUS, color: active ? t.label1 : t.label3,
     cursor: "pointer", fontSize: 12, padding: "3px 10px",
     transition: "all 0.12s",
   });
@@ -492,26 +493,21 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
       WebkitAppRegion: "no-drag" as const,
     }}>
       {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 16px", borderBottom: `1px solid ${t.border}`,
-        background: t.headerBg, flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 15, color: t.green }}>◈</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: t.label1 }}>Stats</span>
+      <div style={{ ...drawerHeader(t), justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={drawerTitle(t)}>Stats</span>
         </div>
         <div style={{ display: "flex", gap: 4 }}>
           <button onClick={() => setRefreshKey((k) => k + 1)} title="Refresh" style={{
             background: "none", border: `1px solid ${t.borderMid}`,
-            borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", transition: "color 0.15s",
+            borderRadius: RADIUS, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", transition: "color 0.15s",
           }}
             onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
             onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
           >↺</button>
           <button onClick={onClose} style={{
             background: "none", border: `1px solid ${t.borderMid}`,
-            borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", transition: "color 0.15s",
+            borderRadius: RADIUS, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", transition: "color 0.15s",
           }}
             onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
             onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
@@ -562,7 +558,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                 </div>
                 {/* Heatmap */}
                 <div style={{ ...card, display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ fontSize: 10, color: t.label3, fontFamily: "monospace" }}>activity · last 16 weeks</div>
+                  <div style={{ fontSize: 10, color: t.label3, ...MONO_FONT }}>activity · last 16 weeks</div>
                   <ActivityHeatmap dailyCounts={claude.allTimeDailyCounts} t={t} />
                 </div>
               </section>
@@ -572,7 +568,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
 
             {/* Usage Limits */}
             <section>
-              <SectionLabel icon="◆" title="Usage Limits" sub="live · claude.ai" color={t.blue} />
+              <SectionLabel icon="◆" title="Usage limits" sub="live · claude.ai" color={t.blue} />
               {limitsLoading ? (
                 <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Fetching limits…</div>
               ) : !limits ? (
@@ -604,23 +600,23 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                   <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                     <div style={{
                       background: t.surface2, border: `1px solid ${t.borderMid}`,
-                      borderRadius: 10, padding: "12px 16px", flex: 1, minWidth: 0,
+                      borderRadius: RADIUS, padding: "12px 16px", flex: 1, minWidth: 0,
                     }}>
                       <div style={{ fontSize: 10, color: t.label3, marginBottom: 4 }}>Top repo</div>
-                      <div style={{ fontSize: 22, fontWeight: 700, color: t.green, fontFamily: "monospace", lineHeight: 1 }}>{data.repos[0]?.name ?? "—"}</div>
+                      <div style={{ fontSize: 22, fontWeight: 600, color: t.green, ...MONO_FONT, lineHeight: 1 }}>{data.repos[0]?.name ?? "—"}</div>
                       {data.repos[0] && <div style={{ fontSize: 11, color: t.label3, marginTop: 4 }}>{data.repos[0].visits} visits</div>}
                     </div>
                     <div style={{
                       background: t.surface2, border: `1px solid ${t.borderMid}`,
-                      borderRadius: 10, padding: "12px 16px", flex: 1, minWidth: 0,
+                      borderRadius: RADIUS, padding: "12px 16px", flex: 1, minWidth: 0,
                     }}>
                       <div style={{ fontSize: 10, color: t.label3, marginBottom: 4 }}>Repos tracked</div>
-                      <div style={{ fontSize: 22, fontWeight: 700, color: t.label1, fontFamily: "monospace", lineHeight: 1 }}>{data.repos.length}</div>
+                      <div style={{ fontSize: 22, fontWeight: 600, color: t.label1, ...MONO_FONT, lineHeight: 1 }}>{data.repos.length}</div>
                       <div style={{ fontSize: 11, color: t.label3, marginTop: 4 }}>unique repos visited</div>
                     </div>
                   </div>
                   <div style={card}>
-                    <div style={{ fontSize: 11, color: t.label3, marginBottom: 10, fontFamily: "monospace" }}>visits since first launch · ~/Documents/GitHub/</div>
+                    <div style={{ fontSize: 11, color: t.label3, marginBottom: 10, ...MONO_FONT }}>visits since first launch · ~/Documents/GitHub/</div>
                     {data.repos.length > 0
                       ? <RepoChart repos={data.repos} t={t} />
                       : <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>No repo visits tracked yet.</div>
@@ -638,7 +634,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
           <>
             {/* Bar chart */}
             <section>
-              <SectionLabel icon="▦" title="Token Usage by Model" sub={filter === "all" ? "all time" : filter} color={t.blue} />
+              <SectionLabel icon="▦" title="Token usage by model" sub={filter === "all" ? "all time" : filter} color={t.blue} />
               {claude ? (
                 <div style={card}>
                   <ModelBarChart
@@ -655,7 +651,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
 
             {/* Claude Sessions */}
             <section>
-              <SectionLabel icon="◈" title="Claude Sessions" sub="via ccusage · click to open" color={t.teal} />
+              <SectionLabel icon="◈" title="Claude sessions" sub="via ccusage · click to open" color={t.teal} />
               {sessionsLoading ? (
                 <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Loading sessions…</div>
               ) : mergedSessions.length === 0 ? (
@@ -675,7 +671,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                           key={s.sessionId}
                           onClick={() => canOpen && onOpenSession(s.resolvedPath!)}
                           style={{
-                            padding: "8px 10px", borderRadius: 7,
+                            padding: "8px 10px", borderRadius: RADIUS,
                             background: t.surface3, border: `1px solid ${t.borderSubtle}`,
                             cursor: canOpen ? "pointer" : "default", transition: "background 0.15s",
                           }}
@@ -686,16 +682,16 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                             <div style={{ minWidth: 0 }}>
                               <span style={{
                                 fontSize: 12, fontWeight: 600, color: canOpen ? t.label1 : t.label3,
-                                fontFamily: "monospace", display: "block",
+                                ...MONO_FONT, display: "block",
                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260,
                               }}>{name}</span>
-                              <span style={{ fontSize: 10, color: t.label3, fontFamily: "monospace" }}>
+                              <span style={{ fontSize: 10, color: t.label3, ...MONO_FONT }}>
                                 {dateAgo(s.lastActivity)} · {fmtTokens(s.totalTokens)}
                                 {s.mergedCount > 1 && <span style={{ marginLeft: 6, color: t.purple, fontSize: 9 }}>+{s.mergedCount - 1} merged</span>}
                               </span>
                             </div>
                             <div style={{ textAlign: "right", flexShrink: 0 }}>
-                              <span style={{ fontSize: 14, fontWeight: 700, color: t.green, fontFamily: "monospace" }}>{fmtCost(s.totalCost)}</span>
+                              <span style={{ fontSize: 14, fontWeight: 600, color: t.green, ...MONO_FONT }}>{fmtCost(s.totalCost)}</span>
                               {canOpen && <span style={{ fontSize: 9, color: t.label3, display: "block" }}>↗ open</span>}
                             </div>
                           </div>
@@ -708,7 +704,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                   </div>
                   <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${t.borderSubtle}`, display: "flex", justifyContent: "space-between" }}>
                     <span style={{ fontSize: 10, color: t.label3 }}>Total ({mergedSessions.length} projects · {sessions.length} sessions)</span>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: t.label1, fontFamily: "monospace" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...MONO_FONT }}>
                       {fmtCost(mergedSessions.reduce((sum, x) => sum + x.totalCost, 0))}
                     </span>
                   </div>

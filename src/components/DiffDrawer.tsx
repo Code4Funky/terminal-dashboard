@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
+import { RADIUS } from "../chrome";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -76,7 +77,7 @@ function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useT
                 <div style={{
                   padding: "2px 8px",
                   background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
-                  color: t.blue, fontSize: 12, fontFamily: "monospace",
+                  color: t.blue, fontSize: 12, ...MONO_FONT,
                   borderTop: `1px solid ${t.border}`,
                   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                 }}>{chunk.header}</div>
@@ -94,24 +95,24 @@ function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useT
                       {/* Old line number */}
                       <span style={{
                         width: 38, flexShrink: 0, textAlign: "right" as const,
-                        color: t.label4, fontSize: 12, fontFamily: "monospace",
+                        color: t.label4, fontSize: 12, ...MONO_FONT,
                         padding: "0 4px 0 0", userSelect: "none",
                         borderRight: `1px solid ${t.borderSubtle}`,
                       }}>{oln ?? ""}</span>
                       {/* New line number */}
                       <span style={{
                         width: 38, flexShrink: 0, textAlign: "right" as const,
-                        color: t.label4, fontSize: 12, fontFamily: "monospace",
+                        color: t.label4, fontSize: 12, ...MONO_FONT,
                         padding: "0 6px 0 0", userSelect: "none",
                         borderRight: `1px solid ${t.borderSubtle}`, marginRight: 4,
                       }}>{nln ?? ""}</span>
                       {/* +/- gutter */}
-                      <span style={{ color: line.type === "add" ? t.green : line.type === "del" ? t.red : t.label4, fontSize: 13, fontFamily: "monospace", padding: "0 4px", flexShrink: 0, userSelect: "none" }}>
+                      <span style={{ color: line.type === "add" ? t.green : line.type === "del" ? t.red : t.label4, fontSize: 13, ...MONO_FONT, padding: "0 4px", flexShrink: 0, userSelect: "none" }}>
                         {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
                       </span>
                       <span style={{
                         color: line.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e") : line.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
-                        fontSize: 13, fontFamily: "monospace",
+                        fontSize: 13, ...MONO_FONT,
                         whiteSpace: "pre", paddingRight: 16, flexShrink: 0,
                       }}>{line.content || " "}</span>
                     </div>
@@ -154,11 +155,15 @@ interface Props {
   headRefName?: string;
   width?: number;
   onWidthChange?: (w: number) => void;
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
+  /** Take the whole dock — set when the terminal is hidden, so width/resize no longer apply. */
+  fill?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, onClose, width: controlledWidth, onWidthChange }: Props) {
+export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, onClose, width: controlledWidth, onWidthChange, maximized = false, onToggleMaximize, fill = false }: Props) {
   const { theme: t } = useTheme();
 
   // ── Resize ───────────────────────────────────────────────────────────────────
@@ -172,7 +177,9 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     const onMove = (ev: MouseEvent) => {
       if (!dragState.current) return;
       const delta = dragState.current.startX - ev.clientX;
-      const w = Math.max(280, Math.min(900, dragState.current.startWidth + delta));
+      // Ceiling tracks the window so dragging a maximised drawer doesn't snap it narrow
+      const max = Math.max(900, window.innerWidth - 360);
+      const w = Math.max(280, Math.min(max, dragState.current.startWidth + delta));
       if (controlledWidth !== undefined) { onWidthChange?.(w); } else { setInternalWidth(w); }
     };
     const onUp = () => {
@@ -193,6 +200,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedBranchFileIdx, setSelectedBranchFileIdx] = useState<number | null>(null);
+  const [branchDiffTick, setBranchDiffTick] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -204,7 +212,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       setSelectedBranchFileIdx(parsed.length > 0 ? 0 : null);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [prNumber, repoName]);
+  }, [prNumber, repoName, branchDiffTick]);
 
   const totalAdditions = files.reduce((s, f) => s + f.additions, 0);
   const totalDeletions = files.reduce((s, f) => s + f.deletions, 0);
@@ -249,6 +257,19 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       setWtUnstaged(status.unstaged);
       setWtLoading(false);
     }).catch(() => setWtLoading(false));
+  };
+
+  const loadCommits = (branch: string) => {
+    commitsLoadedFor.current = null;
+    setCommitsLoading(true);
+    setCommits([]);
+    setSelectedCommitHash(null);
+    setCommitDiff([]);
+    window.terminal.getCommits(repoName, branch, prNumber).then((c) => {
+      commitsLoadedFor.current = `${repoName}/${branch}`;
+      setCommits(c);
+      setCommitsLoading(false);
+    }).catch(() => setCommitsLoading(false));
   };
 
   useEffect(() => {
@@ -363,8 +384,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       >
         {/* Status badge */}
         <span style={{
-          fontSize: 9, fontWeight: 700, color: col, background: `${col}18`,
-          border: `1px solid ${col}30`, borderRadius: 4, padding: "1px 5px",
+          fontSize: 9, fontWeight: 600, color: col, background: `${col}18`,
+          border: `1px solid ${col}30`, borderRadius: RADIUS, padding: "1px 5px",
           flexShrink: 0, lineHeight: 1.5, minWidth: 14, textAlign: "center" as const,
           marginTop: 1,
         }}>{file.status === "?" ? "A" : file.status}</span>
@@ -392,7 +413,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   title="Copy path"
                   style={{
                     background: t.surface2, border: `1px solid ${t.borderMid}`,
-                    borderRadius: 5, color: copiedFilePath === file.path ? t.green : t.label2,
+                    borderRadius: RADIUS, color: copiedFilePath === file.path ? t.green : t.label2,
                     cursor: "pointer", fontSize: 9, padding: "2px 6px", transition: "all 0.12s",
                   }}
                 >{copiedFilePath === file.path ? "✓" : "⎘"}</button>
@@ -401,7 +422,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   style={{
                     background: t.surface2,
                     border: `1px solid ${isStaged ? t.border : t.green + "50"}`,
-                    borderRadius: 5, color: isStaged ? t.label2 : t.green,
+                    borderRadius: RADIUS, color: isStaged ? t.label2 : t.green,
                     cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px",
                   }}
                 >{isStaged ? "Unstage" : "Stage"}</button>
@@ -415,7 +436,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
             const short = parts.length <= 2 ? file.dir : "…/" + parts.slice(-2).join("/");
             return (
               <div style={{
-                color: t.label4, fontSize: 9, fontFamily: "monospace",
+                color: t.label4, fontSize: 9, ...MONO_FONT,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 marginTop: 1,
               }}>{short}/</div>
@@ -426,9 +447,9 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           {totalChanges > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3 }}>
               <span style={{
-                fontSize: 9, fontFamily: "monospace",
+                fontSize: 9, ...MONO_FONT,
                 background: t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
-                border: `1px solid ${t.borderMid}`, borderRadius: 5,
+                border: `1px solid ${t.borderMid}`, borderRadius: RADIUS,
                 padding: "0 5px", display: "flex", gap: 3, lineHeight: 1.6,
               }}>
                 {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
@@ -455,14 +476,14 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       background: t.isDark ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.025)",
       borderTop: label === "UNSTAGED" ? `1px solid ${t.border}` : "none",
     }}>
-      <span style={{ color: t.label4, fontSize: 9, letterSpacing: "0.06em", fontWeight: 700, flex: 1 }}>{label}</span>
+      <span style={{ color: t.label4, fontSize: 9, letterSpacing: "0.06em", fontWeight: 600, flex: 1 }}>{label}</span>
       <span style={{ color: t.label4, fontSize: 9, marginRight: 8 }}>{count} file{count !== 1 ? "s" : ""}</span>
       {!disabled && (
         <button
           onClick={onAction}
           style={{
             background: t.surface2, border: `1px solid ${t.border}`,
-            borderRadius: 5, color: t.label2,
+            borderRadius: RADIUS, color: t.label2,
             cursor: "pointer",
             fontSize: 9, fontWeight: 600, padding: "2px 8px",
           }}
@@ -475,7 +496,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
 
   return (
     <div style={{
-      width: drawerWidth, minWidth: 280, flexShrink: 0,
+      ...(fill ? { flex: 1 } : { width: drawerWidth, flexShrink: 0 }),
+      minWidth: 280,
       background: t.surface1, borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column", position: "relative",
     }}>
@@ -489,30 +511,30 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         }}>
           <div style={{
             background: t.surface1, border: `1px solid ${t.border}`,
-            borderRadius: 14, padding: "20px 22px", width: 300,
+            borderRadius: RADIUS, padding: "20px 22px", width: 300,
             boxShadow: "0 8px 40px rgba(0,0,0,0.4)",
           }}>
-            <div style={{ color: t.red, fontWeight: 700, fontSize: 14, marginBottom: 8, ...SYS_FONT }}>
+            <div style={{ color: t.red, fontWeight: 600, fontSize: 14, marginBottom: 8, ...SYS_FONT }}>
               Discard unstaged changes?
             </div>
             <div style={{ color: t.label2, fontSize: 12, marginBottom: 18, lineHeight: 1.6, ...SYS_FONT }}>
-              This will permanently discard all unstaged changes in <span style={{ color: t.teal, fontFamily: "monospace" }}>{repoName}</span>. This cannot be undone.
+              This will permanently discard all unstaged changes in <span style={{ color: t.teal, ...MONO_FONT }}>{repoName}</span>. This cannot be undone.
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button
                 onClick={() => setDiscardConfirm(false)}
                 style={{
                   background: t.surface2, border: `1px solid ${t.border}`,
-                  borderRadius: 8, color: t.label2, cursor: "pointer",
+                  borderRadius: RADIUS, color: t.label2, cursor: "pointer",
                   fontSize: 12, fontWeight: 600, padding: "6px 16px", ...SYS_FONT,
                 }}
               >Cancel</button>
               <button
                 onClick={executeDiscardUnstaged}
                 style={{
-                  background: t.red, border: "none", borderRadius: 8,
+                  background: t.red, border: "none", borderRadius: RADIUS,
                   color: "#FFFFFF", cursor: "pointer",
-                  fontSize: 12, fontWeight: 700, padding: "6px 18px", ...SYS_FONT,
+                  fontSize: 12, fontWeight: 600, padding: "6px 18px", ...SYS_FONT,
                 }}
               >Discard</button>
             </div>
@@ -520,16 +542,18 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         </div>
       )}
 
-      {/* Resize handle */}
-      <div
-        onMouseDown={onResizeMouseDown}
-        style={{
-          position: "absolute", left: 0, top: 0, bottom: 0, width: 5,
-          cursor: "col-resize", zIndex: 10, background: "transparent",
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-      />
+      {/* Resize handle — nothing to drag against when filling */}
+      {!fill && (
+        <div
+          onMouseDown={onResizeMouseDown}
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0, width: 5,
+            cursor: "col-resize", zIndex: 10, background: "transparent",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+        />
+      )}
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{ padding: "8px 12px 7px", borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
         {/* Tab bar */}
@@ -546,9 +570,9 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                 onClick={() => setActiveTab(tab)}
                 style={{
                   background: "none", border: "none",
-                  borderBottom: `2px solid ${isActive ? t.green : "transparent"}`,
+                  borderBottom: `2px solid ${isActive ? t.blue : "transparent"}`,
                   borderRadius: 0,
-                  color: isActive ? t.green : t.label3,
+                  color: isActive ? t.label1 : t.label3,
                   cursor: "pointer", fontSize: 11, fontWeight: isActive ? 600 : 400,
                   padding: "3px 8px 5px",
                   display: "flex", alignItems: "center", gap: 5,
@@ -559,14 +583,40 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   <span style={{
                     background: isActive ? `${t.green}20` : (t.isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"),
                     color: isActive ? t.green : t.label3,
-                    borderRadius: 10, fontSize: 9, padding: "0 5px",
-                    fontFamily: "monospace", fontWeight: 700,
+                    borderRadius: RADIUS, fontSize: 9, padding: "0 5px",
+                    ...MONO_FONT, fontWeight: 600,
                   }}>{count}</span>
                 )}
               </button>
             );
           })}
           <div style={{ flex: 1 }} />
+          {onToggleMaximize && (
+            <button
+              title={maximized ? "Restore width" : "Maximise"}
+              onClick={onToggleMaximize}
+              style={{ background: "none", border: "none", cursor: "pointer", color: maximized ? t.blue : t.label4, padding: "0 5px", lineHeight: 0 }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label1)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label4)}
+            >
+              <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {maximized
+                  ? <><polyline points="4 4 10 10 4 16" /><polyline points="11 4 17 10 11 16" /></>
+                  : <><polyline points="16 4 10 10 16 16" /><polyline points="9 4 3 10 9 16" /></>}
+              </svg>
+            </button>
+          )}
+          <button
+            title="Refresh"
+            onClick={() => {
+              if (activeTab === "branch-diff") setBranchDiffTick(n => n + 1);
+              else if (activeTab === "working-tree") loadWorkingTree();
+              else if (activeTab === "commits" && effectiveBranch) loadCommits(effectiveBranch);
+            }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 12, padding: "0 6px 0 2px", lineHeight: 1 }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+          >↻</button>
           <button
             onClick={onClose}
             style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 14, padding: "0 2px", lineHeight: 1 }}
@@ -578,11 +628,11 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         {/* PR title / repo name */}
         {prNumber ? (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: t.blue, fontSize: 10, fontFamily: "monospace", flexShrink: 0 }}>#{prNumber}</span>
+            <span style={{ color: t.blue, fontSize: 10, ...MONO_FONT, flexShrink: 0 }}>#{prNumber}</span>
             <span style={{ color: t.label2, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, ...SYS_FONT }}>{prTitle}</span>
             <button
               onClick={() => prUrl && window.terminal.openExternal(prUrl)}
-              title="Open in GitHub"
+              title={prUrl ? `Open in GitHub: ${prUrl}` : "Open in GitHub"}
               style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 11, padding: "0 2px", lineHeight: 1, flexShrink: 0 }}
               onMouseEnter={(e) => (e.currentTarget.style.color = t.blue)}
               onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
@@ -592,21 +642,21 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           /* Working-tree header: branch + stats + actions */
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {/* Repo + branch pill */}
-            <span style={{ color: t.label1, fontSize: 12, fontWeight: 700, ...SYS_FONT }}>{repoName}</span>
+            <span style={{ color: t.label1, fontSize: 12, fontWeight: 600, ...SYS_FONT }}>{repoName}</span>
             {currentBranch && (
               <span style={{
-                fontSize: 10, fontFamily: "monospace", color: t.red,
+                fontSize: 10, ...MONO_FONT, color: t.red,
                 background: `${t.red}12`, border: `1px solid ${t.red}30`,
-                borderRadius: 10, padding: "0 7px", lineHeight: 1.6,
+                borderRadius: RADIUS, padding: "0 7px", lineHeight: 1.6,
               }}>git:{currentBranch}</span>
             )}
             {/* File + stat counts */}
             {totalWtChanges > 0 && (
               <span style={{
-                fontSize: 10, fontFamily: "monospace", color: t.label3,
+                fontSize: 10, ...MONO_FONT, color: t.label3,
                 background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
                 border: `1px solid ${t.borderMid}`,
-                borderRadius: 10, padding: "0 7px", lineHeight: 1.6, flexShrink: 0,
+                borderRadius: RADIUS, padding: "0 7px", lineHeight: 1.6, flexShrink: 0,
               }}>
                 {totalWtChanges} · {wtStaged.length > 0 || wtUnstaged.length > 0 ? (
                   <>
@@ -624,7 +674,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                 <span style={{
                   fontSize: 9, color: t.orange, ...SYS_FONT, fontWeight: 600,
                   background: `${t.orange}12`, border: `1px solid ${t.orange}28`,
-                  borderRadius: 10, padding: "1px 8px", flexShrink: 0,
+                  borderRadius: RADIUS, padding: "1px 8px", flexShrink: 0,
                 }}>Uncommitted</span>
                 {/* Discard all */}
                 <button
@@ -632,7 +682,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   title="Discard all unstaged"
                   style={{
                     background: "none", border: `1px solid ${t.borderMid}`,
-                    borderRadius: 6, color: t.label3, cursor: "pointer",
+                    borderRadius: RADIUS, color: t.label3, cursor: "pointer",
                     fontSize: 10, padding: "1px 7px", flexShrink: 0, ...SYS_FONT,
                     transition: "all 0.13s",
                   }}
@@ -666,19 +716,19 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
                     {files.length} file{files.length !== 1 ? "s" : ""}
                   </span>
-                  <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{totalAdditions}</span>
-                  <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{totalDeletions}</span>
+                  <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{totalAdditions}</span>
+                  <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{totalDeletions}</span>
                 </div>
               )}
 
               <div style={{ flex: 1, overflowY: "auto" }}>
                 {loading && (
-                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Fetching diff…</div>
+                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Fetching diff…</div>
                 )}
                 {!loading && files.length === 0 && (
                   <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>
                     No diff available.
-                    <div style={{ marginTop: 5, fontFamily: "monospace" }}>Ensure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
+                    <div style={{ marginTop: 5, ...MONO_FONT }}>Ensure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
                   </div>
                 )}
                 {!loading && files.map((file, fi) => {
@@ -702,7 +752,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
                         <span style={{
-                          fontSize: 9, fontWeight: 700, color: statusColor,
+                          fontSize: 9, fontWeight: 600, color: statusColor,
                           background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
                           borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
                         }}>{file.status}</span>
@@ -716,14 +766,14 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       </div>
                       {fileDir && (
                         <div style={{
-                          color: t.label4, fontSize: 9, fontFamily: "monospace",
+                          color: t.label4, fontSize: 9, ...MONO_FONT,
                           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                           marginBottom: 3, paddingLeft: 22,
                         }}>{fileDir}</div>
                       )}
                       <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
                         {(file.additions > 0 || file.deletions > 0) && (
-                          <span style={{ display: "flex", gap: 3, fontSize: 9, fontFamily: "monospace" }}>
+                          <span style={{ display: "flex", gap: 3, fontSize: 9, ...MONO_FONT }}>
                             {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
                             {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
                             {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
@@ -740,10 +790,11 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", flexShrink: 0 }}>
                 <button
                   onClick={() => prUrl && window.terminal.openExternal(prUrl)}
+                  title={prUrl ? `Open in GitHub: ${prUrl}` : "Open in GitHub"}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5, width: "100%",
                     background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                    border: `1px solid ${t.border}`, borderRadius: 6,
+                    border: `1px solid ${t.border}`, borderRadius: RADIUS,
                     color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
                   }}
                   onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.09)"; e.currentTarget.style.color = t.label1; }}
@@ -771,12 +822,12 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
                     }}>
                       {fileDir && (
-                        <span style={{ color: t.label4, fontSize: 10, fontFamily: "monospace" }}>{fileDir}</span>
+                        <span style={{ color: t.label4, fontSize: 10, ...MONO_FONT }}>{fileDir}</span>
                       )}
-                      <span style={{ color: t.label1, fontSize: 11, fontWeight: 600, fontFamily: "monospace" }}>{fileName}</span>
+                      <span style={{ color: t.label1, fontSize: 11, fontWeight: 600, ...MONO_FONT }}>{fileName}</span>
                       <div style={{ flex: 1 }} />
-                      {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{file.additions}</span>}
-                      {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{file.deletions}</span>}
+                      {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{file.additions}</span>}
+                      {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{file.deletions}</span>}
                     </div>
                     {/* Diff content */}
                     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
@@ -796,7 +847,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       {/* ── Commits tab ──────────────────────────────────────────────────────── */}
       {activeTab === "commits" && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {commitsLoading && <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading commits…</div>}
+          {commitsLoading && <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading commits…</div>}
           {!commitsLoading && commits.length === 0 && (
             <div style={{ padding: "20px 14px", color: t.label4, fontSize: 11 }}>No commits found on this branch.</div>
           )}
@@ -830,7 +881,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       <div style={{ color: t.label1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {commit.subject}
                       </div>
-                      <div style={{ color: t.label4, fontSize: 9, fontFamily: "monospace" }}>
+                      <div style={{ color: t.label4, fontSize: 9, ...MONO_FONT }}>
                         {commit.author} · {commit.date}
                       </div>
                     </div>
@@ -838,7 +889,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         {commit.isLocal && (
                           <span title="Not yet pushed to remote" style={{
-                            color: t.orange, fontSize: 9, fontFamily: "monospace",
+                            color: t.orange, fontSize: 9, ...MONO_FONT,
                             background: `${t.orange}18`, border: `1px solid ${t.orange}30`,
                             borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
                           }}>local</span>
@@ -851,7 +902,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           }}
                           title="Open commit in GitHub"
                           style={{
-                            color: t.blue, fontSize: 9, fontFamily: "monospace",
+                            color: t.blue, fontSize: 9, ...MONO_FONT,
                             background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
                             borderRadius: 3, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
                           }}
@@ -867,14 +918,14 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           title="Copy full commit hash"
                           style={{
                             background: t.surface2, border: `1px solid ${t.border}`,
-                            borderRadius: 4, color: isCopied ? t.green : t.label3,
+                            borderRadius: RADIUS, color: isCopied ? t.green : t.label3,
                             cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
                           }}
                         >{isCopied ? "✓" : "⎘"}</button>
                       </div>
                       <div style={{ display: "flex", gap: 3 }}>
-                        {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, fontFamily: "monospace" }}>+{commit.additions}</span>}
-                        {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, fontFamily: "monospace" }}>-{commit.deletions}</span>}
+                        {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, ...MONO_FONT }}>+{commit.additions}</span>}
+                        {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, ...MONO_FONT }}>-{commit.deletions}</span>}
                       </div>
                     </div>
                   </div>
@@ -914,7 +965,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
                   >←</button>
                   <span style={{
-                    color: t.blue, fontSize: 9, fontFamily: "monospace",
+                    color: t.blue, fontSize: 9, ...MONO_FONT,
                     background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
                     borderRadius: 3, padding: "0 5px", lineHeight: 1.5, flexShrink: 0,
                   }}>{selectedCommitHash.slice(0, 7)}</span>
@@ -929,7 +980,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     style={{
                       background: isCopiedNav ? `${t.green}20` : t.surface2,
                       border: `1px solid ${isCopiedNav ? t.green + "40" : t.border}`,
-                      borderRadius: 4, color: isCopiedNav ? t.green : t.label3,
+                      borderRadius: RADIUS, color: isCopiedNav ? t.green : t.label3,
                       cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
                       transition: "all 0.15s",
                     }}
@@ -940,7 +991,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       title="Open commit in GitHub"
                       style={{
                         background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-                        borderRadius: 4, color: t.blue, cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
+                        borderRadius: RADIUS, color: t.blue, cursor: "pointer", fontSize: 9, padding: "0 5px", lineHeight: 1.5,
                       }}
                     >↗</button>
                   )}
@@ -966,12 +1017,12 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     {selectedCommit.subject}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: t.label4, fontSize: 10, fontFamily: "monospace" }}>
+                    <span style={{ color: t.label4, fontSize: 10, ...MONO_FONT }}>
                       {selectedCommit.author} · {selectedCommit.date}
                     </span>
                     <div style={{ flex: 1 }} />
-                    {selectedCommit.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>+{selectedCommit.additions}</span>}
-                    {selectedCommit.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace", fontWeight: 600 }}>-{selectedCommit.deletions}</span>}
+                    {selectedCommit.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>+{selectedCommit.additions}</span>}
+                    {selectedCommit.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>-{selectedCommit.deletions}</span>}
                   </div>
                 </div>
 
@@ -992,13 +1043,13 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                         <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
                           {commitDiff.length} file{commitDiff.length !== 1 ? "s" : ""}
                         </span>
-                        <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{commitDiff.reduce((s, f) => s + f.additions, 0)}</span>
-                        <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>−{commitDiff.reduce((s, f) => s + f.deletions, 0)}</span>
+                        <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{commitDiff.reduce((s, f) => s + f.additions, 0)}</span>
+                        <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{commitDiff.reduce((s, f) => s + f.deletions, 0)}</span>
                       </div>
                     )}
                     <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
                       {commitDiffLoading && (
-                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Loading diff…</div>
+                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Loading diff…</div>
                       )}
                       {!commitDiffLoading && commitDiff.length === 0 && (
                         <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>No diff available.</div>
@@ -1024,7 +1075,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
                               <span style={{
-                                fontSize: 9, fontWeight: 700, color: statusColor,
+                                fontSize: 9, fontWeight: 600, color: statusColor,
                                 background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
                                 borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
                               }}>{file.status}</span>
@@ -1038,14 +1089,14 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                             </div>
                             {fileDir && (
                               <div style={{
-                                color: t.label4, fontSize: 9, fontFamily: "monospace",
+                                color: t.label4, fontSize: 9, ...MONO_FONT,
                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                                 marginBottom: 3, paddingLeft: 22,
                               }}>{fileDir}</div>
                             )}
                             <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
                               {(file.additions > 0 || file.deletions > 0) && (
-                                <span style={{ display: "flex", gap: 3, fontSize: 9, fontFamily: "monospace" }}>
+                                <span style={{ display: "flex", gap: 3, fontSize: 9, ...MONO_FONT }}>
                                   {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
                                   {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
                                   {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
@@ -1088,7 +1139,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
             display: "flex", flexDirection: "column", overflow: "hidden",
           }}>
             {wtLoading ? (
-              <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, fontFamily: "monospace" }}>Loading…</div>
+              <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Loading…</div>
             ) : (
               <>
                 <div style={{ flex: 1, overflowY: "auto" }} onMouseLeave={() => setWtHovered(null)}>
@@ -1119,7 +1170,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       style={{
                         width: "100%", boxSizing: "border-box", resize: "none",
                         background: t.surface2, border: `1px solid ${t.border}`,
-                        borderRadius: 5, color: t.label1, fontSize: 11,
+                        borderRadius: RADIUS, color: t.label1, fontSize: 11,
                         fontFamily: "inherit", padding: "5px 8px", outline: "none",
                       }}
                     />
@@ -1129,7 +1180,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       style={{
                         background: commitMsg.trim() && !committing ? `${t.green}18` : t.surface2,
                         border: `1px solid ${commitMsg.trim() && !committing ? t.green + "40" : t.border}`,
-                        borderRadius: 5, color: commitMsg.trim() && !committing ? t.green : t.label4,
+                        borderRadius: RADIUS, color: commitMsg.trim() && !committing ? t.green : t.label4,
                         cursor: commitMsg.trim() && !committing ? "pointer" : "not-allowed",
                         fontSize: 11, fontWeight: 600, padding: "5px 0", opacity: committing ? 0.6 : 1,
                       }}
@@ -1148,7 +1199,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       onClick={action}
                       style={{
                         flex: 1, background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                        border: `1px solid ${t.border}`, borderRadius: 6,
+                        border: `1px solid ${t.border}`, borderRadius: RADIUS,
                         color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
                       }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = `${hoverCol}18`; e.currentTarget.style.color = hoverCol; e.currentTarget.style.borderColor = `${hoverCol}40`; }}
@@ -1180,22 +1231,22 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     border: `1px solid ${selectedFile.staged ? t.green + "30" : t.orange + "30"}`,
                     borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
                   }}>{selectedFile.staged ? "staged" : "unstaged"}</span>
-                  <span style={{ flex: 1, color: t.label1, fontSize: 11, fontWeight: 600, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ flex: 1, color: t.label1, fontSize: 11, fontWeight: 600, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {selectedFile.path.split("/").pop()}
                   </span>
                   {(() => {
                     const f = (selectedFile.staged ? wtStaged : wtUnstaged).find((x) => x.path === selectedFile.path);
                     return f ? (
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                        {f.additions > 0 && <span style={{ color: t.green, fontSize: 10, fontFamily: "monospace" }}>+{f.additions}</span>}
-                        {f.deletions > 0 && <span style={{ color: t.red, fontSize: 10, fontFamily: "monospace" }}>-{f.deletions}</span>}
+                        {f.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{f.additions}</span>}
+                        {f.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>-{f.deletions}</span>}
                       </div>
                     ) : null;
                   })()}
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
                   <div style={{ minWidth: "max-content" }}>
-                    {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading diff…</div>}
+                    {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
                     {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
                     {!fileDiffLoading && <DiffChunks files={parsedFileDiff} t={t} />}
                   </div>

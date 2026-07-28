@@ -9,12 +9,12 @@ html, body, #root {
   width: 100%;
   background: #000000;
   color: #ffffff;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   overflow: hidden;
 }
 
 /* Dark scrollbars */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: #1C1C1E; }
 ::-webkit-scrollbar-thumb { background: #3A3A3C; border-radius: 3px; }
 
@@ -22,8 +22,20 @@ html, body, #root {
 [data-theme="light"] ::-webkit-scrollbar-track { background: #F2F2F7; }
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: #C7C7CC; }
 
+[data-theme="breeze"] ::-webkit-scrollbar-track { background: #0e1626; }
+[data-theme="breeze"] ::-webkit-scrollbar-thumb { background: #2b3853; border-radius: 2px; }
+[data-theme="breeze"] :focus-visible { outline-color: #008cff; outline-offset: 1px; border-radius: 3px; }
+
 /* highlight.js: let container control background */
 .hljs { background: transparent !important; }
+
+/* Keyboard-only focus ring — many controls set outline:none, leaving keyboard users with no indicator. */
+:focus-visible {
+  outline: 2px solid #008cff;
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+.xterm :focus-visible { outline: none; } /* xterm draws its own cursor/selection */
 
 /* Above-anchored tooltip via data-tooltip attribute */
 [data-tooltip] { position: relative; }

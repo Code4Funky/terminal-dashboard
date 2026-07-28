@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTheme } from "../ThemeContext";
+import { RADIUS, TRANSITION, drawerHeader, drawerTitle } from "../chrome";
+import { MONO_FONT } from "../theme";
 
 interface PR {
   number: number;
@@ -49,7 +51,7 @@ function ReviewPill({ decision }: { decision: string | null }) {
       fontSize: 11, fontWeight: 600,
       color: cfg.color, background: cfg.bg,
       border: `1px solid ${cfg.color}30`,
-      borderRadius: 20, padding: "2px 8px",
+      borderRadius: RADIUS, padding: "2px 8px",
     }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.color, flexShrink: 0 }} />
       {cfg.label}
@@ -108,23 +110,22 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
         margin: "0 12px 8px", padding: "13px 14px",
         background: hovered ? t.surface3 : t.surface2,
         border: `1px solid ${hovered ? t.borderMid : t.borderSubtle}`,
-        borderRadius: 10,
-        boxShadow: hovered ? "0 4px 16px rgba(0,0,0,0.12)" : "none",
-        transition: "all 0.18s",
+        borderRadius: RADIUS,
+        transition: TRANSITION,
       }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
         <span style={{
-          fontSize: 12, fontWeight: 700, color: t.blue,
+          fontSize: 12, fontWeight: 600, color: t.blue,
           background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-          borderRadius: 4, padding: "2px 6px",
-          flexShrink: 0, marginTop: 1, fontFamily: "monospace",
+          borderRadius: RADIUS, padding: "2px 6px",
+          flexShrink: 0, marginTop: 1, ...MONO_FONT,
         }}>
           #{pr.number}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: t.label1, fontSize: 12, fontWeight: 500, lineHeight: 1.5 }}>{pr.title}</div>
-          <div style={{ color: t.label4, fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>@{pr.author.login}</div>
+          <div style={{ color: t.label4, fontSize: 10, ...MONO_FONT, marginTop: 1 }}>@{pr.author.login}</div>
         </div>
       </div>
 
@@ -133,11 +134,11 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
           <span style={{
             fontSize: 11, fontWeight: 600, color: t.label3,
             background: t.surface3, border: `1px solid ${t.borderMid}`,
-            borderRadius: 20, padding: "2px 8px",
+            borderRadius: RADIUS, padding: "2px 8px",
           }}>Draft</span>
         )}
         <ReviewPill decision={pr.reviewDecision} />
-        <span style={{ fontSize: 11, color: t.green, marginLeft: "auto", fontFamily: "monospace" }}>
+        <span style={{ fontSize: 11, color: t.green, marginLeft: "auto", ...MONO_FONT }}>
           {timeAgo(pr.createdAt)}
         </span>
       </div>
@@ -146,10 +147,10 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
           background: `${t.blue}10`, border: `1px solid ${t.blue}28`,
-          borderRadius: 7, padding: "4px 8px", flex: 1, minWidth: 0,
+          borderRadius: RADIUS, padding: "4px 8px", flex: 1, minWidth: 0,
         }}>
           <span style={{ color: t.blue, fontSize: 12, flexShrink: 0 }}>⎇</span>
-          <span style={{ fontSize: 12, color: t.blue, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 12, color: t.blue, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {pr.headRefName}
           </span>
           <CopyButton text={pr.headRefName} label="branch" />
@@ -157,10 +158,10 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
         <div style={{
           display: "flex", alignItems: "center", gap: 4,
           background: `${t.orange}10`, border: `1px solid ${t.orange}28`,
-          borderRadius: 7, padding: "4px 8px", flexShrink: 0,
+          borderRadius: RADIUS, padding: "4px 8px", flexShrink: 0,
         }}>
           <span style={{ color: t.orange, fontSize: 12 }}>◉</span>
-          <span style={{ fontSize: 12, color: t.orange, fontFamily: "monospace" }}>{shortSha}</span>
+          <span style={{ fontSize: 12, color: t.orange, ...MONO_FONT }}>{shortSha}</span>
           <CopyButton text={pr.headRefOid} label="commit SHA" />
         </div>
       </div>
@@ -172,7 +173,7 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
             background: `${t.blue}12`, border: `1px solid ${t.blue}30`,
-            borderRadius: 7, color: t.blue,
+            borderRadius: RADIUS, color: t.blue,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 10px",
             transition: "all 0.15s",
           }}
@@ -186,7 +187,7 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
           style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
             background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
-            borderRadius: 7, color: t.teal,
+            borderRadius: RADIUS, color: t.teal,
             cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 10px",
             transition: "all 0.15s",
           }}
@@ -202,8 +203,8 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
             display: "flex", alignItems: "center", justifyContent: "center",
             background: showActions ? `${t.green}15` : "transparent",
             border: `1px solid ${showActions ? `${t.green}40` : t.borderSubtle}`,
-            borderRadius: 7, color: showActions ? t.green : t.label4,
-            cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "6px 10px",
+            borderRadius: RADIUS, color: showActions ? t.green : t.label4,
+            cursor: "pointer", fontSize: 13, fontWeight: 600, padding: "6px 10px",
             transition: "all 0.15s", flexShrink: 0,
           }}
           onMouseEnter={(e) => { const b = e.currentTarget; if (!showActions) { b.style.background = t.surface3; b.style.color = t.label2; } }}
@@ -232,7 +233,7 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     background: busy ? `${color}18` : `${color}10`,
                     border: `1px solid ${busy ? `${color}50` : `${color}28`}`,
-                    borderRadius: 7, color,
+                    borderRadius: RADIUS, color,
                     cursor: busy ? "not-allowed" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "6px 8px",
                     opacity: busy ? 0.55 : 1,
@@ -267,7 +268,7 @@ function LocalBranchCard({
         margin: "0 12px 5px", padding: "8px 12px",
         background: selected ? `${t.blue}12` : hovered ? t.surface3 : t.surface2,
         border: `1px solid ${selected ? `${t.blue}35` : hovered ? t.borderMid : t.borderSubtle}`,
-        borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
+        borderRadius: RADIUS, display: "flex", alignItems: "center", gap: 8,
         transition: "all 0.15s", cursor: "default",
       }}
     >
@@ -281,10 +282,10 @@ function LocalBranchCard({
           transition: "all 0.15s",
         }}
       >
-        {selected && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1, fontWeight: 700 }}>✓</span>}
+        {selected && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1, fontWeight: 600 }}>✓</span>}
       </div>
       <span style={{
-        flex: 1, fontSize: 10, color: t.label3, fontFamily: "monospace",
+        flex: 1, fontSize: 10, color: t.label3, ...MONO_FONT,
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         display: "flex", alignItems: "center", gap: 5,
       }}>
@@ -294,7 +295,7 @@ function LocalBranchCard({
       <div style={{
         display: "flex", alignItems: "stretch",
         background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
-        borderRadius: 4, overflow: "hidden", flexShrink: 0,
+        borderRadius: RADIUS, overflow: "hidden", flexShrink: 0,
       }}>
         <button
           onClick={() => repoUrl && window.terminal.openExternal(`${repoUrl}/tree/${item.branch}`)}
@@ -488,15 +489,11 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
       boxShadow: t.isDark ? "-4px 0 36px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.08)",
       overflowY: "hidden",
     }}>
-      <div style={{
-        display: "flex", alignItems: "center", padding: "12px 16px",
-        borderBottom: `1px solid ${t.border}`,
-        flexShrink: 0, background: t.headerBg,
-      }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: t.label1 }}>Pull Requests</div>
+      <div style={{ ...drawerHeader(t), padding: "6px 10px 6px 14px" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={drawerTitle(t)}>Pull requests</div>
           {!loading && (
-            <div style={{ color: t.green, fontSize: 11, marginTop: 3, fontFamily: "monospace" }}>
+            <div style={{ color: t.green, fontSize: 11, marginTop: 3, ...MONO_FONT }}>
               {ownerFilter ? `${filteredPRs.length}/${prs.length}` : prs.length} open PRs · {pinnedRepos.size > 0 ? `${pinnedRepos.size} pinned` : `${repos.length} local repos`} · {!localLoading ? `${localOnly.length} branches` : "loading…"}
               <span style={{ color: t.label4 }}> · {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
@@ -510,8 +507,8 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                     key={login}
                     onClick={() => setOwnerFilter(active ? null : login)}
                     style={{
-                      fontSize: 10, fontWeight: 600, fontFamily: "monospace",
-                      padding: "2px 7px", borderRadius: 20, cursor: "pointer",
+                      fontSize: 10, fontWeight: 600, ...MONO_FONT,
+                      padding: "2px 7px", borderRadius: RADIUS, cursor: "pointer",
                       border: `1px solid ${active ? t.blue : t.borderMid}`,
                       background: active ? `${t.blue}20` : "transparent",
                       color: active ? t.blue : t.label3,
@@ -528,12 +525,12 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           )}
         </div>
         <button onClick={load} title="Refresh"
-          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: 4, lineHeight: 1, transition: "color 0.15s" }}
+          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: RADIUS, lineHeight: 1, transition: "color 0.15s" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
           onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >↺</button>
         <button onClick={onClose} title="Close"
-          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: 4, lineHeight: 1, transition: "color 0.15s" }}
+          style={{ background: "none", border: `1px solid ${t.borderMid}`, color: t.label3, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: RADIUS, lineHeight: 1, transition: "color 0.15s" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
           onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
         >✕</button>
@@ -543,21 +540,21 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
         {loading && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 10 }}>
             <div style={{ color: t.blue, fontSize: 22 }}>⟳</div>
-            <div style={{ color: t.label3, fontSize: 12, fontFamily: "monospace" }}>Fetching pull requests…</div>
+            <div style={{ color: t.label3, fontSize: 12, ...MONO_FONT }}>Fetching pull requests…</div>
           </div>
         )}
 
         {error && (
-          <div style={{ margin: 12, padding: "12px 14px", background: `${t.red}10`, border: `1px solid ${t.red}28`, borderRadius: 10 }}>
+          <div style={{ margin: 12, padding: "12px 14px", background: `${t.red}10`, border: `1px solid ${t.red}28`, borderRadius: RADIUS }}>
             <div style={{ color: t.red, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Failed to load PRs</div>
-            <div style={{ color: t.label2, fontSize: 11, fontFamily: "monospace" }}>Make sure <code style={{ color: t.teal }}>gh</code> is installed and authenticated.</div>
+            <div style={{ color: t.label2, fontSize: 11, ...MONO_FONT }}>Make sure <code style={{ color: t.teal }}>gh</code> is installed and authenticated.</div>
           </div>
         )}
 
         {!loading && !error && prs.length === 0 && !ownerFilter && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
             <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No open PRs</div>
-            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>
+            <div style={{ color: t.label3, fontSize: 11, ...MONO_FONT }}>
               {pinnedRepos.size > 0 ? "All caught up in pinned repos!" : "All caught up!"}
             </div>
           </div>
@@ -565,7 +562,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
         {!loading && !error && prs.length > 0 && filteredPRs.length === 0 && ownerFilter && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
             <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No PRs by @{ownerFilter}</div>
-            <div style={{ color: t.label3, fontSize: 11, fontFamily: "monospace" }}>Try a different owner filter</div>
+            <div style={{ color: t.label3, fontSize: 11, ...MONO_FONT }}>Try a different owner filter</div>
           </div>
         )}
 
@@ -577,7 +574,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
               <span style={{
                 color: t.green, fontSize: 10,
                 background: `${t.green}15`, border: `1px solid ${t.green}28`,
-                borderRadius: 10, padding: "1px 6px", marginLeft: 2, fontFamily: "monospace",
+                borderRadius: RADIUS, padding: "1px 6px", marginLeft: 2, ...MONO_FONT,
               }}>{repoPRs.length}</span>
             </div>
             {repoPRs.map((pr) => (
@@ -599,9 +596,9 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
             margin: "0 12px 8px", padding: "8px 12px",
             background: cleanMsg.startsWith("Error") ? `${t.red}10` : `${t.green}10`,
             border: `1px solid ${cleanMsg.startsWith("Error") ? t.red : t.green}30`,
-            borderRadius: 8,
+            borderRadius: RADIUS,
             color: cleanMsg.startsWith("Error") ? t.red : t.green,
-            fontSize: 11, fontFamily: "monospace",
+            fontSize: 11, ...MONO_FONT,
           }}>
             {cleanMsg}
           </div>
@@ -609,7 +606,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
 
         {(claudeWorktrees.length > 0 || wtMsg) && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
+            <div style={{ height: 1, background: t.borderMid, margin: "4px 16px 10px" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
               <button
                 onClick={() => setShowWorktrees((v) => !v)}
@@ -626,7 +623,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                   <span style={{
                     color: t.purple, fontSize: 10,
                     background: `${t.purple}15`, border: `1px solid ${t.purple}28`,
-                    borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                    borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
                   }}>{claudeWorktrees.length}</span>
                 )}
                 <span style={{ fontSize: 10, color: t.label4 }}>{showWorktrees ? "▾" : "▸"}</span>
@@ -636,19 +633,19 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
               <div style={{
                 margin: "0 12px 6px", padding: "6px 10px",
                 background: `${t.green}10`, border: `1px solid ${t.green}28`,
-                borderRadius: 7, color: t.green, fontSize: 11, fontFamily: "monospace",
+                borderRadius: RADIUS, color: t.green, fontSize: 11, ...MONO_FONT,
               }}>{wtMsg}</div>
             )}
             {showWorktrees && claudeWorktrees.map((w) => (
               <div key={w.path} style={{
                 margin: "0 12px 5px", padding: "8px 12px",
                 background: t.surface2, border: `1px solid ${t.borderSubtle}`,
-                borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
+                borderRadius: RADIUS, display: "flex", alignItems: "center", gap: 8,
                 transition: "all 0.15s",
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: t.label2 }}>{w.repo}</div>
-                  <div style={{ fontSize: 10, color: t.purple, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <div style={{ fontSize: 10, color: t.purple, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     ⎇ {w.branch}
                   </div>
                 </div>
@@ -657,7 +654,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                   title="Remove worktree"
                   style={{
                     background: `${t.red}10`, border: `1px solid ${t.red}28`,
-                    borderRadius: 5, color: t.red,
+                    borderRadius: RADIUS, color: t.red,
                     cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "3px 7px",
                     transition: "all 0.15s", flexShrink: 0,
                   }}
@@ -671,7 +668,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
 
         {repos.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
+            <div style={{ height: 1, background: t.borderMid, margin: "4px 16px 10px" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
               <button
                 onClick={() => setShowRepos((v) => !v)}
@@ -687,7 +684,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                 <span style={{
                   color: t.blue, fontSize: 10,
                   background: `${t.blue}15`, border: `1px solid ${t.blue}28`,
-                  borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                  borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
                 }}>{repos.length}</span>
                 <span style={{ fontSize: 10, color: t.label4 }}>{showRepos ? "▾" : "▸"}</span>
               </button>
@@ -699,7 +696,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                   margin: "0 12px 5px", padding: "8px 12px",
                   background: pinned ? `${t.orange}08` : t.surface2,
                   border: `1px solid ${pinned ? `${t.orange}28` : t.borderSubtle}`,
-                  borderRadius: 8, display: "flex", alignItems: "center", gap: 8,
+                  borderRadius: RADIUS, display: "flex", alignItems: "center", gap: 8,
                   transition: "all 0.15s",
                 }}>
                   <button
@@ -715,7 +712,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                     onMouseLeave={(e) => (e.currentTarget.style.color = pinned ? t.orange : t.label4)}
                   >{pinned ? "★" : "☆"}</button>
                   <span style={{
-                    flex: 1, fontSize: 12, color: pinned ? t.label1 : t.label2, fontFamily: "monospace",
+                    flex: 1, fontSize: 12, color: pinned ? t.label1 : t.label2, ...MONO_FONT,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     fontWeight: pinned ? 600 : 400,
                   }}>{repo.name}</span>
@@ -726,7 +723,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                         <div key={branch} style={{
                           display: "flex", alignItems: "stretch",
                           background: `${c}12`, border: `1px solid ${c}30`,
-                          borderRadius: 4, overflow: "hidden", transition: "all 0.15s",
+                          borderRadius: RADIUS, overflow: "hidden", transition: "all 0.15s",
                         }}>
                           <button
                             onClick={() => repo.repoUrl && window.terminal.openExternal(`${repo.repoUrl}/tree/${branch}`)}
@@ -734,7 +731,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                             style={{
                               background: "none", border: "none", cursor: "pointer",
                               color: c, fontSize: 10, fontWeight: 600,
-                              padding: "2px 7px", fontFamily: "monospace",
+                              padding: "2px 7px", ...MONO_FONT,
                               display: "flex", alignItems: "center", gap: 3,
                               transition: "background 0.15s",
                             }}
@@ -769,7 +766,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
 
         {!localLoading && !loading && localOnly.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${t.borderMid}, transparent)`, margin: "4px 16px 10px" }} />
+            <div style={{ height: 1, background: t.borderMid, margin: "4px 16px 10px" }} />
 
             <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
               <button
@@ -786,7 +783,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                 <span style={{
                   color: t.green, fontSize: 10,
                   background: `${t.green}15`, border: `1px solid ${t.green}28`,
-                  borderRadius: 10, padding: "1px 6px", fontFamily: "monospace",
+                  borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
                 }}>{localOnly.length}</span>
                 <span style={{ fontSize: 10, color: t.label4 }}>{showLocal ? "▾" : "▸"}</span>
               </button>
@@ -796,12 +793,12 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                   onClick={handleDeleteSelected} disabled={deleting}
                   style={{
                     background: `${t.red}10`, border: `1px solid ${t.red}30`,
-                    borderRadius: 6, color: t.red,
+                    borderRadius: RADIUS, color: t.red,
                     cursor: deleting ? "not-allowed" : "pointer",
                     fontSize: 10, fontWeight: 600, padding: "3px 8px",
                     opacity: deleting ? 0.5 : 1,
                   }}
-                >🗑 Delete {selected.size}</button>
+                >Delete {selected.size}</button>
               )}
             </div>
 
@@ -814,7 +811,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                     title="Delete branches already merged into main"
                     style={{
                       background: "none", border: `1px solid ${t.borderSubtle}`,
-                      borderRadius: 4, color: t.label3,
+                      borderRadius: RADIUS, color: t.label3,
                       cursor: deleting ? "not-allowed" : "pointer",
                       fontSize: 9, fontWeight: 600, padding: "2px 6px",
                       opacity: deleting ? 0.5 : 1, transition: "all 0.15s",

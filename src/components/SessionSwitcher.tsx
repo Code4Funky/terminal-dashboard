@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
 import type { TerminalTab } from "./RepoSidebar";
+import { RADIUS, dot } from "../chrome";
 
 interface Props {
   tabs: TerminalTab[];
@@ -88,7 +89,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
         width: 440,
         background: t.isDark ? "rgba(28,28,30,0.96)" : "rgba(255,255,255,0.96)",
         border: `1px solid ${t.border}`,
-        borderRadius: 14,
+        borderRadius: RADIUS,
         boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
         overflow: "hidden",
         backdropFilter: "blur(40px) saturate(200%)",
@@ -142,11 +143,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
                   }}
                 >
                   {/* Terminal indicator dot */}
-                  <div style={{
-                    width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
-                    background: active ? t.green : t.label4,
-                    boxShadow: active ? `0 0 6px ${t.green}80` : undefined,
-                  }} />
+                  <div style={dot(t, active ? "running" : "idle")} />
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* Title row */}
@@ -164,7 +161,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
                     }}>
                       {tab.cwd && (
                         <span style={{
-                          fontSize: 10, color: t.label3, fontFamily: "monospace",
+                          fontSize: 10, color: t.label3, ...MONO_FONT,
                           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                           maxWidth: tab.gitBranch ? 200 : 300,
                         }}>
@@ -173,7 +170,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
                       )}
                       {tab.gitBranch && (
                         <span style={{
-                          fontSize: 10, fontFamily: "monospace",
+                          fontSize: 10, ...MONO_FONT,
                           color: t.red, flexShrink: 0,
                         }}>
                           git:({tab.gitBranch})
@@ -190,7 +187,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
                   )}
 
                   {/* Session number */}
-                  <span style={{ fontSize: 10, color: t.label4, fontFamily: "monospace", flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, color: t.label4, ...MONO_FONT, flexShrink: 0 }}>
                     #{tab.id.slice(-4)}
                   </span>
                 </div>
@@ -210,7 +207,7 @@ export function SessionSwitcher({ tabs, focusedId, onSelect, onClose }: Props) {
             <span key={key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: t.label4, ...SYS_FONT }}>
               <kbd style={{
                 background: t.surface2, border: `1px solid ${t.borderMid}`,
-                borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace",
+                borderRadius: RADIUS, padding: "1px 5px", fontSize: 10, ...MONO_FONT,
                 color: t.label3,
               }}>{key}</kbd>
               {label}

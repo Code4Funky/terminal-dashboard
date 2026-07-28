@@ -1,29 +1,41 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { Theme, darkTheme, slackTheme, lightTheme } from "./theme";
+import { Theme, darkTheme, slackTheme, lightTheme, breezeTheme } from "./theme";
 
 const THEME_KEY = "td_theme";
+const REDESIGN_KEY = "td_theme_breeze_migrated";
 
-type ThemeName = "dark" | "slack" | "light";
-const themes: Record<ThemeName, Theme> = { dark: darkTheme, slack: slackTheme, light: lightTheme };
-const cycle: ThemeName[] = ["dark", "slack", "light"];
+export type ThemeName = "breeze" | "dark" | "slack" | "light";
+const themes: Record<ThemeName, Theme> = { breeze: breezeTheme, dark: darkTheme, slack: slackTheme, light: lightTheme };
+const cycle: ThemeName[] = ["breeze", "dark", "slack", "light"];
 
 interface ThemeContextValue {
   theme: Theme;
+  themeName: ThemeName;
   toggleTheme: () => void;
+  setTheme: (name: ThemeName) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: darkTheme,
+  themeName: "dark",
   toggleTheme: () => {},
+  setTheme: () => {},
 });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [themeName, setThemeName] = useState<ThemeName>(() => {
     try {
+      // Breeze is the redesign, not an extra option — move existing installs across once,
+      // then respect whatever the user picks afterwards.
+      if (!localStorage.getItem(REDESIGN_KEY)) {
+        localStorage.setItem(REDESIGN_KEY, "1");
+        localStorage.setItem(THEME_KEY, "breeze");
+        return "breeze";
+      }
       const stored = localStorage.getItem(THEME_KEY);
-      return (stored && stored in themes ? stored : "dark") as ThemeName;
+      return (stored && stored in themes ? stored : "breeze") as ThemeName;
     } catch {
-      return "dark";
+      return "breeze";
     }
   });
 
@@ -43,8 +55,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const setTheme = (name: ThemeName) => {
+    try { localStorage.setItem(THEME_KEY, name); } catch {}
+    setThemeName(name);
+  };
+
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, themeName, toggleTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

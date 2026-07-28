@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
 import { formatSize, formatDate, formatSessionLabel } from "../utils/format";
+import { RADIUS, dot, drawerHeader, drawerTitle } from "../chrome";
 
 interface Agent { name: string; description: string; model?: string; color?: string; tools: string[]; filename: string; }
 interface Command { name: string; description: string; filename: string; }
@@ -127,7 +128,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
       onClick={(e) => { e.stopPropagation(); copy(key, text); }}
       title={`Copy: ${text}`}
       style={{
-        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4,
+        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS,
         color: copied === key ? t.green : t.label4, cursor: "pointer", fontSize: 9,
         padding: "1px 5px", flexShrink: 0, transition: "all 0.12s", ...SYS_FONT,
       }}
@@ -141,7 +142,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
       onClick={(e) => { e.stopPropagation(); window.terminal.writeToFocusedTerminal(text); }}
       title={`Send to terminal: ${text}`}
       style={{
-        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4,
+        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS,
         color: t.label4, cursor: "pointer", fontSize: 9,
         padding: "1px 5px", flexShrink: 0, transition: "all 0.12s", ...SYS_FONT,
       }}
@@ -155,7 +156,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
       onClick={(e) => { e.stopPropagation(); window.terminal.openClaudeFile(filepath); }}
       title={`Edit ${filepath}`}
       style={{
-        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4,
+        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS,
         color: t.label4, cursor: "pointer", fontSize: 9,
         padding: "1px 5px", flexShrink: 0, transition: "all 0.12s", ...SYS_FONT,
       }}
@@ -169,7 +170,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
       onClick={(e) => { e.stopPropagation(); onOpenTerminal(path); }}
       title={`Open ${path} in terminal`}
       style={{
-        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4,
+        background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS,
         color: t.label4, cursor: "pointer", fontSize: 9,
         padding: "1px 5px", flexShrink: 0, transition: "all 0.12s", ...SYS_FONT,
       }}
@@ -190,20 +191,13 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
       transition: "width 0.15s ease",
     }}>
       {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "10px 14px", borderBottom: `1px solid ${t.border}`,
-        flexShrink: 0, background: t.headerBg,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, ...SYS_FONT }}>Claude Code</span>
+      <div style={{ ...drawerHeader(t), justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={drawerTitle(t)}>Claude Code</span>
           {activeCount > 0 && (
             <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{
-                width: 7, height: 7, borderRadius: "50%", background: t.green,
-                display: "inline-block", boxShadow: `0 0 6px ${t.green}`,
-              }} />
-              <span style={{ fontSize: 10, color: t.green, fontFamily: "monospace" }}>{activeCount} active</span>
+              <span style={dot(t, "running")} />
+              <span style={{ fontSize: 10, color: t.green, ...MONO_FONT }}>{activeCount} active</span>
             </span>
           )}
         </div>
@@ -239,7 +233,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
               flex: 1, background: "none", border: "none",
               borderBottom: tab === id ? `2px solid ${t.teal}` : "2px solid transparent",
               color: tab === id ? t.teal : t.label3,
-              cursor: "pointer", fontSize: 10, fontWeight: tab === id ? 700 : 500,
+              cursor: "pointer", fontSize: 10, fontWeight: tab === id ? 600 : 400,
               padding: "7px 2px 5px", transition: "all 0.15s", ...SYS_FONT,
             }}
           >
@@ -257,7 +251,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
             placeholder="Filter…"
             style={{
               width: "100%", background: t.surface2, border: `1px solid ${t.borderSubtle}`,
-              borderRadius: 6, color: t.label2, fontSize: 11, outline: "none",
+              borderRadius: RADIUS, color: t.label2, fontSize: 11, outline: "none",
               padding: "4px 8px", boxSizing: "border-box" as const, ...SYS_FONT,
             }}
           />
@@ -286,9 +280,9 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                     <div style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0, marginTop: 4 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, fontFamily: "monospace" }}>{a.name}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, ...MONO_FONT }}>{a.name}</span>
                         {a.model && (
-                          <span style={{ fontSize: 9, fontWeight: 700, color: accent, background: `${accent}18`, border: `1px solid ${accent}40`, borderRadius: 3, padding: "1px 5px", textTransform: "uppercase" as const, letterSpacing: 0.5, ...SYS_FONT }}>
+                          <span style={{ fontSize: 9, fontWeight: 600, color: accent, background: `${accent}18`, border: `1px solid ${accent}40`, borderRadius: 3, padding: "1px 5px", textTransform: "uppercase" as const, letterSpacing: 0.5, ...SYS_FONT }}>
                             {a.model}
                           </span>
                         )}
@@ -307,10 +301,10 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                   </div>
                   {isOpen && a.tools.length > 0 && (
                     <div style={{ padding: "0 14px 12px 32px" }}>
-                      <div style={{ fontSize: 9, fontWeight: 700, color: t.label4, textTransform: "uppercase" as const, letterSpacing: 0.8, marginBottom: 6, ...SYS_FONT }}>Tools ({a.tools.length})</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: t.label4, textTransform: "uppercase" as const, letterSpacing: 0.8, marginBottom: 6, ...SYS_FONT }}>Tools ({a.tools.length})</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                         {a.tools.map((tool) => (
-                          <span key={tool} title={tool} style={{ fontSize: 10, fontFamily: "monospace", color: t.teal, background: `${t.teal}14`, border: `1px solid ${t.teal}30`, borderRadius: 3, padding: "2px 6px" }}>
+                          <span key={tool} title={tool} style={{ fontSize: 10, ...MONO_FONT, color: t.teal, background: `${t.teal}14`, border: `1px solid ${t.teal}30`, borderRadius: 3, padding: "2px 6px" }}>
                             {tool.split("__").pop()}
                           </span>
                         ))}
@@ -330,7 +324,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
               <div key={c.filename} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${t.borderSubtle}` }}>
                 <span style={{ fontSize: 12, color: t.purple, flexShrink: 0, marginTop: 1 }}>/</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: t.label1, fontFamily: "monospace", marginBottom: 3 }}>{c.name}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: t.label1, ...MONO_FONT, marginBottom: 3 }}>{c.name}</div>
                   <div style={{ fontSize: 11, color: t.label3, lineHeight: 1.4, ...SYS_FONT }}>{c.description || <em>No description</em>}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
@@ -349,9 +343,9 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
             ? <Empty text={skills.length === 0 ? "No skills in ~/.claude/skills/" : "No matches"} />
             : filterByNameDesc(skills).map((s) => (
               <div key={s.name} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${t.borderSubtle}` }}>
-                <span style={{ fontSize: 11, color: t.orange, flexShrink: 0, marginTop: 2 }}>⚡</span>
+                <span style={{ fontSize: 11, color: t.orange, flexShrink: 0, marginTop: 2 }}>›</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: t.label1, fontFamily: "monospace", marginBottom: 3 }}>{s.name}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: t.label1, ...MONO_FONT, marginBottom: 3 }}>{s.name}</div>
                   <div style={{ fontSize: 11, color: t.label3, lineHeight: 1.4, ...SYS_FONT }}>{s.description || <em>No description</em>}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
@@ -385,10 +379,10 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                             <span style={{ fontSize: 12, fontWeight: 600, color: accent, ...SYS_FONT }}>{h.event}</span>
                             {h.matcher && (
-                              <span style={{ fontSize: 9, color: t.label4, background: t.surface3, borderRadius: 3, padding: "1px 5px", fontFamily: "monospace" }}>{h.matcher}</span>
+                              <span style={{ fontSize: 9, color: t.label4, background: t.surface3, borderRadius: 3, padding: "1px 5px", ...MONO_FONT }}>{h.matcher}</span>
                             )}
                           </div>
-                          <div style={{ fontSize: 11, color: t.label3, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: isOpen ? "pre-wrap" : "nowrap" }}>
+                          <div style={{ fontSize: 11, color: t.label3, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: isOpen ? "pre-wrap" : "nowrap" }}>
                             {h.command}
                           </div>
                         </div>
@@ -423,8 +417,8 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                     onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "")}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, color: t.label2, fontFamily: "monospace" }}>{formatSessionLabel(s.filename)}</div>
-                      <div style={{ fontSize: 10, color: t.label4, marginTop: 2, fontFamily: "monospace" }}>
+                      <div style={{ fontSize: 12, color: t.label2, ...MONO_FONT }}>{formatSessionLabel(s.filename)}</div>
+                      <div style={{ fontSize: 10, color: t.label4, marginTop: 2, ...MONO_FONT }}>
                         {formatDate(s.lastModified)} · {formatSize(s.size)}
                       </div>
                     </div>
@@ -447,23 +441,23 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                 onMouseEnter={(e) => (e.currentTarget.style.color = t.purple)}
                 onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
               >←</button>
-              <span style={{ fontSize: 12, color: t.label2, fontFamily: "monospace", flex: 1 }}>
+              <span style={{ fontSize: 12, color: t.label2, ...MONO_FONT, flex: 1 }}>
                 {formatSessionLabel(sessionView.entry.filename)}
               </span>
-              <span style={{ fontSize: 10, color: t.label4, fontFamily: "monospace" }}>{formatSize(sessionView.entry.size)}</span>
+              <span style={{ fontSize: 10, color: t.label4, ...MONO_FONT }}>{formatSize(sessionView.entry.size)}</span>
             </div>
             {sessionView.loading
-              ? <div style={{ padding: 16, color: t.label3, fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+              ? <div style={{ padding: 16, color: t.label3, fontSize: 12, ...MONO_FONT }}>Loading…</div>
               : sessionView.messages.length === 0
-                ? <div style={{ padding: 16, color: t.label3, fontSize: 12, fontFamily: "monospace" }}>No messages found.</div>
+                ? <div style={{ padding: 16, color: t.label3, fontSize: 12, ...MONO_FONT }}>No messages found.</div>
                 : sessionView.messages.map((msg, i) => (
                   <div key={i} style={{ padding: "8px 14px", borderBottom: `1px solid ${t.borderSubtle}` }}>
                     <div style={{
-                      fontSize: 9, fontWeight: 700,
+                      fontSize: 9, fontWeight: 600,
                       color: msg.role === "user" ? t.blue : t.purple,
                       textTransform: "uppercase" as const, letterSpacing: 0.8, marginBottom: 4,
                     }}>{msg.role}</div>
-                    <div style={{ fontSize: 11, color: t.label2, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6, fontFamily: "monospace" }}>
+                    <div style={{ fontSize: 11, color: t.label2, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6, ...MONO_FONT }}>
                       {msg.content}
                     </div>
                   </div>
@@ -490,10 +484,10 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                       >
                         <span style={{ fontSize: 11, color: t.purple, flexShrink: 0 }}>◈</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: t.label2, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: t.label2, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {f.label}
                           </div>
-                          <div style={{ fontSize: 10, color: t.label4, marginTop: 1, fontFamily: "monospace" }}>{formatSize(f.size)}</div>
+                          <div style={{ fontSize: 10, color: t.label4, marginTop: 1, ...MONO_FONT }}>{formatSize(f.size)}</div>
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
                           {editBtn(f.path)}
@@ -503,7 +497,7 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
                       {isOpen && (
                         <div style={{ padding: "8px 14px 12px 34px", background: t.surface2, borderTop: `1px solid ${t.borderSubtle}` }}>
                           <pre style={{
-                            fontSize: 10, color: t.label3, fontFamily: "monospace",
+                            fontSize: 10, color: t.label3, ...MONO_FONT,
                             whiteSpace: "pre-wrap", wordBreak: "break-word",
                             margin: 0, lineHeight: 1.6, maxHeight: 320, overflowY: "auto",
                           }}>
@@ -522,5 +516,5 @@ export function ClaudeAgentsDrawer({ onClose, onOpenTerminal }: Props) {
 }
 
 function Empty({ text }: { text: string }) {
-  return <div style={{ padding: 16, color: "#8e8e93", fontSize: 12, fontFamily: "monospace" }}>{text}</div>;
+  return <div style={{ padding: 16, color: "#8e8e93", fontSize: 12, ...MONO_FONT }}>{text}</div>;
 }

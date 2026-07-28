@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
+import { RADIUS } from "../chrome";
 
 interface Props {
   onClose: () => void;
@@ -40,7 +41,7 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
   const rowStyle: React.CSSProperties = {
     background: t.surface2,
     border: `1px solid ${t.borderSubtle}`,
-    borderRadius: 8,
+    borderRadius: RADIUS,
     padding: "11px 14px",
     cursor: "pointer",
     textAlign: "left",
@@ -64,7 +65,7 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
         onClick={(e) => e.stopPropagation()}
         style={{
           background: t.surface1, border: `1px solid ${t.border}`,
-          borderRadius: 12, width: 380, overflow: "hidden",
+          borderRadius: RADIUS, width: 380, overflow: "hidden",
           boxShadow: t.isDark ? "0 32px 80px rgba(0,0,0,0.7)" : "0 16px 48px rgba(0,0,0,0.18)",
         }}
       >
@@ -73,7 +74,7 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
           padding: "13px 16px", borderBottom: `1px solid ${t.border}`,
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <span style={{ color: t.label1, fontSize: 13, fontWeight: 700, ...SYS_FONT }}>New Terminal</span>
+          <span style={{ color: t.label1, fontSize: 13, fontWeight: 600, ...SYS_FONT }}>New terminal</span>
           <button
             onClick={onClose}
             style={{
@@ -100,13 +101,13 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
             }}
           >
             <div style={{
-              width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+              width: 36, height: 36, borderRadius: RADIUS, flexShrink: 0,
               background: `${t.green}12`, border: `1px solid ${t.green}28`,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 18,
             }}>⬡</div>
             <div>
-              <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, marginBottom: 2, ...SYS_FONT }}>Root Terminal</div>
+              <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, marginBottom: 2, ...SYS_FONT }}>Root terminal</div>
               <div style={{ color: t.label3, fontSize: 11, ...SYS_FONT }}>
                 New shell at{" "}
                 <code style={{ color: t.green, background: `${t.green}12`, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>~/</code>
@@ -130,7 +131,7 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
               <div style={{
                 display: "flex", alignItems: "center", gap: 8,
                 background: t.surface2, border: `1px solid ${t.borderMid}`,
-                borderRadius: 8, padding: "7px 10px", marginBottom: 2,
+                borderRadius: RADIUS, padding: "7px 10px", marginBottom: 2,
               }}>
                 <span style={{ fontSize: 13, color: t.label4, lineHeight: 1, flexShrink: 0 }}>⌕</span>
                 <input
@@ -178,7 +179,7 @@ export function NewTerminalModal({ onClose, onOpenRoot, onOpenInRepo, repos }: P
                         }}
                       >
                         <span style={{ color: t.blue, fontSize: 13, flexShrink: 0 }}>⎇</span>
-                        <span style={{ color: t.label2, fontSize: 12, flex: 1, textAlign: "left", fontFamily: "monospace" }}>
+                        <span style={{ color: t.label2, fontSize: 12, flex: 1, textAlign: "left", ...MONO_FONT }}>
                           {repo.name}
                         </span>
                       </button>

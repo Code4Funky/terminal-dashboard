@@ -1,9 +1,23 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// Mirrors src/types/tasks.ts — inlined to keep the preload off the renderer's tsconfig.
+type PreloadTaskSummary = {
+  claudeSessionId: string;
+  panelNumber: number | null;
+  cwd: string;
+  source: "task-tools" | "todowrite" | "todo-file" | "manual";
+  repoRoot?: string;
+  updatedAt: number;
+  tasks: { id: string; subject: string; status: "pending" | "in_progress" | "completed"; activeForm?: string; updatedAt: number; priority?: "high" | "medium" | "low"; due?: string; blocked?: boolean }[];
+  total: number;
+  completed: number;
+  inProgress: number;
+};
+
 contextBridge.exposeInMainWorld("terminal", {
   getState: (): Promise<{
     terminalCounter: number;
-    lastPanels: { number: number; title: string }[];
+    lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[];
   }> => ipcRenderer.invoke("terminal:get-state"),
 
   create: (
@@ -21,11 +35,14 @@ contextBridge.exposeInMainWorld("terminal", {
     { number: number; size: number; lastModified: number; title?: string }[]
   > => ipcRenderer.invoke("terminal:list-history"),
 
-  savePanels: (panels: { number: number; title: string }[]): void =>
+  savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]): void =>
     ipcRenderer.send("terminal:save-panels", panels),
 
   write: (id: string, data: string): void =>
     ipcRenderer.send("terminal:write", id, data),
+
+  writeToAll: (data: string): void =>
+    ipcRenderer.send("terminal:write-broadcast", data),
 
   resize: (id: string, cols: number, rows: number): void =>
     ipcRenderer.send("terminal:resize", id, cols, rows),
@@ -131,6 +148,58 @@ contextBridge.exposeInMainWorld("terminal", {
   listClaudeHooks: (): Promise<{ event: string; matcher?: string; command: string }[]> =>
     ipcRenderer.invoke("claude:list-hooks"),
 
+  getPanelClaudeSessions: (panelNumber: number): Promise<{ claudeSessionId: string; cwd: string; startedAt: number }[]> =>
+    ipcRenderer.invoke("claude:get-panel-sessions", panelNumber),
+
+  getAllPanelClaudeSessions: (): Promise<Record<number, { claudeSessionId: string; cwd: string; startedAt: number }[]>> =>
+    ipcRenderer.invoke("claude:get-all-panel-sessions"),
+
+  getClaudeHookStatus: (): Promise<{ scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean }> =>
+    ipcRenderer.invoke("claude:hook-status"),
+
+  installClaudeHook: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("claude:install-hook"),
+
+  getAllClaudeTasks: (): Promise<PreloadTaskSummary[]> =>
+    ipcRenderer.invoke("claude:get-all-tasks"),
+
+  getPanelTasks: (panelNumber: number): Promise<PreloadTaskSummary[]> =>
+    ipcRenderer.invoke("claude:get-panel-tasks", panelNumber),
+
+  installTaskHook: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("claude:install-task-hook"),
+
+  addManualTask: (subject: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:add-manual-task", subject),
+
+  toggleManualTask: (taskId: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:toggle-manual-task", taskId),
+
+  removeManualTask: (taskId: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:remove-manual-task", taskId),
+
+  deleteTodoFileItem: (filePath: string, index: number): Promise<boolean> =>
+    ipcRenderer.invoke("claude:delete-todo-file-item", filePath, index),
+
+  clearCompletedTodoFileItems: (filePath: string): Promise<number> =>
+    ipcRenderer.invoke("claude:clear-completed-todo-file-items", filePath),
+
+  rescanTodoFiles: (): Promise<number> =>
+    ipcRenderer.invoke("claude:rescan-todo-files"),
+
+  onClaudeSessionRecorded: (cb: (panelNumber: number, claudeSessionId: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, panelNumber: number, claudeSessionId: string) =>
+      cb(panelNumber, claudeSessionId);
+    ipcRenderer.on("terminal:claude-session-recorded", handler);
+    return () => ipcRenderer.removeListener("terminal:claude-session-recorded", handler);
+  },
+
+  onClaudeTasksUpdated: (cb: (summary: PreloadTaskSummary) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, summary: PreloadTaskSummary) => cb(summary);
+    ipcRenderer.on("terminal:claude-tasks-updated", handler);
+    return () => ipcRenderer.removeListener("terminal:claude-tasks-updated", handler);
+  },
+
   onClaudeConfigChanged: (cb: () => void): (() => void) => {
     const handler = () => cb();
     ipcRenderer.on("claude:config-changed", handler);
@@ -187,29 +256,51 @@ contextBridge.exposeInMainWorld("terminal", {
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
 
-  openFolder: (repoName: string): Promise<void> =>
-    ipcRenderer.invoke("shell:open-folder", repoName),
+  // repoOrPath: a bare repo name (under ~/Documents/GitHub) or an absolute / ~-prefixed root
+  openFolder: (repoOrPath: string): Promise<void> =>
+    ipcRenderer.invoke("shell:open-folder", repoOrPath),
 
-  listDir: (repoName: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> =>
-    ipcRenderer.invoke("repo:list-dir", repoName, subdir),
+  listDir: (repoOrPath: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> =>
+    ipcRenderer.invoke("repo:list-dir", repoOrPath, subdir),
 
-  listFiles: (repoName: string): Promise<string[]> =>
-    ipcRenderer.invoke("repo:list-files", repoName),
+  listDirs: (path?: string, showHidden?: boolean): Promise<{ path: string; parent: string | null; home: string; entries: { name: string; path: string; count: number | null }[] }> =>
+    ipcRenderer.invoke("fs:list-dirs", path, showHidden),
 
-  grepFiles: (repoName: string, query: string): Promise<string[]> =>
-    ipcRenderer.invoke("repo:grep-files", repoName, query),
+  getFrequentDirs: (): Promise<{ name: string }[]> =>
+    ipcRenderer.invoke("fs:frequent-dirs"),
 
-  openRepoFile: (repoName: string, filePath: string): Promise<void> =>
-    ipcRenderer.invoke("repo:open-file", repoName, filePath),
+  listFiles: (repoOrPath: string): Promise<string[]> =>
+    ipcRenderer.invoke("repo:list-files", repoOrPath),
 
-  readRepoFile: (repoName: string, filePath: string): Promise<string> =>
-    ipcRenderer.invoke("repo:read-file", repoName, filePath),
+  grepMatches: (repoOrPath: string, query: string, limit?: number, mode?: { caseSensitive?: boolean; regex?: boolean }): Promise<{ hits: { file: string; count: number; line: number; preview: string }[]; totalFiles: number; badPattern?: boolean; truncated?: boolean; timedOut?: boolean }> =>
+    ipcRenderer.invoke("repo:grep-matches", repoOrPath, query, limit, mode),
 
-  openInEditor: (repoName: string, filePath: string, editor: string): Promise<void> =>
-    ipcRenderer.invoke("repo:open-in-editor", repoName, filePath, editor),
+  openRepoFile: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-file", repoOrPath, filePath),
 
-  showInFinder: (repoName: string, filePath: string): Promise<void> =>
-    ipcRenderer.invoke("repo:show-in-finder", repoName, filePath),
+  readRepoFile: (repoOrPath: string, filePath: string): Promise<string | null> =>
+    ipcRenderer.invoke("repo:read-file", repoOrPath, filePath),
+
+  writeRepoFile: (repoOrPath: string, filePath: string, content: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("repo:write-file", repoOrPath, filePath, content),
+
+  watchRepoFile: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:watch-file", repoOrPath, filePath),
+
+  unwatchRepoFile: (): Promise<void> => ipcRenderer.invoke("repo:unwatch-file"),
+
+  onFileChanged: (cb: (repo: string, filePath: string, content: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, repo: string, filePath: string, content: string) =>
+      cb(repo, filePath, content);
+    ipcRenderer.on("terminal:file-changed", handler);
+    return () => ipcRenderer.removeListener("terminal:file-changed", handler);
+  },
+
+  openInEditor: (repoOrPath: string, filePath: string, editor: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-in-editor", repoOrPath, filePath, editor),
+
+  showInFinder: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:show-in-finder", repoOrPath, filePath),
 
   getRepoBranch: (repoName: string): Promise<string | null> =>
     ipcRenderer.invoke("git:current-branch", repoName),
@@ -221,6 +312,9 @@ contextBridge.exposeInMainWorld("terminal", {
 
   getChangeCount: (repoName: string): Promise<number> =>
     ipcRenderer.invoke("git:change-count", repoName),
+
+  getRepoStatus: (repoOrPath: string): Promise<{ branch: string; ahead: number; behind: number; changed: number } | null> =>
+    ipcRenderer.invoke("git:repo-status", repoOrPath),
 
   getFileDiff: (repoName: string, filePath: string, staged: boolean): Promise<string> =>
     ipcRenderer.invoke("git:file-diff", repoName, filePath, staged),
@@ -380,5 +474,39 @@ contextBridge.exposeInMainWorld("terminal", {
     const handler = (_: Electron.IpcRendererEvent, id: string, toolName: string) => { if (id === requestId) cb(toolName); };
     ipcRenderer.on("chat:tool-activity", handler);
     return () => ipcRenderer.removeListener("chat:tool-activity", handler);
+  },
+
+  getLinearIssues: (): Promise<{
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }> => ipcRenderer.invoke("linear:get-issues"),
+
+  syncLinear: (): Promise<{
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }> => ipcRenderer.invoke("linear:sync"),
+
+  onLinearIssuesUpdated: (cb: (state: {
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, s: Parameters<typeof cb>[0]) => cb(s);
+    ipcRenderer.on("linear:issues-updated", handler);
+    return () => ipcRenderer.removeListener("linear:issues-updated", handler);
   },
 });

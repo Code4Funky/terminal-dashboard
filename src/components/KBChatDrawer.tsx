@@ -4,8 +4,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
 import type { Theme } from "../theme";
+import { RADIUS } from "../chrome";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Mode = "kb" | "code";
@@ -489,7 +490,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
               placeholder="Search…"
               style={{
                 flex: 1, background: t.surface2, border: `1px solid ${t.borderMid}`,
-                borderRadius: 5, color: t.label1, fontSize: 11, padding: "3px 6px",
+                borderRadius: RADIUS, color: t.label1, fontSize: 11, padding: "3px 6px",
                 outline: "none", ...SYS_FONT,
               }}
             />
@@ -497,8 +498,8 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
               onClick={() => createSession()}
               style={{
                 background: `${t.blue}20`, border: `1px solid ${t.blue}40`,
-                borderRadius: 5, color: t.blue, cursor: "pointer",
-                fontSize: 15, fontWeight: 700, padding: "0px 7px", lineHeight: "20px",
+                borderRadius: RADIUS, color: t.blue, cursor: "pointer",
+                fontSize: 15, fontWeight: 600, padding: "0px 7px", lineHeight: "20px",
               }}
               title="New chat"
             >+</button>
@@ -519,7 +520,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                     display: "flex", alignItems: "stretch", gap: 6,
                     padding: "7px 8px",
                     marginBottom: 2,
-                    borderRadius: 7,
+                    borderRadius: RADIUS,
                     background: isSelected
                       ? (t.isDark ? `${mc}1e` : "#ffffff")
                       : isHovered ? (t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)") : "transparent",
@@ -593,8 +594,8 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                           title="Confirm delete"
                           style={{
                             background: `${t.red}28`, border: `1px solid ${t.red}60`,
-                            borderRadius: 4, color: t.red, cursor: "pointer",
-                            fontSize: 9, fontWeight: 700, padding: "1px 5px",
+                            borderRadius: RADIUS, color: t.red, cursor: "pointer",
+                            fontSize: 9, fontWeight: 600, padding: "1px 5px",
                             flexShrink: 0, whiteSpace: "nowrap",
                           }}
                         >Sure?</button>
@@ -655,8 +656,8 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
             onClick={() => createSession()}
             style={{
               background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-              borderRadius: 5, color: t.blue, cursor: "pointer",
-              fontSize: 10, fontWeight: 700, padding: "2px 8px",
+              borderRadius: RADIUS, color: t.blue, cursor: "pointer",
+              fontSize: 10, fontWeight: 600, padding: "2px 8px",
               transition: "all 0.15s", ...SYS_FONT,
             }}
             onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}28`; }}
@@ -670,7 +671,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
               style={{
                 background: splitMode ? "rgba(139,92,246,0.15)" : "none",
                 border: `1px solid ${splitMode ? "rgba(139,92,246,0.4)" : "transparent"}`,
-                borderRadius: 5, cursor: "pointer", padding: "3px 5px",
+                borderRadius: RADIUS, cursor: "pointer", padding: "3px 5px",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 opacity: splitMode ? 1 : 0.5, transition: "all 0.15s", color: splitMode ? "rgb(139,92,246)" : t.label3,
               }}
@@ -711,7 +712,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
               onClick={retryLast}
               style={{
                 background: "none", border: `1px solid ${t.borderMid}`,
-                borderRadius: 5, color: t.label3, cursor: "pointer",
+                borderRadius: RADIUS, color: t.label3, cursor: "pointer",
                 fontSize: 10, padding: "2px 8px", ...SYS_FONT,
               }}
               onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
@@ -728,7 +729,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
           <div style={{
             background: t.surface2,
             border: `1px solid ${t.borderMid}`,
-            borderRadius: 12,
+            borderRadius: RADIUS,
           }}>
             {/* Textarea */}
             <textarea
@@ -760,7 +761,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
 
               {/* Mode toggle */}
               {current && (
-                <div style={{ position: "relative", display: "flex", gap: 1, background: t.surface3, borderRadius: 5, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
+                <div style={{ position: "relative", display: "flex", gap: 1, background: t.surface3, borderRadius: RADIUS, padding: 2, border: `1px solid ${t.borderSubtle}` }}>
                   {(["kb", "code"] as Mode[]).map((m) => (
                     <button
                       key={m}
@@ -772,10 +773,10 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                       style={{
                         background: current.mode === m ? `${getModeColor(m, t)}28` : "none",
                         border: `1px solid ${current.mode === m ? getModeColor(m, t) + "60" : "transparent"}`,
-                        borderRadius: 4,
+                        borderRadius: RADIUS,
                         color: current.mode === m ? getModeColor(m, t) : t.label3,
                         cursor: loading ? "not-allowed" : "pointer",
-                        fontSize: 10, fontWeight: 700, padding: "1px 7px",
+                        fontSize: 10, fontWeight: 600, padding: "1px 7px",
                         transition: "all 0.15s", ...SYS_FONT,
                       }}
                     >{m === "kb" ? "KB" : "Code"}</button>
@@ -785,7 +786,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                       position: "absolute", bottom: "calc(100% + 6px)", left: "50%",
                       transform: "translateX(-50%)",
                       background: t.surface2, border: `1px solid ${t.borderMid}`,
-                      borderRadius: 5, padding: "4px 8px",
+                      borderRadius: RADIUS, padding: "4px 8px",
                       fontSize: 10, color: t.label2, whiteSpace: "nowrap",
                       boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
                       pointerEvents: "none", zIndex: 50, ...SYS_FONT,
@@ -806,7 +807,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                     display: "flex", alignItems: "center", gap: 3,
                     background: settingsOpen ? `${t.label3}15` : "none",
                     border: `1px solid ${settingsOpen ? t.borderMid : "transparent"}`,
-                    borderRadius: 6, color: settingsOpen ? t.label2 : t.label3,
+                    borderRadius: RADIUS, color: settingsOpen ? t.label2 : t.label3,
                     cursor: "pointer", fontSize: 10, padding: "3px 7px",
                     transition: "all 0.15s", ...SYS_FONT,
                   }}
@@ -822,10 +823,10 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                   <div style={{
                     position: "absolute", bottom: "calc(100% + 6px)", right: 0, zIndex: 100,
                     background: t.surface1, border: `1px solid ${t.border}`,
-                    borderRadius: 8, padding: "10px 12px", minWidth: 280,
+                    borderRadius: RADIUS, padding: "10px 12px", minWidth: 280,
                     boxShadow: t.isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(0,0,0,0.12)",
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 8, ...SYS_FONT }}>Model</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: t.label3, marginBottom: 8, ...SYS_FONT }}>Model</div>
                     {MODELS.map((m) => (
                       <div
                         key={m.id}
@@ -835,7 +836,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                           window.terminal.saveChatSettings(next);
                         }}
                         style={{
-                          padding: "6px 8px", borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                          padding: "6px 8px", borderRadius: RADIUS, cursor: "pointer", marginBottom: 2,
                           background: chatSettings.model === m.id
                             ? (t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)")
                             : "none",
@@ -849,11 +850,11 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                           <div style={{ fontSize: 11, fontWeight: 600, color: t.label1, ...SYS_FONT }}>{m.label}</div>
                           <div style={{ fontSize: 10, color: t.label4, ...SYS_FONT }}>{m.desc}</div>
                         </div>
-                        {chatSettings.model === m.id && <span style={{ color: t.blue, fontSize: 12, fontWeight: 700 }}>✓</span>}
+                        {chatSettings.model === m.id && <span style={{ color: t.blue, fontSize: 12, fontWeight: 600 }}>✓</span>}
                       </div>
                     ))}
                     <div style={{ borderTop: `1px solid ${t.borderSubtle}`, margin: "10px 0 8px" }} />
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.label3, marginBottom: 6, ...SYS_FONT }}>Wiki directory</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: t.label3, marginBottom: 6, ...SYS_FONT }}>Wiki directory</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span
                         title={chatSettings.wikiDir}
@@ -875,7 +876,7 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                         style={{
                           flexShrink: 0,
                           background: t.surface3, border: `1px solid ${t.borderMid}`,
-                          borderRadius: 5, color: t.label2, cursor: "pointer",
+                          borderRadius: RADIUS, color: t.label2, cursor: "pointer",
                           fontSize: 10, padding: "3px 8px", transition: "all 0.15s", ...SYS_FONT,
                         }}
                         onMouseEnter={(e) => (e.currentTarget.style.borderColor = t.blue)}
@@ -892,8 +893,8 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                   onClick={stopChat}
                   style={{
                     background: `${t.red}20`, border: `1px solid ${t.red}40`,
-                    borderRadius: 7, color: t.red, cursor: "pointer",
-                    fontSize: 11, fontWeight: 700, padding: "4px 9px",
+                    borderRadius: RADIUS, color: t.red, cursor: "pointer",
+                    fontSize: 11, fontWeight: 600, padding: "4px 9px",
                     flexShrink: 0, lineHeight: 1, ...SYS_FONT,
                   }}
                   title="Stop"
@@ -904,10 +905,10 @@ export function KBChatDrawer({ onClose, splitMode = false, onToggleSplit }: Prop
                   disabled={!input.trim()}
                   style={{
                     background: !input.trim() ? t.surface3 : t.blue,
-                    border: "none", borderRadius: 7,
+                    border: "none", borderRadius: RADIUS,
                     color: !input.trim() ? t.label4 : "#fff",
                     cursor: !input.trim() ? "not-allowed" : "pointer",
-                    fontSize: 13, fontWeight: 700, padding: "4px 10px",
+                    fontSize: 13, fontWeight: 600, padding: "4px 10px",
                     transition: "all 0.15s", flexShrink: 0, lineHeight: 1, ...SYS_FONT,
                   }}
                   title="Send (↵)"
@@ -930,7 +931,6 @@ function EmptyState({ mode, t, wikiDir }: { mode: Mode; t: Theme; wikiDir: strin
       alignItems: "center", justifyContent: "center",
       padding: "60px 24px 40px", textAlign: "center", gap: 8,
     }}>
-      <div style={{ fontSize: 22, marginBottom: 2 }}>{mode === "kb" ? "📖" : "💻"}</div>
       <div style={{ fontSize: 13, fontWeight: 600, color: t.label2, ...SYS_FONT }}>
         {mode === "kb" ? "Ask your knowledge base" : "Ask about your codebase"}
       </div>
@@ -966,7 +966,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
           ? (t.isDark ? "rgba(10,132,255,0.2)" : "rgba(0,122,255,0.12)")
           : isError ? `${t.red}0a` : t.surface2,
         border: `1px solid ${isUser ? t.blue + "40" : isError ? t.red + "30" : t.borderSubtle}`,
-        borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
+        borderRadius: RADIUS,
         padding: "7px 11px",
         fontSize: 12,
         color: t.label1,
@@ -979,7 +979,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
         ) : isError ? (
           <div style={{ ...SYS_FONT }}>
             {showRaw ? (
-              <pre style={{ fontSize: 10, color: t.label3, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "monospace" }}>
+              <pre style={{ fontSize: 10, color: t.label3, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all", ...MONO_FONT }}>
                 {msg.content.replace(/^Error:\s*/, "")}
               </pre>
             ) : (
@@ -1027,7 +1027,7 @@ function MessageBubble({ msg, t }: { msg: ChatMessage; t: Theme }) {
               style={{
                 background: msgCopied ? `${t.green}18` : "none",
                 border: `1px solid ${msgCopied ? t.green + "50" : t.borderSubtle}`,
-                borderRadius: 4,
+                borderRadius: RADIUS,
                 color: msgCopied ? t.green : t.label3,
                 cursor: "pointer", fontSize: 10, padding: "1px 6px",
                 transition: "all 0.15s", ...SYS_FONT,
@@ -1116,7 +1116,7 @@ function CodeBlock({ children, t }: { children: ReactNode; t: Theme }) {
           position: "absolute", top: 5, right: 5,
           background: copied ? `${t.green}20` : t.surface3,
           border: `1px solid ${copied ? t.green + "50" : t.borderMid}`,
-          borderRadius: 4, color: copied ? t.green : t.label3,
+          borderRadius: RADIUS, color: copied ? t.green : t.label3,
           cursor: "pointer", fontSize: 10, padding: "2px 6px",
           transition: "all 0.15s", ...SYS_FONT,
         }}
@@ -1215,8 +1215,8 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
 
   if (error) {
     return (
-      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: 6, padding: 8, margin: "4px 0" }}>
-        <pre style={{ color: t.label2, fontSize: 11, margin: 0, fontFamily: "monospace" }}>{code}</pre>
+      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS, padding: 8, margin: "4px 0" }}>
+        <pre style={{ color: t.label2, fontSize: 11, margin: 0, ...MONO_FONT }}>{code}</pre>
         <div style={{ fontSize: 10, color: t.red, marginTop: 4, ...SYS_FONT }}>Failed to render diagram</div>
       </div>
     );
@@ -1242,7 +1242,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
             onClick={(e) => e.stopPropagation()}
             style={{
               position: "relative", width: "88vw", height: "80vh",
-              borderRadius: 10, overflow: "hidden",
+              borderRadius: RADIUS, overflow: "hidden",
               boxShadow: "0 20px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.07)",
               display: "flex", flexDirection: "column",
             }}
@@ -1252,7 +1252,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 position: "absolute", top: 8, right: 8, zIndex: 2,
                 background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.2)",
-                borderRadius: 6, color: "#fff", cursor: "pointer",
+                borderRadius: RADIUS, color: "#fff", cursor: "pointer",
                 fontSize: 11, padding: "3px 9px",
                 backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
                 ...SYS_FONT,
@@ -1296,8 +1296,8 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
         {showCode ? (
           <pre style={{
             background: t.surface3, border: `1px solid ${t.borderSubtle}`,
-            borderRadius: 8, padding: "12px 10px", margin: "4px 0",
-            fontSize: 11, color: t.label2, fontFamily: "monospace",
+            borderRadius: RADIUS, padding: "12px 10px", margin: "4px 0",
+            fontSize: 11, color: t.label2, ...MONO_FONT,
             overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
           }}>{code}</pre>
         ) : (
@@ -1306,7 +1306,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
             style={{
               background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
               border: `1px solid ${t.borderSubtle}`,
-              borderRadius: 8, padding: "12px 8px", margin: "4px 0", overflowX: "auto",
+              borderRadius: RADIUS, padding: "12px 8px", margin: "4px 0", overflowX: "auto",
             }}
           />
         )}
@@ -1319,7 +1319,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 background: codeCopied ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
                 border: `1px solid ${codeCopied ? t.green + "50" : t.borderMid}`,
-                borderRadius: 4, color: codeCopied ? t.green : t.label3,
+                borderRadius: RADIUS, color: codeCopied ? t.green : t.label3,
                 cursor: "pointer", fontSize: 10, padding: "2px 7px",
                 transition: "all 0.15s", ...SYS_FONT,
               }}
@@ -1331,7 +1331,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 background: t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
                 border: `1px solid ${t.borderMid}`,
-                borderRadius: 4, color: t.label3,
+                borderRadius: RADIUS, color: t.label3,
                 cursor: "pointer", fontSize: 10, padding: "2px 7px",
                 transition: "all 0.15s", ...SYS_FONT,
               }}
@@ -1345,7 +1345,7 @@ function MermaidBlock({ code, t }: { code: string; t: Theme }) {
             style={{
               background: showCode ? `${t.blue}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
               border: `1px solid ${showCode ? t.blue + "50" : t.borderMid}`,
-              borderRadius: 4, color: showCode ? t.blue : t.label3,
+              borderRadius: RADIUS, color: showCode ? t.blue : t.label3,
               cursor: "pointer", fontSize: 10, padding: "2px 7px",
               transition: "all 0.15s", ...SYS_FONT,
             }}
@@ -1453,8 +1453,8 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
 
   if (error) {
     return (
-      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: 6, padding: 8, margin: "4px 0" }}>
-        <pre style={{ color: t.label2, fontSize: 11, margin: 0, fontFamily: "monospace" }}>{code}</pre>
+      <div style={{ background: t.surface3, border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS, padding: 8, margin: "4px 0" }}>
+        <pre style={{ color: t.label2, fontSize: 11, margin: 0, ...MONO_FONT }}>{code}</pre>
         <div style={{ fontSize: 10, color: t.red, marginTop: 4, ...SYS_FONT }}>Failed to render Excalidraw diagram</div>
       </div>
     );
@@ -1479,7 +1479,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
             onClick={(e) => e.stopPropagation()}
             style={{
               position: "relative", width: "88vw", height: "80vh",
-              borderRadius: 10, overflow: "hidden",
+              borderRadius: RADIUS, overflow: "hidden",
               boxShadow: "0 20px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.07)",
               display: "flex", flexDirection: "column",
             }}
@@ -1489,7 +1489,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 position: "absolute", top: 8, right: 8, zIndex: 2,
                 background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.2)",
-                borderRadius: 6, color: "#fff", cursor: "pointer",
+                borderRadius: RADIUS, color: "#fff", cursor: "pointer",
                 fontSize: 11, padding: "3px 9px",
                 backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
                 ...SYS_FONT,
@@ -1530,8 +1530,8 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
         {showCode ? (
           <pre style={{
             background: t.surface3, border: `1px solid ${t.borderSubtle}`,
-            borderRadius: 8, padding: "12px 10px", margin: "4px 0",
-            fontSize: 11, color: t.label2, fontFamily: "monospace",
+            borderRadius: RADIUS, padding: "12px 10px", margin: "4px 0",
+            fontSize: 11, color: t.label2, ...MONO_FONT,
             overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
           }}>{code}</pre>
         ) : (
@@ -1541,7 +1541,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
             style={{
               background: t.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
               border: `1px solid ${t.borderSubtle}`,
-              borderRadius: 8, padding: "8px", margin: "4px 0",
+              borderRadius: RADIUS, padding: "8px", margin: "4px 0",
               overflow: "hidden", height: 240,
             }}
           />
@@ -1553,7 +1553,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 background: codeCopied ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
                 border: `1px solid ${codeCopied ? t.green + "50" : t.borderMid}`,
-                borderRadius: 4, color: codeCopied ? t.green : t.label3,
+                borderRadius: RADIUS, color: codeCopied ? t.green : t.label3,
                 cursor: "pointer", fontSize: 10, padding: "2px 7px",
                 transition: "all 0.15s", ...SYS_FONT,
               }}
@@ -1565,7 +1565,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
               style={{
                 background: t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
                 border: `1px solid ${t.borderMid}`,
-                borderRadius: 4, color: t.label3,
+                borderRadius: RADIUS, color: t.label3,
                 cursor: "pointer", fontSize: 10, padding: "2px 7px",
                 transition: "all 0.15s", ...SYS_FONT,
               }}
@@ -1579,7 +1579,7 @@ function ExcalidrawBlock({ code, t }: { code: string; t: Theme }) {
             style={{
               background: showCode ? `${t.blue}18` : (t.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"),
               border: `1px solid ${showCode ? t.blue + "50" : t.borderMid}`,
-              borderRadius: 4, color: showCode ? t.blue : t.label3,
+              borderRadius: RADIUS, color: showCode ? t.blue : t.label3,
               cursor: "pointer", fontSize: 10, padding: "2px 7px",
               transition: "all 0.15s", ...SYS_FONT,
             }}

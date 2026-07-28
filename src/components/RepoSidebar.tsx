@@ -1,10 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 import { useTheme } from "../ThemeContext";
+import { SYS_FONT, MONO_FONT, TABULAR } from "../theme";
+import {
+  panelHeader, panelTitle, sectionLabel, rowState, chip, dot,
+  CLIP, CLIP_LEFT, RADIUS, RADIUS_SM, TRANSITION,
+} from "../chrome";
+import type { DotState } from "../chrome";
+import type { TaskSummary } from "../types/tasks";
 
 // ── Terminal tabs ─────────────────────────────────────────────────────────────
 
 export interface TerminalTab {
   id: string;
+  number: number;
   title: string;
   cwd?: string;
   gitBranch?: string;
@@ -20,6 +28,7 @@ interface PR {
   headRefOid: string;
   isDraft: boolean;
   createdAt: string;
+  updatedAt: string;
   reviewDecision: string | null;
   repository: { name: string; nameWithOwner: string };
   author?: { login: string };
@@ -52,6 +61,17 @@ interface Props {
   onReposLoaded: (repos: { name: string }[]) => void;
   onCheckoutBranch: (repoName: string, branch: string) => void;
   onBrowseFiles: (repoName: string) => void;
+  /** Aggregates for the global status bar — reported up so PRs aren't polled twice. */
+  onSummary?: (s: { repos: number; prs: number; syncedAt: number | null }) => void;
+}
+
+/** Compact elapsed time for the session rows — "now", "4m", "2h", "3d". */
+function shortAgo(epochMs: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - epochMs) / 1000));
+  if (secs < 60) return "now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  return `${Math.floor(secs / 86400)}d`;
 }
 
 function timeAgo(iso: string): string {
@@ -88,24 +108,75 @@ interface CICheck {
 }
 
 function aggregateCIChecks(checks: CICheck[]): "success" | "failure" | "pending" | "unknown" {
-  if (checks.length === 0) return "unknown";
-  if (checks.some(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED")) return "failure";
-  if (checks.some(c => c.status === "IN_PROGRESS" || c.status === "QUEUED" || c.status === "WAITING" || c.status === "PENDING")) return "pending";
-  if (checks.every(c => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED")) return "success";
+  // Only consider CheckRun items — StatusContext items represent branch protection
+  // rules (e.g. "Review required") already surfaced via the reviewDecision badge.
+  const ciChecks = checks.filter(c => c.__typename === "CheckRun");
+  if (ciChecks.length === 0) return "unknown";
+  if (ciChecks.some(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED")) return "failure";
+  if (ciChecks.some(c => c.status === "IN_PROGRESS" || c.status === "QUEUED" || c.status === "WAITING" || c.status === "PENDING")) return "pending";
+  if (ciChecks.every(c => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED")) return "success";
   return "unknown";
 }
 
+const CI_ICON: Record<string, string> = { success: "●", failure: "●", pending: "↻", unknown: "○" };
+
+/** Sessions panel width — Dashboard reserves the same figure when sizing the right-hand drawers. */
+export const SIDEBAR_W = 264;
+
+const FILTER_LABEL: Record<string, string> = { all: "All", mine: "Mine", review: "Needs review", changes: "Changes", approved: "Approved" };
+const FILTER_EMPTY: Record<string, string> = { all: "No open PRs", mine: "No your PRs", review: "No needs-review PRs", changes: "No changes-requested PRs", approved: "No approved PRs" };
+
 export function RepoSidebar({
   tabs, focusedId, onFocusTab, onCloseTab, onAddTab,
-  selected, onSelectPR, onOpenTerminal, onOpenRepoTerminal, onSelectRepoTree, onRunClaudeAction, onReposLoaded, onCheckoutBranch, onBrowseFiles,
+  selected, onSelectPR, onOpenTerminal, onOpenRepoTerminal, onSelectRepoTree, onReposLoaded, onCheckoutBranch, onBrowseFiles, onSummary,
 }: Props) {
   const { theme: t } = useTheme();
+  const CI_COLOR: Record<string, string> = { success: t.green, failure: t.red, pending: t.orange, unknown: t.label4 };
 
   // Terminal tab hover
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
-  const [idleGroupExpanded, setIdleGroupExpanded] = useState(false);
 
-  // Resizable split between TERMINALS and REPOSITORIES
+  // Panels that have a recorded Claude session — drives the ✳ icon visibility
+  const [claudePanelNums, setClaudePanelNums] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    window.terminal.getAllPanelClaudeSessions().then((map) => {
+      setClaudePanelNums(new Set(Object.keys(map).filter((k) => (map[Number(k)] ?? []).length > 0).map(Number)));
+    });
+    const cleanup = window.terminal.onClaudeSessionRecorded((num) => {
+      setClaudePanelNums((prev) => prev.has(num) ? prev : new Set(prev).add(num));
+    });
+    return cleanup;
+  }, []);
+
+  // Task summaries per panel — the only real activity signal, so it drives the status dots
+  const [panelTasks, setPanelTasks] = useState<Record<number, TaskSummary>>({});
+  useEffect(() => {
+    const cleanup = window.terminal.onClaudeTasksUpdated((sum) => {
+      const num = sum.panelNumber;
+      if (num === null) return; // todo-file summaries aren't bound to a panel
+      setPanelTasks((prev) => ({ ...prev, [num]: sum }));
+    });
+    return cleanup;
+  }, []);
+  useEffect(() => {
+    for (const num of tabs.map((tb) => tb.number)) {
+      if (panelTasks[num]) continue;
+      window.terminal.getPanelTasks(num).then((list) => {
+        if (list.length === 0) return;
+        const latest = list.slice().sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        setPanelTasks((prev) => ({ ...prev, [num]: latest }));
+      });
+    }
+  }, [tabs.map((tb) => tb.number).join(",")]);
+
+  // Re-render on a timer so the elapsed times in the rows don't go stale
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((v) => v + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Resizable split between SESSIONS and REPOSITORIES
   const [terminalHeight, setTerminalHeight] = useState<number>(() => {
     try {
       const saved = localStorage.getItem("tdash:terminal-section-height");
@@ -138,14 +209,14 @@ export function RepoSidebar({
 
   // PR data
   const [prs, setPRs] = useState<PR[]>([]);
+  const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [prFilter, setPrFilter] = useState<"all" | "mine" | "review" | "approved">("all");
+  const [prFilter, setPrFilter] = useState<"all" | "mine" | "review" | "changes" | "approved">("all");
   const [ghLogin, setGhLogin] = useState<string | null>(null);
   const [repoExpanded, setRepoExpanded] = useState<Record<string, boolean>>({});
   const [hoveredPRKey, setHoveredPRKey] = useState<string | null>(null);
   const [copiedBranchKey, setCopiedBranchKey] = useState<string | null>(null);
   const [hoveredRepoKey, setHoveredRepoKey] = useState<string | null>(null);
-  const [claudeCooldown, setClaudeCooldown] = useState<Set<string>>(new Set());
 
   // Pinned repos — persisted to localStorage
   const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
@@ -156,12 +227,17 @@ export function RepoSidebar({
   });
 
   const togglePin = (repoName: string) => {
+    const wasTracked = pinnedRepos.has(repoName);
+    if (wasTracked && !window.confirm(`Stop tracking "${repoName}"?`)) return;
     setPinnedRepos((prev) => {
       const next = new Set(prev);
       if (next.has(repoName)) next.delete(repoName); else next.add(repoName);
       localStorage.setItem("tdash:pinned-repos", JSON.stringify([...next]));
       return next;
     });
+    if (wasTracked) {
+      setPRs((p) => p.filter((pr) => pr.repository.name !== repoName));
+    }
   };
 
   // CI status per PR number
@@ -169,6 +245,8 @@ export function RepoSidebar({
 
   // All local repos (including those without open PRs)
   const [allLocalRepos, setAllLocalRepos] = useState<string[]>([]);
+  // Maps local folder name → GitHub nameWithOwner (e.g. "ansible-skedulo-kube" → "skedulo/ansible-config")
+  const [localRepoGhName, setLocalRepoGhName] = useState<Record<string, string>>({});
 
   // Change counts (for pill badge)
   const [repoChangeCounts, setRepoChangeCounts] = useState<Record<string, number>>({});
@@ -221,6 +299,7 @@ export function RepoSidebar({
     setLoading(true);
     window.terminal.listPRs([...pinnedRepos]).then((data) => {
       setPRs(data);
+      setSyncedAt(Date.now());
       setLoading(false);
       setRepoExpanded((prev) => {
         const next = { ...prev };
@@ -233,6 +312,14 @@ export function RepoSidebar({
       window.terminal.listGithubRepos().then((localRepos) => {
         const names = localRepos.map(r => r.name);
         setAllLocalRepos(names);
+        // Build folder→ghNameWithOwner map so we can deduplicate repos with mismatched folder/GitHub names
+        const ghNameMap: Record<string, string> = {};
+        localRepos.forEach(r => {
+          if (!r.repoUrl) return;
+          const m = r.repoUrl.replace(/\.git$/, "").match(/github\.com[:/](.+\/[^/]+)$/);
+          if (m) ghNameMap[r.name] = m[1];
+        });
+        setLocalRepoGhName(ghNameMap);
         const allNames = [...new Set([...data.map((p) => p.repository.name), ...names])];
         onReposLoaded(allNames.map(name => ({ name })));
       }).catch(() => {
@@ -281,6 +368,25 @@ export function RepoSidebar({
     window.terminal.listLocalBranches().then((data) => setLocalBranches(data)).catch(() => {});
   };
   useEffect(() => { loadBranches(); }, []);
+
+  useEffect(() => {
+    if (allLocalRepos.length === 0) return;
+    Promise.all(
+      allLocalRepos.map(name =>
+        window.terminal.getRepoBranch(name)
+          .then(b => b ? ([name, b] as const) : null)
+          .catch(() => null)
+      )
+    ).then(results => {
+      const updates: Record<string, string> = {};
+      results.forEach(r => { if (r) updates[r[0]] = r[1]; });
+      if (Object.keys(updates).length > 0) setRepoCurBranch(prev => ({ ...prev, ...updates }));
+    });
+  }, [allLocalRepos.join(",")]);
+
+  useEffect(() => {
+    onSummary?.({ repos: allLocalRepos.length, prs: prs.length, syncedAt });
+  }, [allLocalRepos.length, prs.length, syncedAt, onSummary]);
 
   // Fetch +/- line totals for repos currently open in tabs
   useEffect(() => {
@@ -332,15 +438,18 @@ export function RepoSidebar({
   // Fetch current branch for each repo when picker opens
   useEffect(() => {
     if (!branchPickerRepo) return;
-    const repoName = branchPickerRepo.split("/").pop() ?? branchPickerRepo;
-    // Try to infer from focused tab first
+    const ghRepoName = branchPickerRepo.split("/").pop() ?? branchPickerRepo;
+    // Resolve local folder name (may differ from GitHub name, e.g. ansible-skedulo-kube vs ansible-config)
+    const localFolder = Object.entries(localRepoGhName).find(
+      ([, ghName]) => ghName === branchPickerRepo || ghName.split("/").pop() === ghRepoName
+    )?.[0] ?? ghRepoName;
     const focused = tabs.find((t) => t.id === focusedId);
-    if (focused?.gitBranch && focused?.cwd?.includes(`/${repoName}`)) {
-      setRepoCurBranch((prev) => ({ ...prev, [repoName]: focused.gitBranch! }));
+    if (focused?.gitBranch && (focused?.cwd?.includes(`/${localFolder}`) || focused?.cwd?.includes(`/${ghRepoName}`))) {
+      setRepoCurBranch((prev) => ({ ...prev, [localFolder]: focused.gitBranch! }));
       return;
     }
-    window.terminal.getRepoBranch(repoName).then((b) => {
-      if (b) setRepoCurBranch((prev) => ({ ...prev, [repoName]: b }));
+    window.terminal.getRepoBranch(localFolder).then((b) => {
+      if (b) setRepoCurBranch((prev) => ({ ...prev, [localFolder]: b }));
     }).catch(() => {});
   }, [branchPickerRepo]);
 
@@ -362,6 +471,7 @@ export function RepoSidebar({
   const filteredPRs = prs.filter(pr => {
     if (prFilter === "mine") return ghLogin ? pr.author?.login === ghLogin : true;
     if (prFilter === "review") return !pr.isDraft && pr.reviewDecision !== "APPROVED" && pr.reviewDecision !== "CHANGES_REQUESTED";
+    if (prFilter === "changes") return pr.reviewDecision === "CHANGES_REQUESTED";
     if (prFilter === "approved") return pr.reviewDecision === "APPROVED";
     return true;
   });
@@ -375,16 +485,10 @@ export function RepoSidebar({
 
   const handleClickPR = (pr: PR, repoName: string) => {
     const isSame = selected?.prNumber === pr.number && selected?.repoName === repoName;
-    onSelectPR(isSame ? null : { prNumber: pr.number, repoName, prTitle: pr.title, branch: pr.headRefName, prUrl: pr.url });
-    setShowActionsFor(null);
+    const prUrl = pr.url || `https://github.com/${pr.repository.nameWithOwner}/pull/${pr.number}`;
+    onSelectPR(isSame ? null : { prNumber: pr.number, repoName, prTitle: pr.title, branch: pr.headRefName, prUrl });
   };
 
-  const handleClaudeAction = (repoName: string, branch: string, cmd: string, key: string) => {
-    if (claudeCooldown.has(key)) return;
-    setClaudeCooldown((p) => new Set(p).add(key));
-    onRunClaudeAction(repoName, branch, cmd);
-    setTimeout(() => setClaudeCooldown((p) => { const n = new Set(p); n.delete(key); return n; }), 2000);
-  };
 
   const startClone = () => {
     const url = addRepoUrl.trim();
@@ -425,274 +529,172 @@ export function RepoSidebar({
   return (
     <div
       style={{
-        width: 240, flexShrink: 0,
+        width: SIDEBAR_W, flexShrink: 0,
         background: t.surface1,
         borderRight: `1px solid ${t.border}`,
         display: "flex", flexDirection: "column",
         overflow: "hidden",
       }}
-      onClick={() => { setShowActionsFor(null); setBranchPickerRepo(null); }}
+      onClick={() => setBranchPickerRepo(null)}
     >
 
-      {/* ── TERMINALS section ── */}
+      {/* ── SESSIONS section ── */}
       <div style={{ height: terminalHeight, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", padding: "7px 12px 5px" }}>
-          <span style={{
-            flex: 1, color: t.label4, fontSize: 9,
-            letterSpacing: "0.06em", fontWeight: 700, textTransform: "uppercase" as const,
-          }}>Terminals</span>
+        <div style={panelHeader(t)}>
+          <span style={{ ...panelTitle(t), flex: 1 }}>Sessions</span>
           <button
             onClick={(e) => { e.stopPropagation(); onAddTab(); }}
             title="New terminal (⌘T)"
+            aria-label="New terminal"
             style={{
-              background: "none", border: "none", cursor: "pointer",
-              color: t.label4, fontSize: 14, padding: "0 3px", lineHeight: 1,
-              transition: "color 0.13s",
+              width: 22, height: 22, flex: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "none", border: "none", borderRadius: RADIUS_SM, cursor: "pointer",
+              color: t.label3, fontSize: 15, lineHeight: 1, transition: TRANSITION,
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = t.blue)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.surface2; e.currentTarget.style.color = t.label1; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; }}
           >+</button>
         </div>
 
-        {/* Tab cards */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 6px 6px" }}>
+        {/* Session rows, grouped by agents vs plain shells */}
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 6 }}>
           {(() => {
-            // Split tabs: idle = at ~, no branch, default name
-            const isIdleTab = (tab: TerminalTab) => {
-              if (!tab.title.startsWith("terminal ")) return false;
-              if (tab.gitBranch) return false;
-              if (tab.cwd?.includes("/GitHub/")) return false;
-              if (!tab.cwd) return true;
-              return tab.cwd.replace(/^\/Users\/[^/]+/, "~") === "~";
-            };
-            const idleTabs = tabs.filter(isIdleTab);
-            const activeTabs = tabs.filter(t => !isIdleTab(t));
-            return (<>
-          {activeTabs.map((tab) => {
-            const isActive = tab.id === focusedId;
-            const isHovered = hoveredTabId === tab.id;
+            const repoOf = (tab: TerminalTab) =>
+              tab.cwd?.includes("/GitHub/") ? (tab.cwd.split("/GitHub/")[1]?.split("/")[0] ?? "") : "";
 
-            // Short path: last 2 components
-            const shortPath = (() => {
-              if (!tab.cwd) return null;
-              const home = tab.cwd.replace(/^\/Users\/[^/]+/, "~");
-              const parts = home.split("/").filter(Boolean);
-              if (parts.length <= 2) return home;
-              return parts.slice(-2).join("/");
-            })();
+            // Repo order within a group keeps sessions on the same codebase adjacent
+            const byRepo = (a: TerminalTab, b: TerminalTab) => repoOf(a).localeCompare(repoOf(b));
+            const agents = tabs.filter((tb) => claudePanelNums.has(tb.number)).sort(byRepo);
+            const shells = tabs.filter((tb) => !claudePanelNums.has(tb.number)).sort(byRepo);
 
-            // Repo name — only trust the path if it's under GitHub dir
-            const gitRepoName = tab.cwd?.includes("/GitHub/")
-              ? tab.cwd.split("/GitHub/")[1]?.split("/")[0]
-              : null;
+            const renderRow = (tab: TerminalTab) => {
+              const isActive = tab.id === focusedId;
+              const isHovered = hoveredTabId === tab.id;
+              const gitRepoName = repoOf(tab) || null;
+              const summary = panelTasks[tab.number];
 
-            // Auto-display name: repo name > folder name > "idle"
-            const displayName = (() => {
-              if (!tab.title.startsWith("terminal ")) return tab.title;
-              if (gitRepoName) return gitRepoName;
-              if (!tab.cwd) return "idle";
-              const home = tab.cwd.replace(/^\/Users\/[^/]+/, "~");
-              if (home === "~") return "idle";
-              return tab.cwd.split("/").filter(Boolean).pop() ?? "idle";
-            })();
+              const displayName = (() => {
+                if (!tab.title.startsWith("terminal ")) return tab.title;
+                if (gitRepoName) return gitRepoName;
+                if (!tab.cwd) return "idle";
+                const home = tab.cwd.replace(/^\/Users\/[^/]+/, "~");
+                if (home === "~") return "idle";
+                return tab.cwd.split("/").filter(Boolean).pop() ?? "idle";
+              })();
 
-            // Matching PR: check main prs list first, then per-tab cache (handles other-author PRs)
-            const cacheKey = gitRepoName && tab.gitBranch ? `${gitRepoName}:${tab.gitBranch}` : null;
-            const tabPR = tab.gitBranch
-              ? (prs.find(pr =>
-                  pr.headRefName === tab.gitBranch &&
-                  (!tab.cwd || tab.cwd.includes(pr.repository.name))
-                ) ?? (cacheKey ? tabPRCache[cacheKey] : null) ?? null)
-              : null;
+              // Matching PR: main list first, then the per-tab cache (covers other-author PRs)
+              const cacheKey = gitRepoName && tab.gitBranch ? `${gitRepoName}:${tab.gitBranch}` : null;
+              const tabPR = tab.gitBranch
+                ? (prs.find((pr) =>
+                    pr.headRefName === tab.gitBranch &&
+                    (!tab.cwd || tab.cwd.includes(pr.repository.name))
+                  ) ?? (cacheKey ? tabPRCache[cacheKey] : null) ?? null)
+                : null;
 
-            const changeCount = gitRepoName ? (repoChangeCounts[gitRepoName] ?? 0) : 0;
-            const wtStats = gitRepoName ? repoTabStats[gitRepoName] : null;
-            // Show working tree stats if dirty, otherwise show PR total diff
-            const prStats = tabPR != null ? { adds: tabPR.additions ?? 0, dels: tabPR.deletions ?? 0 } : null;
-            const tabStats = (wtStats && (wtStats.adds > 0 || wtStats.dels > 0)) ? wtStats : prStats;
+              const wtStats = gitRepoName ? repoTabStats[gitRepoName] : null;
+              const prStats = tabPR != null ? { adds: tabPR.additions ?? 0, dels: tabPR.deletions ?? 0 } : null;
+              const tabStats = (wtStats && (wtStats.adds > 0 || wtStats.dels > 0)) ? wtStats : prStats;
 
-            return (
-              <div
-                key={tab.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onFocusTab(tab.id);
-                }}
-                onMouseEnter={() => setHoveredTabId(tab.id)}
-                onMouseLeave={() => setHoveredTabId(null)}
-                style={{
-                  borderRadius: 8,
-                  padding: "8px 10px",
-                  marginTop: 3,
-                  cursor: "pointer",
-                  background: isActive
-                    ? t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"
-                    : isHovered ? hoverBg : "transparent",
-                  border: `1px solid ${isActive ? t.borderMid : "transparent"}`,
-                  transition: "background 0.12s, border-color 0.12s",
-                  position: "relative" as const,
-                }}
-              >
-                {/* Row 1: icon + title + close */}
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  {/* Claude-style asterisk icon */}
-                  <span style={{
-                    width: 22, height: 22, borderRadius: 6, flexShrink: 0,
-                    background: isActive ? "#e8510020" : t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
-                    border: `1px solid ${isActive ? "#e8510040" : t.borderSubtle}`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 12, color: isActive ? "#e85100" : t.label3,
-                    transition: "all 0.12s",
-                  }}>✳</span>
+              // Activity comes from the agent's task list — the only signal that actually means "working"
+              const state: DotState = summary && summary.inProgress > 0 ? "running" : "idle";
+              const statusText = summary
+                ? (summary.inProgress > 0 ? shortAgo(summary.updatedAt)
+                  : summary.completed === summary.total ? "done"
+                  : `${summary.completed}/${summary.total}`)
+                : null;
 
-                  <span style={{
-                    flex: 1, minWidth: 0,
-                    color: isActive ? t.label1 : t.label2,
-                    fontSize: 12, fontWeight: isActive ? 600 : 400,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
-                  }}>
-                    {displayName}
-                  </span>
+              const secondLine = tab.gitBranch
+                ? { icon: "⎇", text: tab.gitBranch, clip: CLIP_LEFT }
+                : tab.cwd
+                  ? { icon: "", text: tab.cwd.replace(/^\/Users\/[^/]+/, "~"), clip: CLIP_LEFT }
+                  : null;
 
-                  {(isHovered || isActive) && tabs.length > 1 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                      style={{
-                        background: "none", border: "none", cursor: "pointer",
-                        color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1, flexShrink: 0,
-                        transition: "color 0.12s",
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                    >×</button>
-                  )}
-                </div>
-
-                {/* Row 2: path */}
-                {shortPath && (
-                  <div style={{
-                    marginTop: 3, paddingLeft: 29,
-                    color: t.label4, fontSize: 10, fontFamily: "monospace",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>{shortPath}</div>
-                )}
-
-                {/* Row 3: branch */}
-                {tab.gitBranch && (
-                  <div style={{
-                    marginTop: 3, paddingLeft: 29,
-                    display: "flex", alignItems: "center", gap: 6,
-                    overflow: "hidden",
-                  }}>
-                    <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>⎇</span>
-                    <span style={{
-                      fontSize: 9, fontFamily: "monospace",
-                      color: isActive ? t.teal : t.label3,
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      flex: 1, minWidth: 0,
-                    }}>{tab.gitBranch}</span>
-                  </div>
-                )}
-
-                {/* Row 4: diff stats + PR number */}
-                {(tabStats || tabPR) && (
-                  <div style={{
-                    marginTop: 4, paddingLeft: 29,
-                    display: "flex", alignItems: "center", gap: 8,
-                  }}>
-                    {tabStats && (tabStats.adds > 0 || tabStats.dels > 0) && (
-                      <span style={{ fontFamily: "monospace", fontSize: 10, display: "flex", gap: 4 }}>
-                        {tabStats.adds > 0 && (
-                          <span style={{ color: t.green, fontWeight: 600 }}>+{tabStats.adds}</span>
-                        )}
-                        {tabStats.dels > 0 && (
-                          <span style={{ color: t.red, fontWeight: 600 }}>-{tabStats.dels}</span>
-                        )}
-                      </span>
-                    )}
-                    {tabPR && (
-                      <span style={{
-                        fontSize: 9, fontFamily: "monospace", color: t.blue,
-                        display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
-                      }}>
-                        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
-                          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                        </svg>
-                        #{tabPR.number}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {/* Idle terminal group */}
-          {idleTabs.length > 0 && (
-            <div style={{ marginTop: 3 }}>
-              <div
-                onClick={(e) => { e.stopPropagation(); setIdleGroupExpanded(v => !v); }}
-                onMouseEnter={() => setHoveredTabId("__idle__")}
-                onMouseLeave={() => setHoveredTabId(null)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "6px 10px", borderRadius: 8, cursor: "pointer",
-                  background: hoveredTabId === "__idle__" ? hoverBg : "transparent",
-                }}
-              >
-                <span style={{ color: t.label4, fontSize: 9, width: 8, flexShrink: 0 }}>
-                  {idleGroupExpanded ? "▾" : "▸"}
-                </span>
-                <span style={{ flex: 1, color: t.label3, fontSize: 11, fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
-                  {idleTabs.length} idle terminal{idleTabs.length !== 1 ? "s" : ""}
-                </span>
-                {idleTabs.length > 1 && tabs.length > 1 && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); idleTabs.forEach(tab => onCloseTab(tab.id)); }}
-                    style={{
-                      background: "none", border: "none", cursor: "pointer",
-                      color: t.label4, fontSize: 10, padding: "1px 4px",
-                      fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                  >close all</button>
-                )}
-              </div>
-              {idleGroupExpanded && idleTabs.map((tab) => (
+              return (
                 <div
                   key={tab.id}
                   onClick={(e) => { e.stopPropagation(); onFocusTab(tab.id); }}
                   onMouseEnter={() => setHoveredTabId(tab.id)}
                   onMouseLeave={() => setHoveredTabId(null)}
                   style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    padding: "4px 10px 4px 22px", borderRadius: 6, cursor: "pointer",
-                    background: tab.id === focusedId
-                      ? (t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)")
-                      : hoveredTabId === tab.id ? hoverBg : "transparent",
+                    padding: "6px 10px 6px 12px",
+                    cursor: "pointer",
+                    ...rowState(t, isActive, isHovered),
                   }}
                 >
-                  <span style={{
-                    flex: 1, color: t.label4, fontSize: 10, fontFamily: "monospace",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
-                    {tab.title} · ~
-                  </span>
-                  {tabs.length > 1 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 13, padding: "0 1px", lineHeight: 1 }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                    >×</button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <span style={dot(t, state)} />
+                    <span style={{
+                      flex: "0 1 auto",
+                      color: isActive ? t.label1 : t.label2,
+                      fontSize: 13, lineHeight: "18px", fontWeight: isActive ? 600 : 400,
+                      ...SYS_FONT, ...CLIP,
+                    }}>{displayName}</span>
+                    <span style={{ flex: 1, minWidth: 0 }} />
+                    {statusText && (
+                      <span style={{
+                        flex: "none", fontSize: 11,
+                        color: state === "running" ? t.green : t.label3,
+                        ...MONO_FONT, ...TABULAR,
+                      }}>{statusText}</span>
+                    )}
+                    {(isHovered || isActive) && tabs.length > 1 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+                        title="Close (⌃W)"
+                        aria-label={`Close ${displayName}`}
+                        style={{
+                          width: 16, height: 16, flex: "none",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          background: "none", border: "none", borderRadius: RADIUS_SM,
+                          color: t.label3, cursor: "pointer", fontSize: 13, lineHeight: 1,
+                          transition: TRANSITION,
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = t.red)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+                      >×</button>
+                    )}
+                  </div>
+
+                  {secondLine && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 2, paddingLeft: 14 }}>
+                      {secondLine.icon && <span style={{ color: t.label4, fontSize: 10, flex: "none" }}>{secondLine.icon}</span>}
+                      <span
+                        title={secondLine.text}
+                        style={{
+                          flex: "0 1 auto", fontSize: 11, lineHeight: "15px",
+                          color: isActive ? t.label2 : t.label3,
+                          ...MONO_FONT, ...secondLine.clip,
+                        }}
+                      >{secondLine.text}</span>
+                      <span style={{ flex: 1, minWidth: 0 }} />
+                      {tabStats && (tabStats.adds > 0 || tabStats.dels > 0) && (
+                        <span style={{ flex: "none", display: "flex", gap: 4, fontSize: 10, ...MONO_FONT, ...TABULAR }}>
+                          {tabStats.adds > 0 && <span style={{ color: t.green }}>+{tabStats.adds}</span>}
+                          {tabStats.dels > 0 && <span style={{ color: t.red }}>-{tabStats.dels}</span>}
+                        </span>
+                      )}
+                      {tabPR && (
+                        <span style={{ flex: "none", fontSize: 10, color: t.blue, ...MONO_FONT, ...TABULAR }}>#{tabPR.number}</span>
+                      )}
+                    </div>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-          </>);
+              );
+            };
+
+            return (
+              <>
+                {agents.length > 0 && (
+                  <div style={sectionLabel(t)}>Agents · {agents.length}</div>
+                )}
+                {agents.map(renderRow)}
+                {shells.length > 0 && (
+                  <div style={sectionLabel(t)}>Shells · {shells.length}</div>
+                )}
+                {shells.map(renderRow)}
+              </>
+            );
           })()}
         </div>
       </div>
@@ -711,34 +713,43 @@ export function RepoSidebar({
 
       {/* ── REPOSITORIES section ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 7px", flexShrink: 0 }}>
-          <span style={{
-            flex: 1, color: t.label3, fontSize: 10,
-            letterSpacing: "0.04em", fontWeight: 600,
-          }}>Repositories</span>
+        <div style={panelHeader(t)}>
+          <span style={{ ...panelTitle(t), flex: 1 }}>Repositories</span>
+          <span style={{ ...chip(t), flex: "none" }}>{allLocalRepos.length} · {prs.length} PR</span>
           <button
             onClick={(e) => { e.stopPropagation(); load(); }}
             title="Refresh"
-            style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 13, padding: "1px 4px", lineHeight: 1 }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = t.label2)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+            aria-label="Refresh repositories"
+            style={{
+              width: 20, height: 20, flex: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "none", border: "none", borderRadius: RADIUS_SM, cursor: "pointer",
+              color: t.label3, fontSize: 13, lineHeight: 1, transition: TRANSITION,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.surface2; e.currentTarget.style.color = t.label1; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; }}
           >↺</button>
           <button
             onClick={(e) => { e.stopPropagation(); setShowAddRepo(true); setTimeout(() => addRepoUrlRef.current?.focus(), 50); }}
             title="Add repository"
-            style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 15, padding: "1px 4px", lineHeight: 1 }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = t.green)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+            aria-label="Add repository"
+            style={{
+              width: 20, height: 20, flex: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "none", border: "none", borderRadius: RADIUS_SM, cursor: "pointer",
+              color: t.label3, fontSize: 15, lineHeight: 1, transition: TRANSITION,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.surface2; e.currentTarget.style.color = t.label1; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; }}
           >+</button>
         </div>
 
         {/* Repo filter */}
         <div style={{
           display: "flex", alignItems: "center", gap: 5,
-          margin: "0 10px 6px", padding: "3px 8px",
-          background: t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)",
-          border: `1px solid ${t.borderSubtle}`, borderRadius: 6, flexShrink: 0,
+          margin: "8px 10px 6px", padding: "3px 8px",
+          background: t.surface0,
+          border: `1px solid ${t.borderMid}`, borderRadius: RADIUS, flexShrink: 0,
         }}>
           <span style={{ color: t.label4, fontSize: 10, lineHeight: 1 }}>⌕</span>
           <input
@@ -747,8 +758,7 @@ export function RepoSidebar({
             placeholder="Filter repos…"
             style={{
               flex: 1, background: "none", border: "none", outline: "none",
-              color: t.label1, fontSize: 11,
-              fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+              color: t.label1, fontSize: 11.5, ...SYS_FONT,
             }}
           />
           {repoSearch && (
@@ -774,12 +784,12 @@ export function RepoSidebar({
           >
             <div style={{
               width: 380, background: t.surface1,
-              border: `1px solid ${t.border}`, borderRadius: 14,
+              border: `1px solid ${t.border}`, borderRadius: RADIUS,
               padding: "20px 22px", boxShadow: "0 12px 48px rgba(0,0,0,0.45)",
             }}>
               {/* Title */}
               <div style={{ display: "flex", alignItems: "center", marginBottom: 16 }}>
-                <span style={{ flex: 1, color: t.label1, fontWeight: 700, fontSize: 14 }}>Add repository</span>
+                <span style={{ flex: 1, color: t.label1, fontWeight: 600, fontSize: 14 }}>Add repository</span>
                 <button
                   onClick={closeAddRepo}
                   style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 16, lineHeight: 1, padding: "0 2px" }}
@@ -792,7 +802,7 @@ export function RepoSidebar({
               {addRepoStep === "input" && (
                 <>
                   <div style={{ marginBottom: 10, color: t.label3, fontSize: 11 }}>
-                    GitHub URL to clone, or repo name if already in <span style={{ color: t.teal, fontFamily: "monospace" }}>~/Documents/GitHub/</span>
+                    GitHub URL to clone, or repo name if already in <span style={{ color: t.teal, ...MONO_FONT }}>~/Documents/GitHub/</span>
                   </div>
                   <input
                     ref={addRepoUrlRef}
@@ -803,12 +813,12 @@ export function RepoSidebar({
                     style={{
                       width: "100%", boxSizing: "border-box",
                       background: t.surface2, border: `1px solid ${addRepoError ? t.red : t.border}`,
-                      borderRadius: 7, color: t.label1, fontSize: 12, fontFamily: "monospace",
+                      borderRadius: RADIUS, color: t.label1, fontSize: 12, ...MONO_FONT,
                       padding: "8px 10px", outline: "none", marginBottom: addRepoError ? 6 : 14,
                     }}
                   />
                   {addRepoError && (
-                    <div style={{ color: t.red, fontSize: 11, marginBottom: 12, fontFamily: "monospace", wordBreak: "break-word" }}>
+                    <div style={{ color: t.red, fontSize: 11, marginBottom: 12, ...MONO_FONT, wordBreak: "break-word" }}>
                       {addRepoError}
                     </div>
                   )}
@@ -817,7 +827,7 @@ export function RepoSidebar({
                       onClick={closeAddRepo}
                       style={{
                         background: t.surface2, border: `1px solid ${t.border}`,
-                        borderRadius: 7, color: t.label2, cursor: "pointer",
+                        borderRadius: RADIUS, color: t.label2, cursor: "pointer",
                         fontSize: 12, fontWeight: 600, padding: "6px 16px",
                       }}
                     >Cancel</button>
@@ -826,10 +836,10 @@ export function RepoSidebar({
                       disabled={!addRepoUrl.trim()}
                       style={{
                         background: addRepoUrl.trim() ? t.green : t.surface2,
-                        border: "none", borderRadius: 7,
+                        border: "none", borderRadius: RADIUS,
                         color: addRepoUrl.trim() ? "#fff" : t.label4,
                         cursor: addRepoUrl.trim() ? "pointer" : "default",
-                        fontSize: 12, fontWeight: 700, padding: "6px 18px",
+                        fontSize: 12, fontWeight: 600, padding: "6px 18px",
                         opacity: addRepoUrl.trim() ? 1 : 0.5,
                       }}
                     >Add repository</button>
@@ -841,14 +851,14 @@ export function RepoSidebar({
               {addRepoStep === "cloning" && (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, color: t.label2, fontSize: 12 }}>
-                    <span style={{ color: t.teal, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{addRepoUrl}</span>
+                    <span style={{ color: t.teal, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{addRepoUrl}</span>
                   </div>
                   <pre
                     ref={progressRef}
                     style={{
                       background: t.surface2, border: `1px solid ${t.border}`,
-                      borderRadius: 7, padding: "8px 10px",
-                      color: t.label2, fontSize: 10, fontFamily: "monospace",
+                      borderRadius: RADIUS, padding: "8px 10px",
+                      color: t.label2, fontSize: 10, ...MONO_FONT,
                       whiteSpace: "pre-wrap", wordBreak: "break-word",
                       maxHeight: 180, overflowY: "auto", margin: 0,
                     }}
@@ -862,16 +872,16 @@ export function RepoSidebar({
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
                     <span style={{ color: t.green, fontSize: 18 }}>✓</span>
                     <span style={{ color: t.label1, fontSize: 13 }}>
-                      Cloned <span style={{ color: t.green, fontFamily: "monospace" }}>{addRepoDoneName}</span>
+                      Cloned <span style={{ color: t.green, ...MONO_FONT }}>{addRepoDoneName}</span>
                     </span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
                     <button
                       onClick={closeAddRepo}
                       style={{
-                        background: t.green, border: "none", borderRadius: 7,
+                        background: t.green, border: "none", borderRadius: RADIUS,
                         color: "#fff", cursor: "pointer",
-                        fontSize: 12, fontWeight: 700, padding: "6px 20px",
+                        fontSize: 12, fontWeight: 600, padding: "6px 20px",
                       }}
                     >Done</button>
                   </div>
@@ -883,8 +893,8 @@ export function RepoSidebar({
 
         {/* PR filter pills */}
         <div style={{ display: "flex", gap: 4, padding: "0 10px 6px", flexShrink: 0 }}>
-          {(["all", "mine", "review", "approved"] as const).map((f) => {
-            const label = f === "all" ? "All" : f === "mine" ? "Mine" : f === "review" ? "Needs review" : "Approved";
+          {(["all", "mine", "review", "changes", "approved"] as const).map((f) => {
+            const label = FILTER_LABEL[f];
             const isActive = prFilter === f;
             return (
               <button
@@ -894,8 +904,8 @@ export function RepoSidebar({
                   background: isActive ? `${t.blue}22` : "none",
                   border: `1px solid ${isActive ? t.blue + "60" : t.borderSubtle}`,
                   color: isActive ? t.blue : t.label4,
-                  borderRadius: 10, cursor: "pointer", fontSize: 9, padding: "2px 7px",
-                  fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+                  borderRadius: RADIUS, cursor: "pointer", fontSize: 9, padding: "2px 7px",
+                  ...SYS_FONT,
                   fontWeight: isActive ? 700 : 400, transition: "all 0.1s",
                 }}
               >{label}</button>
@@ -906,12 +916,13 @@ export function RepoSidebar({
         {/* PR list */}
         <div style={{ flex: 1, overflowY: "auto" }}>
           {loading && (
-            <div style={{ padding: "12px 16px", color: t.label4, fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
+            <div style={{ padding: "12px 16px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading…</div>
           )}
 
-          {!loading && Object.keys(byRepo).length === 0 && (
-            <div style={{ padding: "12px 16px", color: t.label4, fontSize: 11 }}>
-              {prFilter === "all" ? "No open PRs" : `No ${prFilter === "mine" ? "your" : prFilter === "review" ? "needs-review" : "approved"} PRs`}
+          {!loading && pinnedRepos.size > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px 3px" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.08em", fontWeight: 600, color: t.label4, flex: 1 }}>TRACKING</span>
+              <span style={{ fontSize: 9, color: t.blue, ...MONO_FONT }}>{pinnedRepos.size}</span>
             </div>
           )}
 
@@ -929,10 +940,23 @@ export function RepoSidebar({
               const repoName = repoFullName.split("/").pop() ?? repoFullName;
               const isExpanded = repoExpanded[repoFullName] !== false;
 
-              const curBranch = repoCurBranch[repoName];
+              const isPinned = pinnedRepos.has(repoName);
+              // Find a local folder alias that is pinned but whose GitHub remote URL resolves to this repo
+              const aliasedPinnedFolder = !isPinned
+                ? (Object.entries(localRepoGhName).find(
+                    ([folderName, ghName]) =>
+                      pinnedRepos.has(folderName) &&
+                      (ghName === repoFullName || ghName.toLowerCase() === repoFullName.toLowerCase())
+                  )?.[0] ?? null)
+                : null;
+              const effectivePinned = isPinned || aliasedPinnedFolder !== null;
+              // Local folder name may differ from GitHub repo name (e.g. ansible-skedulo-kube vs ansible-config)
+              const localFolderName = aliasedPinnedFolder ?? repoName;
+
+              const curBranch = repoCurBranch[localFolderName];
               const isPickerOpen = branchPickerRepo === repoFullName;
               const prBranchSet = new Set(repoPRs.map((p) => p.headRefName));
-              const repoBranches = localBranches.filter((b) => b.repo === repoName && b.branch !== curBranch);
+              const repoBranches = localBranches.filter((b) => b.repo === localFolderName && b.branch !== curBranch);
               const filteredBranches = branchSearch
                 ? repoBranches.filter((b) => b.branch.toLowerCase().includes(branchSearch.toLowerCase()))
                 : repoBranches;
@@ -942,8 +966,6 @@ export function RepoSidebar({
                 ...recentBranches.map((b) => b.branch),
                 ...otherBranches.map((b) => b.branch),
               ];
-
-              const isPinned = pinnedRepos.has(repoName);
               const isRepoHovered = hoveredRepoKey === repoFullName;
 
               return (
@@ -956,42 +978,57 @@ export function RepoSidebar({
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer", background: isRepoHovered ? hoverBg : "transparent" }}
                   >
                     <span style={{ color: t.label4, fontSize: 9, width: 8, flexShrink: 0 }}>{isExpanded ? "▼" : "▶"}</span>
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill={isPinned ? t.orange : t.label3} style={{ flexShrink: 0 }}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill={effectivePinned ? t.orange : t.label3} style={{ flexShrink: 0 }} title={effectivePinned ? "Tracked repo" : "Repo"}>
                       <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
                     </svg>
                     <span style={{
-                      flex: 1, color: isPinned ? t.label1 : t.label1, fontSize: 12, fontWeight: isPinned ? 600 : 500,
+                      flex: 1, color: t.label1, fontSize: 12, fontWeight: effectivePinned ? 600 : 500,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     }}>{repoName}</span>
                     {isRepoHovered && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onBrowseFiles(repoName); }}
-                        data-tooltip="Browse files"
-                        style={{
-                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                          color: t.label4, fontSize: 11, lineHeight: 1, flexShrink: 0,
-                          transition: "color 0.12s",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = t.teal)}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                      ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></button>
-                    )}
-                    {(isRepoHovered || isPinned) && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); togglePin(repoName); }}
-                        title={isPinned ? "Unpin repo" : "Pin repo"}
-                        style={{
-                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                          color: isPinned ? t.orange : t.label4, fontSize: 12, lineHeight: 1, flexShrink: 0,
-                          transition: "color 0.12s",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = isPinned ? t.orange : t.label4)}
-                      >⊙</button>
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onOpenRepoTerminal(localFolderName); }}
+                          title="Open terminal"
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: t.label4, lineHeight: 1, flexShrink: 0 }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = t.green)}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                        ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9l3 3-3 3"/><path d="M13 15h3"/></svg></button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onBrowseFiles(repoName); }}
+                          title="Browse files"
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: t.label4, lineHeight: 1, flexShrink: 0 }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = t.teal)}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                        ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></button>
+                        {effectivePinned && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const displayName = isPinned ? repoName : (aliasedPinnedFolder ?? repoName);
+                              if (!window.confirm(`Stop tracking "${displayName}"?`)) return;
+                              setPinnedRepos((prev) => {
+                                const next = new Set(prev);
+                                if (isPinned) next.delete(repoName);
+                                if (aliasedPinnedFolder) next.delete(aliasedPinnedFolder);
+                                localStorage.setItem("tdash:pinned-repos", JSON.stringify([...next]));
+                                return next;
+                              });
+                              setPRs((p) => p.filter((pr) => pr.repository.name !== repoName));
+                            }}
+                            title="Stop tracking"
+                            style={{
+                              background: `${t.red}12`, border: `1px solid ${t.red}30`,
+                              borderRadius: RADIUS, color: t.red, cursor: "pointer",
+                              fontSize: 9, padding: "1px 6px", lineHeight: 1.6, flexShrink: 0,
+                            }}
+                          >Stop</button>
+                        )}
+                      </>
                     )}
                     <span style={{
                       fontSize: 10, color: t.label3, background: t.surface2,
-                      borderRadius: 10, padding: "1px 5px", fontFamily: "monospace", flexShrink: 0,
+                      borderRadius: RADIUS, padding: "1px 5px", ...MONO_FONT, flexShrink: 0,
                     }}>{repoPRs.length}</span>
                   </div>
 
@@ -1008,23 +1045,23 @@ export function RepoSidebar({
                         }}
                         style={{
                           display: "flex", alignItems: "center", gap: 5, width: "100%",
-                          background: isPickerOpen ? `${t.green}18` : `${t.surface2}80`,
+                          background: isPickerOpen ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"),
                           border: `1px solid ${isPickerOpen ? t.green + "50" : t.border}`,
-                          borderRadius: 5, color: isPickerOpen ? t.green : t.teal,
-                          cursor: "pointer", fontSize: 10, fontFamily: "monospace",
+                          borderRadius: RADIUS, color: isPickerOpen ? t.green : t.teal,
+                          cursor: "pointer", fontSize: 10, ...MONO_FONT,
                           padding: "3px 7px", textAlign: "left",
                         }}
                       >
                         <span style={{ fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
                         <span style={{
                           flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        }}>{curBranch ?? "select branch"}</span>
+                        }}>{curBranch ?? "current branch"}</span>
                         {(repoChangeCounts[repoName] ?? 0) > 0 && (
                           <span style={{
                             background: `${t.red}20`, color: t.red,
                             border: `1px solid ${t.red}30`,
-                            borderRadius: 10, fontSize: 8, padding: "0 5px",
-                            fontFamily: "monospace", flexShrink: 0, lineHeight: 1.6,
+                            borderRadius: RADIUS, fontSize: 8, padding: "0 5px",
+                            ...MONO_FONT, flexShrink: 0, lineHeight: 1.6,
                           }}>{repoChangeCounts[repoName]} changes</span>
                         )}
                         <span style={{ fontSize: 8, color: t.label4, flexShrink: 0 }}>{isPickerOpen ? "∧" : "∨"}</span>
@@ -1040,7 +1077,7 @@ export function RepoSidebar({
                         margin: "2px 8px 6px",
                         background: t.surface2,
                         border: `1px solid ${t.border}`,
-                        borderRadius: 7, overflow: "hidden",
+                        borderRadius: RADIUS, overflow: "hidden",
                       }}
                     >
                       {/* Search row */}
@@ -1058,13 +1095,13 @@ export function RepoSidebar({
                             else if (e.key === "ArrowUp") { e.preventDefault(); setBranchCursor((c) => Math.max(c - 1, 0)); }
                             else if (e.key === "Enter") {
                               const b = allPickerItems[branchCursor];
-                              if (b) { onCheckoutBranch(repoName, b); setBranchPickerRepo(null); }
+                              if (b) { onCheckoutBranch(localFolderName, b); setBranchPickerRepo(null); }
                             } else if (e.key === "Escape") { setBranchPickerRepo(null); }
                           }}
                           placeholder="Search branches"
                           style={{
                             flex: 1, background: "none", border: "none", outline: "none",
-                            color: t.label1, fontSize: 11, fontFamily: "monospace",
+                            color: t.label1, fontSize: 11, ...MONO_FONT,
                           }}
                         />
                       </div>
@@ -1077,7 +1114,7 @@ export function RepoSidebar({
                         }}>
                           <span style={{ color: t.green, fontSize: 10, width: 10, flexShrink: 0 }}>✓</span>
                           <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
-                          <span style={{ color: t.green, fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{curBranch}</span>
+                          <span style={{ color: t.green, fontSize: 11, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{curBranch}</span>
                         </div>
                       )}
 
@@ -1092,7 +1129,7 @@ export function RepoSidebar({
                                 <div
                                   key={b.branch}
                                   onMouseEnter={() => setBranchCursor(i)}
-                                  onClick={() => { onCheckoutBranch(repoName, b.branch); setBranchPickerRepo(null); }}
+                                  onClick={() => { onCheckoutBranch(localFolderName, b.branch); setBranchPickerRepo(null); }}
                                   style={{
                                     display: "flex", alignItems: "center", gap: 6,
                                     padding: "4px 10px", cursor: "pointer",
@@ -1101,7 +1138,7 @@ export function RepoSidebar({
                                 >
                                   <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
                                   <span style={{
-                                    color: t.label2, fontSize: 11, fontFamily: "monospace",
+                                    color: t.label2, fontSize: 11, ...MONO_FONT,
                                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                                   }}>{b.branch}</span>
                                 </div>
@@ -1119,7 +1156,7 @@ export function RepoSidebar({
                                 <div
                                   key={b.branch}
                                   onMouseEnter={() => setBranchCursor(idx)}
-                                  onClick={() => { onCheckoutBranch(repoName, b.branch); setBranchPickerRepo(null); }}
+                                  onClick={() => { onCheckoutBranch(localFolderName, b.branch); setBranchPickerRepo(null); }}
                                   style={{
                                     display: "flex", alignItems: "center", gap: 6,
                                     padding: "4px 10px", cursor: "pointer",
@@ -1128,7 +1165,7 @@ export function RepoSidebar({
                                 >
                                   <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
                                   <span style={{
-                                    color: t.label2, fontSize: 11, fontFamily: "monospace",
+                                    color: t.label2, fontSize: 11, ...MONO_FONT,
                                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                                   }}>{b.branch}</span>
                                 </div>
@@ -1156,9 +1193,14 @@ export function RepoSidebar({
 
                   {/* PR rows */}
                   {isExpanded && [...repoPRs].sort((a, b) => {
-                    const aActive = tabs.some(tab => tab.gitBranch === a.headRefName && tab.cwd?.includes(`/${repoName}`));
-                    const bActive = tabs.some(tab => tab.gitBranch === b.headRefName && tab.cwd?.includes(`/${repoName}`));
-                    return (bActive ? 1 : 0) - (aActive ? 1 : 0);
+                    const aActive = tabs.some(t => t.gitBranch === a.headRefName && t.cwd?.includes(`/${repoName}`));
+                    const bActive = tabs.some(t => t.gitBranch === b.headRefName && t.cwd?.includes(`/${repoName}`));
+                    if (aActive !== bActive) return aActive ? -1 : 1;
+                    const aMine = ghLogin ? a.author?.login === ghLogin : false;
+                    const bMine = ghLogin ? b.author?.login === ghLogin : false;
+                    if (aMine !== bMine) return aMine ? -1 : 1;
+                    if (a.isDraft !== b.isDraft) return a.isDraft ? 1 : -1;
+                    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
                   }).map((pr) => {
                     const hKey = `${repoFullName}:${pr.number}`;
                     const isSelected = selected?.prNumber === pr.number && selected?.repoName === repoName;
@@ -1166,14 +1208,7 @@ export function RepoSidebar({
                     const { label: statusLabel, color: statusColor } = prStatus(pr, t);
                     const prCIChecks = ciChecks[pr.number];
                     const ciState = prCIChecks ? aggregateCIChecks(prCIChecks) : null;
-                    const CI_ICON: Record<string, string> = { success: "✓", failure: "✗", pending: "⟳", unknown: "○" };
-                    const CI_COLOR: Record<string, string> = { success: t.green, failure: t.red, pending: t.orange, unknown: t.label4 };
-
-                    const inlineActions = [
-                      { label: "Review",   icon: "◎", cmd: `claude "/review"`,       primary: true  },
-                      { label: "Comments", icon: "≡", cmd: `claude "/pr-comments"`,  primary: false },
-                      { label: "Fix",      icon: "✎", cmd: `claude "/pr-fixer"`,     primary: false },
-                    ] as const;
+                    const ciCheckCount = prCIChecks?.filter(c => c.__typename === "CheckRun").length ?? 0;
 
                     // #2: detect if a terminal for this branch is already open
                     const existingBranchTab = tabs.find((tab) => tab.gitBranch === pr.headRefName && tab.cwd?.includes(`/${repoName}`));
@@ -1191,7 +1226,7 @@ export function RepoSidebar({
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
-                            <span style={{ color: t.label3, fontSize: 10, fontFamily: "monospace", flexShrink: 0 }}>#{pr.number}</span>
+                            <span style={{ color: t.label3, fontSize: 10, ...MONO_FONT, flexShrink: 0 }}>#{pr.number}</span>
                             {(prFilter === "all" || prFilter === "mine") && (
                               <span style={{
                                 fontSize: 9, color: statusColor,
@@ -1201,56 +1236,67 @@ export function RepoSidebar({
                                 fontWeight: 600, flexShrink: 0, lineHeight: 1.6,
                               }}>{statusLabel}</span>
                             )}
-                            <div style={{ flex: 1 }} />
-                            {isHovered && (
-                              <>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigator.clipboard.writeText(pr.headRefName);
-                                    setCopiedBranchKey(hKey);
-                                    setTimeout(() => setCopiedBranchKey(prev => prev === hKey ? null : prev), 1500);
-                                  }}
-                                  title={`Copy branch name: ${pr.headRefName}`}
+                            {/* right group — always visible */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", flexShrink: 0 }}>
+                              {isHovered && (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard.writeText(pr.headRefName);
+                                      setCopiedBranchKey(hKey);
+                                      setTimeout(() => setCopiedBranchKey(prev => prev === hKey ? null : prev), 1500);
+                                    }}
+                                    title={`Copy branch name: ${pr.headRefName}`}
+                                    style={{
+                                      background: copiedBranchKey === hKey ? `${t.green}18` : t.surface2,
+                                      border: `1px solid ${copiedBranchKey === hKey ? `${t.green}40` : t.border}`,
+                                      borderRadius: 3, color: copiedBranchKey === hKey ? t.green : t.label2,
+                                      cursor: "pointer", padding: "2px 5px", lineHeight: 1,
+                                      display: "flex", alignItems: "center", transition: "all 0.15s",
+                                    }}
+                                  >
+                                    {copiedBranchKey === hKey
+                                      ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                      : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                                    }
+                                  </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); const ghUrl = pr.url || `https://github.com/${pr.repository.nameWithOwner}/pull/${pr.number}`; window.terminal.openExternal(ghUrl); }}
+                                    title={`Open PR in GitHub: ${pr.url}`}
+                                    style={{
+                                      background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
+                                      borderRadius: 3, color: t.blue,
+                                      cursor: "pointer", padding: "2px 5px", lineHeight: 1,
+                                      display: "flex", alignItems: "center",
+                                    }}
+                                  >
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                  </button>
+                                </>
+                              )}
+                              {ciState && (
+                                <span
+                                  title={`CI ${ciState === "success" ? "passing" : ciState === "failure" ? "failing" : ciState === "pending" ? "pending" : "unknown"} · ${ciCheckCount} check${ciCheckCount !== 1 ? "s" : ""}`}
                                   style={{
-                                    background: copiedBranchKey === hKey ? `${t.green}18` : t.surface2,
-                                    border: `1px solid ${copiedBranchKey === hKey ? `${t.green}40` : t.border}`,
-                                    borderRadius: 3, color: copiedBranchKey === hKey ? t.green : t.label2,
-                                    cursor: "pointer", fontSize: 9, padding: "1px 4px", lineHeight: 1,
-                                    transition: "all 0.15s",
+                                    width: 18, height: 18, borderRadius: "50%",
+                                    background: t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+                                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                    flexShrink: 0,
                                   }}
-                                >{copiedBranchKey === hKey ? "✓" : "⎘"}</button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); onOpenTerminal(repoName, pr.headRefName); }}
-                                  title="Open terminal on this branch"
-                                  style={{
-                                    background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
-                                    borderRadius: 3, color: t.teal,
-                                    cursor: "pointer", fontSize: 9, padding: "1px 4px", lineHeight: 1,
-                                  }}
-                                >⌨</button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); window.terminal.openExternal(pr.url); }}
-                                  title="Open PR in GitHub"
-                                  style={{
-                                    background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-                                    borderRadius: 3, color: t.blue,
-                                    cursor: "pointer", fontSize: 9, padding: "1px 4px", lineHeight: 1,
-                                  }}
-                                >↗</button>
-                              </>
-                            )}
-                            {ciState && (
-                              <span
-                                title={`CI ${ciState === "success" ? "passing" : ciState === "failure" ? "failing" : ciState === "pending" ? "pending" : "unknown"} · ${prCIChecks?.length ?? 0} check${(prCIChecks?.length ?? 0) !== 1 ? "s" : ""}`}
-                                style={{ color: CI_COLOR[ciState], fontSize: 9, flexShrink: 0, fontFamily: "monospace" }}
-                              >{CI_ICON[ciState]}</span>
-                            )}
-                            <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>{timeAgo(pr.createdAt)}</span>
+                                >
+                                  <span style={{ color: CI_COLOR[ciState], fontSize: ciState === "pending" ? 11 : 7, ...MONO_FONT, lineHeight: 1 }}>{CI_ICON[ciState]}</span>
+                                </span>
+                              )}
+                              <span style={{ color: t.label4, fontSize: 9 }}>{timeAgo(pr.createdAt)}</span>
+                            </div>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             {!!existingBranchTab && (
-                              <span style={{ color: t.teal, fontSize: 7, flexShrink: 0, lineHeight: 1 }} title="Branch checked out in terminal">●</span>
+                              <span
+                                style={{ color: existingBranchTab.id === focusedId ? t.teal : t.orange, fontSize: 7, flexShrink: 0, lineHeight: 1 }}
+                                title={existingBranchTab.id === focusedId ? "Active terminal on this branch" : "Terminal open on this branch"}
+                              >●</span>
                             )}
                             <div
                               title={pr.title}
@@ -1265,56 +1311,34 @@ export function RepoSidebar({
                             </div>
                           </div>
 
-                          {/* Inline Claude action buttons — reveal on hover */}
                           {isHovered && (
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ marginTop: 5 }}
-                            >
+                            <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 5, display: "flex", justifyContent: "flex-end" }}>
                               {existingBranchTab ? (
-                                /* #2: branch tab already open — disable actions, offer focus */
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span style={{ fontSize: 9, color: t.label4, fontStyle: "italic" }}>
-                                    Already open in a tab
-                                  </span>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); onFocusTab(existingBranchTab.id); }}
-                                    style={{
-                                      display: "flex", alignItems: "center", gap: 3,
-                                      background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
-                                      borderRadius: 5, color: t.teal,
-                                      cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "2px 7px",
-                                    }}
-                                  >↗ Focus tab</button>
-                                </div>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onFocusTab(existingBranchTab.id); }}
+                                  title="Focus existing tab"
+                                  style={{
+                                    background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
+                                    borderRadius: 3, color: t.teal, cursor: "pointer",
+                                    padding: "2px 6px", display: "flex", alignItems: "center", gap: 3,
+                                    fontSize: 9, fontWeight: 600,
+                                  }}
+                                >
+                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                  Focus
+                                </button>
                               ) : (
-                                /* #1: show actions + "→ new tab" destination hint */
-                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                  {inlineActions.map(({ label, icon, cmd, primary }) => {
-                                    const cKey = `${hKey}:${label}`;
-                                    const busy = claudeCooldown.has(cKey);
-                                    return (
-                                      <button
-                                        key={label}
-                                        onClick={(e) => { e.stopPropagation(); handleClaudeAction(repoName, pr.headRefName, cmd, cKey); }}
-                                        disabled={busy}
-                                        style={{
-                                          display: "flex", alignItems: "center", gap: 3,
-                                          background: primary ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"),
-                                          border: `1px solid ${primary ? t.green + "40" : t.border}`,
-                                          borderRadius: 5, color: primary ? t.green : t.label2,
-                                          cursor: busy ? "not-allowed" : "pointer",
-                                          fontSize: 10, fontWeight: primary ? 600 : 500,
-                                          padding: "2px 7px", opacity: busy ? 0.5 : 1,
-                                        }}
-                                      >
-                                        <span style={{ fontSize: 9 }}>{busy ? "⟳" : icon}</span>
-                                        {label}
-                                      </button>
-                                    );
-                                  })}
-                                  <span style={{ fontSize: 9, color: t.label4, marginLeft: 2 }}>→ new tab</span>
-                                </div>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onOpenTerminal(repoName, pr.headRefName); }}
+                                  title="Open new terminal tab on this branch"
+                                  style={{
+                                    background: `${t.teal}15`, border: `1px solid ${t.teal}30`,
+                                    borderRadius: 3, color: t.teal, cursor: "pointer",
+                                    padding: "2px 5px", display: "flex", alignItems: "center",
+                                  }}
+                                >
+                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9l3 3-3 3"/><path d="M13 15h3"/></svg>
+                                </button>
                               )}
                             </div>
                           )}
@@ -1325,20 +1349,23 @@ export function RepoSidebar({
                 </div>
               );
             })}
-          {/* Repos without open PRs */}
+          {/* Repos without open PRs — TRACKING / NOT TRACKING */}
           {(() => {
             const noPRRepos = allLocalRepos
-              .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
+              .filter(name => {
+                const byRepoKeys = Object.keys(byRepo);
+                if (byRepoKeys.some(k => k.endsWith(`/${name}`) || k === name)) return false;
+                // Also deduplicate by GitHub remote URL (handles mismatched folder/repo names)
+                const ghName = localRepoGhName[name];
+                if (ghName && byRepoKeys.some(k => k === ghName || k.toLowerCase() === ghName.toLowerCase())) return false;
+                return true;
+              })
               .filter(name => !repoSearch || name.toLowerCase().includes(repoSearch.toLowerCase()))
-              .sort((a, b) => {
-                const aPinned = pinnedRepos.has(a);
-                const bPinned = pinnedRepos.has(b);
-                if (aPinned !== bPinned) return aPinned ? -1 : 1;
-                return a.localeCompare(b);
-              });
-            const visibleNoPR = showNoPRRepos ? noPRRepos : noPRRepos.filter(n => pinnedRepos.has(n));
-            return visibleNoPR.map(name => {
-              const isPinned = pinnedRepos.has(name);
+              .sort((a, b) => a.localeCompare(b));
+            const trackedNoPR = noPRRepos.filter(n => pinnedRepos.has(n));
+            const untrackedNoPR = noPRRepos.filter(n => !pinnedRepos.has(n));
+
+            const renderRow = (name: string, isTracked: boolean) => {
               const rowKey = `nopr:${name}`;
               const isRowHovered = hoveredRepoKey === rowKey;
               const isPickerOpen = branchPickerRepo === rowKey;
@@ -1354,43 +1381,69 @@ export function RepoSidebar({
                     onClick={(e) => { e.stopPropagation(); onSelectRepoTree(name); }}
                     onMouseEnter={() => setHoveredRepoKey(rowKey)}
                     onMouseLeave={() => setHoveredRepoKey(null)}
-                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer", background: isRowHovered ? hoverBg : "transparent" }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
+                      cursor: "pointer", background: isRowHovered ? hoverBg : "transparent",
+                      borderLeft: isTracked ? `2px solid ${t.blue}` : "2px solid transparent",
+                    }}
                   >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill={isPinned ? t.orange : t.label4} style={{ flexShrink: 0 }}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill={isTracked ? t.orange : t.label4} style={{ flexShrink: 0 }} title={isTracked ? "Tracked repo" : "Repo"}>
                       <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
                     </svg>
-                    <span style={{ flex: 1, color: isPinned ? t.label2 : t.label3, fontSize: 12, fontWeight: isPinned ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                    <span style={{ flex: 1, color: isTracked ? t.label2 : t.label3, fontSize: 12, fontWeight: isTracked ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
                     {isRowHovered && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onBrowseFiles(name); }}
-                        data-tooltip="Browse files"
-                        style={{
-                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                          color: t.label4, fontSize: 11, lineHeight: 1, flexShrink: 0,
-                          transition: "color 0.12s",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = t.teal)}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-                      ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></button>
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onOpenRepoTerminal(name); }}
+                          title="Open terminal"
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: t.label4, lineHeight: 1, flexShrink: 0 }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = t.green)}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                        ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9l3 3-3 3"/><path d="M13 15h3"/></svg></button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onBrowseFiles(name); }}
+                          title="Browse files"
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: t.label4, lineHeight: 1, flexShrink: 0 }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = t.teal)}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                        ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></button>
+                      </>
                     )}
-                    {(isRowHovered || isPinned) && (
+                    {isTracked ? (
+                      isRowHovered ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); togglePin(name); }}
+                          title="Stop tracking"
+                          style={{
+                            background: `${t.red}12`, border: `1px solid ${t.red}30`,
+                            borderRadius: RADIUS, color: t.red, cursor: "pointer",
+                            fontSize: 9, padding: "1px 6px", lineHeight: 1.6, flexShrink: 0,
+                          }}
+                        >Stop</button>
+                      ) : (
+                        <span title="Tracking" style={{ color: t.blue, fontSize: 7, flexShrink: 0 }}>●</span>
+                      )
+                    ) : (
                       <button
                         onClick={(e) => { e.stopPropagation(); togglePin(name); }}
-                        data-tooltip={isPinned ? "Unpin repo" : "Pin repo"}
+                        title="Track this repo's PRs"
                         style={{
-                          background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                          color: isPinned ? t.orange : t.label4, fontSize: 12, lineHeight: 1, flexShrink: 0,
-                          transition: "color 0.12s",
+                          display: "flex", alignItems: "center", gap: 4,
+                          background: "none", border: `1px solid ${t.border}`,
+                          borderRadius: RADIUS, color: t.label2, cursor: "pointer",
+                          fontSize: 10, fontWeight: 600, padding: "2px 8px", lineHeight: 1.6, flexShrink: 0,
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = isPinned ? t.orange : t.label4)}
-                      >⊙</button>
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>
+                        </svg>
+                        Track
+                      </button>
                     )}
-                    {!isPinned && !isRowHovered && <span style={{ fontSize: 9, color: t.label4, fontFamily: "monospace" }}>no PRs</span>}
                   </div>
 
-                  {/* Branch picker trigger — pinned repos only */}
-                  {isPinned && (
+                  {/* Branch picker trigger — tracked repos only */}
+                  {isTracked && (
                     <div style={{ padding: "2px 12px 4px 26px" }} onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => {
@@ -1405,16 +1458,16 @@ export function RepoSidebar({
                         }}
                         style={{
                           display: "flex", alignItems: "center", gap: 5, width: "100%",
-                          background: isPickerOpen ? `${t.green}18` : `${t.surface2}80`,
+                          background: isPickerOpen ? `${t.green}18` : (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"),
                           border: `1px solid ${isPickerOpen ? t.green + "50" : t.border}`,
-                          borderRadius: 5, color: isPickerOpen ? t.green : t.teal,
-                          cursor: "pointer", fontSize: 10, fontFamily: "monospace",
+                          borderRadius: RADIUS, color: isPickerOpen ? t.green : t.teal,
+                          cursor: "pointer", fontSize: 10, ...MONO_FONT,
                           padding: "3px 7px", textAlign: "left",
                         }}
                       >
                         <span style={{ fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
                         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {curBranch ?? "select branch"}
+                          {curBranch ?? "current branch"}
                         </span>
                         <span style={{ fontSize: 8, color: t.label4, flexShrink: 0 }}>{isPickerOpen ? "∧" : "∨"}</span>
                       </button>
@@ -1422,10 +1475,10 @@ export function RepoSidebar({
                   )}
 
                   {/* Branch picker dropdown */}
-                  {isPinned && isPickerOpen && (
+                  {isTracked && isPickerOpen && (
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      style={{ margin: "2px 8px 6px", background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 7, overflow: "hidden" }}
+                      style={{ margin: "2px 8px 6px", background: t.surface2, border: `1px solid ${t.border}`, borderRadius: RADIUS, overflow: "hidden" }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderBottom: `1px solid ${t.border}` }}>
                         <span style={{ color: t.label4, fontSize: 11 }}>⌕</span>
@@ -1442,14 +1495,14 @@ export function RepoSidebar({
                             } else if (e.key === "Escape") { setBranchPickerRepo(null); }
                           }}
                           placeholder="Search branches"
-                          style={{ flex: 1, background: "none", border: "none", outline: "none", color: t.label1, fontSize: 11, fontFamily: "monospace" }}
+                          style={{ flex: 1, background: "none", border: "none", outline: "none", color: t.label1, fontSize: 11, ...MONO_FONT }}
                         />
                       </div>
                       {curBranch && (
                         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px" }}>
                           <span style={{ color: t.green, fontSize: 10, width: 10, flexShrink: 0 }}>✓</span>
                           <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
-                          <span style={{ color: t.green, fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{curBranch}</span>
+                          <span style={{ color: t.green, fontSize: 11, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{curBranch}</span>
                         </div>
                       )}
                       <div style={{ maxHeight: 180, overflowY: "auto" }}>
@@ -1460,14 +1513,10 @@ export function RepoSidebar({
                               key={b}
                               onMouseEnter={() => setBranchCursor(i)}
                               onClick={() => { onCheckoutBranch(name, b); setBranchPickerRepo(null); }}
-                              style={{
-                                display: "flex", alignItems: "center", gap: 6,
-                                padding: "4px 10px", cursor: "pointer",
-                                background: isActive ? `${t.blue}22` : "transparent",
-                              }}
+                              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", cursor: "pointer", background: isActive ? `${t.blue}22` : "transparent" }}
                             >
                               <span style={{ color: t.label4, fontSize: 9, flexShrink: 0 }}>ᵍ°</span>
-                              <span style={{ color: t.label2, fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b}</span>
+                              <span style={{ color: t.label2, fontSize: 11, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b}</span>
                             </div>
                           );
                         })}
@@ -1483,32 +1532,19 @@ export function RepoSidebar({
                   )}
                 </div>
               );
-            });
-          })()}
+            };
 
-          {/* Disclosure toggle for repos with no PRs */}
-          {(() => {
-            const noPRRepos = allLocalRepos
-              .filter(name => !Object.keys(byRepo).some(k => k.endsWith(`/${name}`) || k === name))
-              .filter(name => !repoSearch || name.toLowerCase().includes(repoSearch.toLowerCase()));
-            const unpinnedNoPR = noPRRepos.filter(n => !pinnedRepos.has(n));
-            if (unpinnedNoPR.length === 0) return null;
             return (
-              <div
-                onClick={() => setShowNoPRRepos(v => !v)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 5,
-                  padding: "5px 12px 4px", cursor: "pointer",
-                  borderTop: `1px solid ${t.border}`,
-                  color: t.label4,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget.querySelector(".noPRLabel") as HTMLElement | null)?.style.setProperty("color", t.label3); }}
-                onMouseLeave={(e) => { (e.currentTarget.querySelector(".noPRLabel") as HTMLElement | null)?.style.setProperty("color", t.label4); }}
-              >
-                <span className="noPRLabel" style={{ color: t.label4, fontSize: 9, letterSpacing: "0.06em", fontWeight: 700, flex: 1 }}>NO OPEN PRS</span>
-                <span style={{ fontSize: 9, color: t.label4, fontFamily: "monospace" }}>{unpinnedNoPR.length}</span>
-                <span style={{ fontSize: 9, color: t.label4, marginLeft: 4 }}>{showNoPRRepos ? "▾" : "▸"}</span>
-              </div>
+              <>
+                {trackedNoPR.map(name => renderRow(name, true))}
+                {untrackedNoPR.length > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px 3px", borderTop: `1px solid ${t.border}` }}>
+                    <span style={{ fontSize: 9, letterSpacing: "0.08em", fontWeight: 600, color: t.label4, flex: 1 }}>NOT TRACKING</span>
+                    <span style={{ fontSize: 9, color: t.label4, ...MONO_FONT }}>{untrackedNoPR.length}</span>
+                  </div>
+                )}
+                {untrackedNoPR.map(name => renderRow(name, false))}
+              </>
             );
           })()}
 

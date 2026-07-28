@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "../ThemeContext";
-import { SYS_FONT } from "../theme";
+import { MONO_FONT, SYS_FONT } from "../theme";
 import type { Theme } from "../theme";
+import { RADIUS, drawerHeader, drawerTitle } from "../chrome";
 
 interface NoteCard {
   id: string;
@@ -82,7 +83,7 @@ export function NotesDrawer({ onClose }: Props) {
 
   const inputStyle = {
     background: t.surface1, border: `1px solid ${t.borderMid}`,
-    borderRadius: 6, color: t.label1, fontSize: 12, padding: "6px 10px",
+    borderRadius: RADIUS, color: t.label1, fontSize: 12, padding: "6px 10px",
     outline: "none", width: "100%", boxSizing: "border-box" as const, ...SYS_FONT,
   };
 
@@ -101,18 +102,14 @@ export function NotesDrawer({ onClose }: Props) {
       transition: "width 0.15s ease",
     }}>
       {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8,
-        padding: "10px 14px", borderBottom: `1px solid ${t.border}`,
-        flexShrink: 0, background: t.headerBg,
-      }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>Notes</span>
+      <div style={drawerHeader(t)}>
+        <span style={{ ...drawerTitle(t), flex: 1 }}>Notes</span>
         <button
           onClick={startNew}
           style={{
             background: `${t.green}18`, border: `1px solid ${t.green}35`,
-            borderRadius: 5, color: t.green,
-            cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "2px 10px",
+            borderRadius: RADIUS, color: t.green,
+            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "2px 10px",
             transition: "all 0.15s", flexShrink: 0, ...SYS_FONT,
           }}
           onMouseEnter={(e) => { e.currentTarget.style.background = `${t.green}30`; }}
@@ -136,7 +133,7 @@ export function NotesDrawer({ onClose }: Props) {
               flex: 1, background: "none", border: "none",
               borderBottom: tab === id ? `2px solid ${t.purple}` : "2px solid transparent",
               color: tab === id ? t.purple : t.label3,
-              cursor: "pointer", fontSize: 11, fontWeight: tab === id ? 700 : 500,
+              cursor: "pointer", fontSize: 11, fontWeight: tab === id ? 600 : 400,
               padding: "8px 4px 6px", transition: "all 0.15s", ...SYS_FONT,
               textTransform: "capitalize",
             }}
@@ -170,7 +167,7 @@ export function NotesDrawer({ onClose }: Props) {
                 value={editing.command}
                 onChange={(e) => setEditing({ ...editing, command: e.target.value })}
                 onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(null); }}
-                style={{ ...inputStyle, color: t.teal, fontFamily: "monospace" }}
+                style={{ ...inputStyle, color: t.teal, ...MONO_FONT }}
               />
               <input
                 placeholder="Description (optional)"
@@ -189,7 +186,7 @@ export function NotesDrawer({ onClose }: Props) {
                   style={{
                     background: preview ? `${t.purple}18` : "none",
                     border: `1px solid ${preview ? t.purple + "50" : t.borderSubtle}`,
-                    borderRadius: 4, color: preview ? t.purple : t.label3,
+                    borderRadius: RADIUS, color: preview ? t.purple : t.label3,
                     cursor: "pointer", fontSize: 10, padding: "2px 8px", ...SYS_FONT,
                   }}
                 >{preview ? "Edit" : "Preview"}</button>
@@ -198,7 +195,7 @@ export function NotesDrawer({ onClose }: Props) {
               {preview ? (
                 <div style={{
                   background: t.surface1, border: `1px solid ${t.borderMid}`,
-                  borderRadius: 6, padding: "8px 12px", minHeight: 160,
+                  borderRadius: RADIUS, padding: "8px 12px", minHeight: 160,
                   maxHeight: 320, overflowY: "auto",
                 }}>
                   <MarkdownContent body={editing.body ?? ""} t={t} />
@@ -211,7 +208,7 @@ export function NotesDrawer({ onClose }: Props) {
                   onKeyDown={(e) => { if (e.key === "Escape") setEditing(null); }}
                   rows={10}
                   style={{
-                    ...inputStyle, resize: "vertical", fontFamily: "monospace",
+                    ...inputStyle, resize: "vertical", ...MONO_FONT,
                     fontSize: 12, lineHeight: 1.6, color: t.label1,
                   }}
                 />
@@ -222,12 +219,12 @@ export function NotesDrawer({ onClose }: Props) {
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
               onClick={() => setEditing(null)}
-              style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 5, color: t.label3, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 12px", ...SYS_FONT }}
+              style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: RADIUS, color: t.label3, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 12px", ...SYS_FONT }}
             >Cancel</button>
             <button
               onClick={save}
               disabled={!canSave}
-              style={{ background: t.blue, border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 14px", opacity: canSave ? 1 : 0.4, transition: "opacity 0.15s", ...SYS_FONT }}
+              style={{ background: t.blue, border: "none", borderRadius: RADIUS, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 14px", opacity: canSave ? 1 : 0.4, transition: "opacity 0.15s", ...SYS_FONT }}
             >Save</button>
           </div>
         </div>
@@ -280,19 +277,19 @@ function CommandItem({ card, t, isEditing, copied, onEdit, onDelete, onCopy, onR
   return (
     <div style={{ padding: "10px 14px", borderBottom: `1px solid ${t.borderSubtle}`, background: isEditing ? `${t.blue}08` : "transparent" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
-        <button onClick={onEdit} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+        <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
+        <button onClick={onEdit} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>
-        <button onClick={onDelete} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: 4, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+        <button onClick={onDelete} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: RADIUS, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.background = `${t.red}15`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>×</button>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <code style={{ flex: 1, fontSize: 11, color: t.teal, fontFamily: "monospace", background: t.surface2, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, padding: "3px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.command}</code>
-        <button onClick={() => onCopy(card.command)} title="Copy command" style={{ background: copied === card.id ? `${t.teal}20` : "none", border: `1px solid ${copied === card.id ? t.teal + "50" : t.borderSubtle}`, borderRadius: 4, color: copied === card.id ? t.teal : t.label3, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}>{copied === card.id ? "✓" : "⌘C"}</button>
+        <code style={{ flex: 1, fontSize: 11, color: t.teal, ...MONO_FONT, background: t.surface2, border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS, padding: "3px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.command}</code>
+        <button onClick={() => onCopy(card.command)} title="Copy command" style={{ background: copied === card.id ? `${t.teal}20` : "none", border: `1px solid ${copied === card.id ? t.teal + "50" : t.borderSubtle}`, borderRadius: RADIUS, color: copied === card.id ? t.teal : t.label3, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}>{copied === card.id ? "✓" : "⌘C"}</button>
         <button onClick={handleRun} title="Run in focused terminal"
-          style={{ background: ran ? `${t.green}25` : `${t.green}12`, border: `1px solid ${ran ? t.green + "55" : t.green + "30"}`, borderRadius: 4, color: t.green, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}
+          style={{ background: ran ? `${t.green}25` : `${t.green}12`, border: `1px solid ${ran ? t.green + "55" : t.green + "30"}`, borderRadius: RADIUS, color: t.green, cursor: "pointer", fontSize: 10, padding: "2px 7px", transition: "all 0.15s", flexShrink: 0 }}
           onMouseEnter={(e) => { if (!ran) { e.currentTarget.style.background = `${t.green}25`; e.currentTarget.style.borderColor = `${t.green}55`; } }}
           onMouseLeave={(e) => { if (!ran) { e.currentTarget.style.background = `${t.green}12`; e.currentTarget.style.borderColor = `${t.green}30`; } }}
         >{ran ? "✓" : "▶"}</button>
@@ -314,11 +311,11 @@ function NoteItem({ card, t, isEditing, onEdit, onDelete }: {
         onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = `${t.purple}10`)}
         onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = isEditing ? `${t.blue}08` : "")}
       >
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
-        <button onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: 4, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+        <span style={{ fontSize: 12, fontWeight: 600, color: t.label1, flex: 1, ...SYS_FONT }}>{card.title}</span>
+        <button onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit" style={{ background: "none", border: `1px solid ${t.borderSubtle}`, borderRadius: RADIUS, color: t.label3, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; e.currentTarget.style.borderColor = t.borderMid; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderSubtle; }}>✎</button>
-        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: 4, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
+        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete" style={{ background: "none", border: `1px solid ${t.red}30`, borderRadius: RADIUS, color: t.red, cursor: "pointer", fontSize: 10, padding: "1px 6px", transition: "all 0.15s" }}
           onMouseEnter={(e) => { e.currentTarget.style.background = `${t.red}15`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>×</button>
         <span style={{ fontSize: 11, color: t.label3, display: "inline-block", transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>›</span>
@@ -338,7 +335,7 @@ function NoteItem({ card, t, isEditing, onEdit, onDelete }: {
 
 function MarkdownContent({ body, t }: { body: string; t: Theme }) {
   return (
-    <div style={{ fontSize: 12, color: t.label2, lineHeight: 1.7, fontFamily: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
+    <div style={{ fontSize: 12, color: t.label2, lineHeight: 1.7, ...SYS_FONT }}>
       <style>{`
         .md-content h1, .md-content h2, .md-content h3 { color: ${t.label1}; margin: 10px 0 4px; font-weight: 700; }
         .md-content h1 { font-size: 15px; }

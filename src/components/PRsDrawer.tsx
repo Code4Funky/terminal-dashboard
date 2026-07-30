@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTheme } from "../ThemeContext";
-import { RADIUS, TRANSITION, drawerHeader, drawerTitle } from "../chrome";
+import { RADIUS, RADIUS_SM, TRANSITION, drawerHeader, drawerTitle } from "../chrome";
 import { MONO_FONT } from "../theme";
 
 interface PR {
@@ -11,9 +11,95 @@ interface PR {
   headRefOid: string;
   isDraft: boolean;
   createdAt: string;
+  updatedAt: string;
   reviewDecision: string | null;
   author: { login: string };
   repository: { name: string; nameWithOwner: string };
+  reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+  statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+  mergeable: string;
+  mergeStateStatus: string;
+}
+
+type PRCategory = "needsYourReview" | "needsTeamReview" | "yourDrafts" | "waiting" | "needsAction" | "readyToMerge";
+
+const CATEGORIES: { key: PRCategory; label: string }[] = [
+  { key: "needsYourReview", label: "Needs your review" },
+  { key: "needsTeamReview", label: "Needs your teams' review" },
+  { key: "yourDrafts", label: "Your drafts" },
+  { key: "waiting", label: "Waiting for review or checks" },
+  { key: "needsAction", label: "Needs action" },
+  { key: "readyToMerge", label: "Ready to merge" },
+];
+
+// `gh pr list` puts the org-qualified team in `slug` ("Skedulo/v3-backend-core") and the bare one in
+// `name`, so check both against a set holding both forms. Empty myTeams (no `read:org` scope) falls
+// back to matching any team request rather than emptying the section.
+function requestedFromMyTeam(pr: PR, myTeams: Set<string>): boolean {
+  return pr.reviewRequests?.some((r) => {
+    if (r.__typename !== "Team") return false;
+    if (myTeams.size === 0) return true;
+    return (!!r.slug && myTeams.has(r.slug)) || (!!r.name && myTeams.has(r.name));
+  });
+}
+
+// Both `org/slug` and bare `slug`, since either can show up on a review request.
+function teamMatchSet(teams: string[]): Set<string> {
+  return new Set(teams.flatMap((t) => [t, t.split("/").pop() ?? t]));
+}
+
+function categorizePR(pr: PR, ghLogin: string | null, myTeams: Set<string>): PRCategory | null {
+  if (ghLogin && pr.author.login === ghLogin) {
+    if (pr.isDraft) return "yourDrafts";
+    if (pr.reviewDecision === "CHANGES_REQUESTED") return "needsAction";
+    const ciFailing = pr.statusCheckRollup?.some((c) =>
+      c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "CANCELLED" ||
+      c.state === "FAILURE" || c.state === "ERROR"
+    );
+    if (ciFailing) return "needsAction";
+    if (pr.reviewDecision === "APPROVED" && pr.mergeable !== "CONFLICTING") return "readyToMerge";
+    return "waiting";
+  }
+  if (pr.reviewRequests?.some((r) => r.__typename === "User" && r.login === ghLogin)) return "needsYourReview";
+  if (requestedFromMyTeam(pr, myTeams)) return "needsTeamReview";
+  return null;
+}
+
+type UpdatedWindow = "1mo" | "3mo" | "1y" | "any";
+
+const UPDATED_WINDOWS: { key: UpdatedWindow; label: string; days: number | null }[] = [
+  { key: "1mo", label: "Last month",    days: 30 },
+  { key: "3mo", label: "Last 3 months", days: 90 },
+  { key: "1y",  label: "Last year",     days: 365 },
+  { key: "any", label: "Any time",      days: null },
+];
+
+// Filtered client-side on `updatedAt` (already fetched) rather than via `gh --search`: the search API's
+// secondary rate limit is far tighter than the repo endpoints, and this makes the toggle instant.
+function withinUpdatedWindow(pr: PR, updatedWithin: UpdatedWindow): boolean {
+  const days = UPDATED_WINDOWS.find((w) => w.key === updatedWithin)?.days;
+  if (!days) return true;
+  return Date.now() - new Date(pr.updatedAt).getTime() <= days * 86400000;
+}
+
+// GitHub's five Pull-requests views. "inbox" is served entirely from the local repo fan-out; the other
+// four go through `gh search prs` for identity, then hydrate, so they also see repos with no local clone.
+type PRView = "inbox" | "authored" | "assigned" | "involves" | "reviewRequested";
+
+const PR_VIEWS: { key: PRView; label: string }[] = [
+  { key: "inbox",           label: "Inbox" },
+  { key: "authored",        label: "Authored by me" },
+  { key: "assigned",        label: "Assigned to me" },
+  { key: "involves",        label: "Involves me" },
+  { key: "reviewRequested", label: "Review requests" },
+];
+
+export interface SelectedPR {
+  prNumber: number;
+  repoName: string;
+  prTitle: string;
+  branch: string;
+  prUrl: string;
 }
 
 interface Props {
@@ -21,6 +107,9 @@ interface Props {
   onOpenTerminal: (repoName: string, branchName: string) => void;
   onOpenRepo: (repoName: string, branchName: string) => void;
   onRunClaudeAction: (repoName: string, branchName: string, cmd: string) => void;
+  onSelectPR?: (sel: SelectedPR) => void;
+  width?: number;
+  onWidthChange?: (w: number) => void;
 }
 
 function timeAgo(iso: string): string {
@@ -84,10 +173,35 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
+function PRSectionHeader({ label, count, open, color, onToggle }: {
+  label: string; count: number; open: boolean; color: string; onToggle: () => void;
+}) {
+  const { theme: t } = useTheme();
+  return (
+    <button
+      onClick={onToggle}
+      style={{
+        display: "flex", alignItems: "center", gap: 7, width: "100%",
+        background: "none", border: "none", cursor: "pointer", padding: "7px 16px",
+        textAlign: "left",
+      }}
+    >
+      <span style={{ fontSize: 9, color: t.label4, width: 8, flexShrink: 0 }}>{open ? "▾" : "▸"}</span>
+      <span style={{ flex: 1, color: t.label1, fontSize: 12, fontWeight: 600 }}>{label}</span>
+      <span style={{
+        color, fontSize: 10,
+        background: `${color}15`, border: `1px solid ${color}28`,
+        borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
+      }}>{count}</span>
+    </button>
+  );
+}
+
+function PRCard({ pr, onOpenTerminal, onRunClaudeAction, onSelectPR }: {
   pr: PR;
   onOpenTerminal: (repo: string, branch: string) => void;
   onRunClaudeAction: (repo: string, branch: string, cmd: string) => void;
+  onSelectPR?: (sel: SelectedPR) => void;
 }) {
   const { theme: t } = useTheme();
   const [hovered, setHovered] = useState(false);
@@ -115,32 +229,19 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
       }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-        <span style={{
-          fontSize: 12, fontWeight: 600, color: t.blue,
-          background: `${t.blue}15`, border: `1px solid ${t.blue}30`,
-          borderRadius: RADIUS, padding: "2px 6px",
-          flexShrink: 0, marginTop: 1, ...MONO_FONT,
-        }}>
-          #{pr.number}
+        <span style={{ fontSize: 13, color: pr.isDraft ? t.label4 : t.green, flexShrink: 0, marginTop: 2 }}>
+          {pr.isDraft ? "⎓" : "⎇"}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: t.label1, fontSize: 12, fontWeight: 500, lineHeight: 1.5 }}>{pr.title}</div>
-          <div style={{ color: t.label4, fontSize: 10, ...MONO_FONT, marginTop: 1 }}>@{pr.author.login}</div>
+          <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>{pr.title}</div>
+          <div style={{ color: t.label4, fontSize: 10, ...MONO_FONT, marginTop: 2 }}>
+            {pr.repository.nameWithOwner}#{pr.number} · {pr.author.login} · Updated {timeAgo(pr.updatedAt)}
+          </div>
         </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        {pr.isDraft && (
-          <span style={{
-            fontSize: 11, fontWeight: 600, color: t.label3,
-            background: t.surface3, border: `1px solid ${t.borderMid}`,
-            borderRadius: RADIUS, padding: "2px 8px",
-          }}>Draft</span>
-        )}
         <ReviewPill decision={pr.reviewDecision} />
-        <span style={{ fontSize: 11, color: t.green, marginLeft: "auto", ...MONO_FONT }}>
-          {timeAgo(pr.createdAt)}
-        </span>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
@@ -195,6 +296,23 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
           onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.teal}10`; b.style.borderColor = `${t.teal}28`; }}
         >
           <span style={{ fontSize: 11 }}>⌨</span> Terminal
+        </button>
+        <button
+          onClick={() => onSelectPR?.({
+            prNumber: pr.number, repoName: pr.repository.name,
+            prTitle: pr.title, branch: pr.headRefName, prUrl: pr.url,
+          })}
+          style={{
+            flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            background: `${t.purple}10`, border: `1px solid ${t.purple}28`,
+            borderRadius: RADIUS, color: t.purple,
+            cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "6px 10px",
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.purple}22`; b.style.borderColor = `${t.purple}50`; }}
+          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = `${t.purple}10`; b.style.borderColor = `${t.purple}28`; }}
+        >
+          <span style={{ fontSize: 11 }}>±</span> Diff
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); setShowActions((v) => !v); }}
@@ -253,122 +371,64 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction }: {
   );
 }
 
-interface LocalBranch { repo: string; branch: string; repoUrl: string }
-
-function LocalBranchCard({
-  item, selected, onToggle, onOpenTerminal, repoUrl,
-}: { item: LocalBranch; selected: boolean; onToggle: () => void; onOpenTerminal: (repo: string, branch: string) => void; repoUrl: string }) {
-  const { theme: t } = useTheme();
-  const [hovered, setHovered] = useState(false);
-  return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        margin: "0 12px 5px", padding: "8px 12px",
-        background: selected ? `${t.blue}12` : hovered ? t.surface3 : t.surface2,
-        border: `1px solid ${selected ? `${t.blue}35` : hovered ? t.borderMid : t.borderSubtle}`,
-        borderRadius: RADIUS, display: "flex", alignItems: "center", gap: 8,
-        transition: "all 0.15s", cursor: "default",
-      }}
-    >
-      <div
-        onClick={onToggle}
-        style={{
-          width: 14, height: 14, borderRadius: 3, flexShrink: 0, cursor: "pointer",
-          border: `1px solid ${selected ? t.blue : t.borderMid}`,
-          background: selected ? t.blue : "transparent",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          transition: "all 0.15s",
-        }}
-      >
-        {selected && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1, fontWeight: 600 }}>✓</span>}
-      </div>
-      <span style={{
-        flex: 1, fontSize: 10, color: t.label3, ...MONO_FONT,
-        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        display: "flex", alignItems: "center", gap: 5,
-      }}>
-        <span style={{ color: t.label4 }}>⎇</span>
-        {item.branch}
-      </span>
-      <div style={{
-        display: "flex", alignItems: "stretch",
-        background: `${t.teal}10`, border: `1px solid ${t.teal}28`,
-        borderRadius: RADIUS, overflow: "hidden", flexShrink: 0,
-      }}>
-        <button
-          onClick={() => repoUrl && window.terminal.openExternal(`${repoUrl}/tree/${item.branch}`)}
-          title="View in GitHub"
-          style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: t.teal, fontSize: 11, padding: "2px 5px",
-            display: "flex", alignItems: "center",
-            transition: "background 0.15s",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = `${t.teal}20`)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-        >↗</button>
-        <div style={{ width: 1, background: `${t.teal}28`, flexShrink: 0 }} />
-        <button
-          onClick={() => onOpenTerminal(item.repo, item.branch)}
-          title="Open terminal"
-          style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: t.teal, fontSize: 11, padding: "2px 5px",
-            display: "flex", alignItems: "center",
-            transition: "background 0.15s",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = `${t.teal}20`)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-        >⌨</button>
-      </div>
-    </div>
-  );
-}
-
 interface RepoEntry { name: string; branches: string[]; repoUrl: string }
 
-export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeAction }: Props) {
+export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeAction, onSelectPR, width: controlledWidth, onWidthChange }: Props) {
   const { theme: t } = useTheme();
+
+  // ── Drawer resize ────────────────────────────────────────────────────────────
+  const [internalWidth, setInternalWidth] = useState(controlledWidth ?? 480);
+  const drawerWidth = controlledWidth ?? internalWidth;
+  const drawerDragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const onDrawerResizeDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    drawerDragState.current = { startX: e.clientX, startWidth: drawerWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!drawerDragState.current) return;
+      // Docked left of centre, so the handle is on the trailing edge — drag right widens
+      const delta = ev.clientX - drawerDragState.current.startX;
+      const max = Math.max(520, window.innerWidth - 640);
+      const w = Math.max(320, Math.min(max, drawerDragState.current.startWidth + delta));
+      if (controlledWidth !== undefined) { onWidthChange?.(w); } else { setInternalWidth(w); }
+    };
+    const onUp = () => { drawerDragState.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   const [prs, setPRs] = useState<PR[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [localBranches, setLocalBranches] = useState<LocalBranch[]>([]);
-  const [localLoading, setLocalLoading] = useState(true);
-  const [showLocal, setShowLocal] = useState(true);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [deleting, setDeleting] = useState(false);
-  const [cleanMsg, setCleanMsg] = useState<string | null>(null);
   const [claudeWorktrees, setClaudeWorktrees] = useState<{ repo: string; branch: string; path: string; merged: boolean }[]>([]);
   const [showWorktrees, setShowWorktrees] = useState(true);
   const [wtMsg, setWtMsg] = useState<string | null>(null);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
-  const [showRepos, setShowRepos] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
-  const [pinnedRepos, setPinnedRepos] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem("td_pinned_repos") ?? "[]")); }
-    catch { return new Set(); }
-  });
+  const [ghLogin, setGhLogin] = useState<string | null>(null);
+  const [myTeams, setMyTeams] = useState<Set<string>>(new Set());
+  const [updatedWithin, setUpdatedWithin] = useState<UpdatedWindow>(
+    () => (localStorage.getItem("tdash:prs-updated-window") as UpdatedWindow) ?? "3mo"
+  );
+  const [showWindowMenu, setShowWindowMenu] = useState(false);
+  // Not persisted on purpose: opening straight onto a search-backed view would fire a search on mount.
+  const [view, setView] = useState<PRView>("inbox");
+  const [showViewMenu, setShowViewMenu] = useState(false);
+  const [viewCache, setViewCache] = useState<Partial<Record<PRView, PR[]>>>({});
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState<string | null>(null);
+  const [sectionOverride, setSectionOverride] = useState<Partial<Record<PRCategory, boolean>>>({});
+  const isSectionOpen = (key: PRCategory, count: number) => sectionOverride[key] ?? count > 0;
+  const toggleSection = (key: PRCategory, count: number) =>
+    setSectionOverride((prev) => ({ ...prev, [key]: !isSectionOpen(key, count) }));
 
-  const togglePin = (name: string) => {
-    setPinnedRepos((prev) => {
-      const next = new Set(prev);
-      next.has(name) ? next.delete(name) : next.add(name);
-      localStorage.setItem("td_pinned_repos", JSON.stringify([...next]));
-      return next;
-    });
+  const CATEGORY_COLOR: Record<PRCategory, string> = {
+    needsYourReview: t.blue,
+    needsTeamReview: t.teal,
+    yourDrafts: t.label3,
+    waiting: t.orange,
+    needsAction: t.red,
+    readyToMerge: t.green,
   };
-
-  const sortedRepos = [...repos].sort((a, b) => {
-    const ap = pinnedRepos.has(a.name) ? 0 : 1;
-    const bp = pinnedRepos.has(b.name) ? 0 : 1;
-    return ap !== bp ? ap - bp : a.name.localeCompare(b.name);
-  });
-
-  const uniqueOwners = [...new Set(prs.map((p) => p.author.login))].sort();
-  const filteredPRs = ownerFilter ? prs.filter((p) => p.author.login === ownerFilter) : prs;
 
   const loadWorktrees = async () => {
     const wts = await window.terminal.listClaudeWorktrees().catch(() => []);
@@ -388,67 +448,59 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
   };
 
   const load = () => {
-    setLoading(true); setLocalLoading(true); setError(null); setSelected(new Set());
-    window.terminal.listPRs([...pinnedRepos])
+    setLoading(true); setError(null);
+    setViewCache({});
+    window.terminal.listGithubRepos()
+      .then((repoList) => {
+        setRepos(repoList);
+        return window.terminal.listPRs(repoList.map((r) => r.name));
+      })
       .then((data) => { setPRs(data); setLoading(false); setLastRefreshed(new Date()); })
       .catch((err: Error) => { setError(err.message ?? "Failed to load PRs"); setLoading(false); });
-    window.terminal.listLocalBranches()
-      .then((data) => { setLocalBranches(data); setLocalLoading(false); })
-      .catch(() => setLocalLoading(false));
-    window.terminal.listGithubRepos()
-      .then(setRepos)
-      .catch(() => {});
     loadWorktrees();
   };
 
-  const reloadLocal = () => {
-    setLocalLoading(true); setSelected(new Set());
-    window.terminal.listLocalBranches()
-      .then((data) => { setLocalBranches(data); setLocalLoading(false); })
-      .catch(() => setLocalLoading(false));
-  };
-
-  const toggleSelect = (key: string) => {
-    setSelected((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
-  };
-
-  const handleDeleteSelected = async () => {
-    if (deleting || selected.size === 0) return;
-    setDeleting(true);
-    const byRepo: Record<string, string[]> = {};
-    for (const key of selected) {
-      const [repo, branch] = key.split("::");
-      if (!byRepo[repo]) byRepo[repo] = [];
-      byRepo[repo].push(branch);
-    }
-    for (const [repo, branches] of Object.entries(byRepo)) {
-      await window.terminal.deleteBranches(repo, branches);
-    }
-    setDeleting(false); reloadLocal();
-  };
-
-  const handleCleanMerged = async (repo: string) => {
-    setDeleting(true);
+  // Search returns identity only; anything the fan-out already fetched is reused, so only PRs in repos
+  // you haven't cloned cost a `gh pr view`. Search order (updated-desc) is preserved.
+  const loadView = async (v: PRView) => {
+    if (v === "inbox") return;
+    setViewLoading(true); setViewError(null);
+    const keyOf = (repo: string, n: number) => `${repo}#${n}`;
     try {
-      const { deleted, failed } = await window.terminal.cleanupMerged(repo);
-      const errReason = failed.find((f) => f.branch === "")?.reason;
-      if (errReason) setCleanMsg(`Error: ${errReason}`);
-      else if (deleted.length > 0) setCleanMsg(`Deleted ${deleted.length} branch${deleted.length !== 1 ? "es" : ""}: ${deleted.join(", ")}`);
-      else if (failed.length > 0) setCleanMsg(`Nothing deleted — ${failed.length} failed (may have active worktrees)`);
-      else setCleanMsg("No merged branches found");
-      setTimeout(() => setCleanMsg(null), 6000);
-    } catch (e: unknown) {
-      setCleanMsg(`Error: ${e instanceof Error ? e.message : String(e)}`);
-      setTimeout(() => setCleanMsg(null), 6000);
+      const refs = await window.terminal.searchPRRefs(v);
+      const byKey = new Map(prs.map((p) => [keyOf(p.repository.nameWithOwner, p.number), p as PR]));
+      const missing = refs.filter((r) => !byKey.has(keyOf(r.nameWithOwner, r.number)));
+      for (const p of missing.length ? await window.terminal.hydratePRs(missing) : []) {
+        byKey.set(keyOf(p.repository.nameWithOwner, p.number), p);
+      }
+      const ordered = refs
+        .map((r) => byKey.get(keyOf(r.nameWithOwner, r.number)))
+        .filter((p): p is PR => !!p);
+      setViewCache((prev) => ({ ...prev, [v]: ordered }));
+    } catch (err) {
+      // Electron wraps handler errors — keep just the gh message (a 403 rate limit must stay visible).
+      const raw = (err as Error).message ?? "";
+      setViewError(raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, "") || "GitHub search failed");
+    } finally {
+      setViewLoading(false);
     }
-    setDeleting(false); reloadLocal();
+  };
+
+  const selectView = (v: PRView) => {
+    setView(v);
+    setShowViewMenu(false);
+    setViewError(null);
+    if (v !== "inbox" && !viewCache[v]) loadView(v);
   };
 
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
-    if (pinnedRepos.size > 0) load();
-  }, [[...pinnedRepos].sort().join(",")]);
+    window.terminal.getGhLogin().then(setGhLogin).catch(() => setGhLogin(null));
+    window.terminal.getMyTeams()
+      .then((teams) => setMyTeams(teamMatchSet(teams)))
+      .catch(() => setMyTeams(new Set()));
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(load, 5 * 60 * 1000);
@@ -458,29 +510,36 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
   useEffect(() => { loadWorktrees(); }, []);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showWindowMenu) { setShowWindowMenu(false); return; }
+      if (showViewMenu) { setShowViewMenu(false); return; }
+      onClose();
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, showWindowMenu, showViewMenu]);
 
-  const byRepo = filteredPRs.reduce<Record<string, PR[]>>((acc, pr) => {
-    const key = pr.repository.nameWithOwner;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(pr);
+  // Bucket once: uncategorised PRs render nowhere, so the header counts what's actually in the inbox.
+  const buckets = prs.reduce<Partial<Record<PRCategory, PR[]>>>((acc, pr) => {
+    if (!withinUpdatedWindow(pr, updatedWithin)) return acc;
+    const key = categorizePR(pr, ghLogin, myTeams);
+    if (key) (acc[key] ??= []).push(pr);
     return acc;
   }, {});
+  const inboxCount = Object.values(buckets).reduce((n, b) => n + (b?.length ?? 0), 0);
 
-  const prBranchKeys = new Set(prs.map((p) => `${p.repository.name}::${p.headRefName}`));
-  const localOnly = localBranches.filter((b) => !prBranchKeys.has(`${b.repo}::${b.branch}`));
-  const localByRepo = localOnly.reduce<Record<string, LocalBranch[]>>((acc, b) => {
-    if (!acc[b.repo]) acc[b.repo] = [];
-    acc[b.repo].push(b);
-    return acc;
-  }, {});
+  // The Updated window applies to every view, so it stays instant — search is never re-issued for it.
+  const viewPRs = (v: PRView): PR[] | undefined =>
+    viewCache[v]?.filter((pr) => withinUpdatedWindow(pr, updatedWithin));
+  const flatPRs = view === "inbox" ? [] : viewPRs(view) ?? [];
+  const viewCount = (v: PRView) => (v === "inbox" ? inboxCount : viewPRs(v)?.length);
+  const headerCount = view === "inbox" ? inboxCount : flatPRs.length;
+  const busy = loading || viewLoading;
 
   return (
     <div style={{
-      width: 400, flexShrink: 0,
+      width: drawerWidth, minWidth: 320, flexShrink: 0,
       background: t.surface1,
       backdropFilter: t.backdropFilter,
       WebkitBackdropFilter: t.backdropFilter,
@@ -488,39 +547,24 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
       display: "flex", flexDirection: "column",
       boxShadow: t.isDark ? "-4px 0 36px rgba(0,0,0,0.6)" : "-4px 0 20px rgba(0,0,0,0.08)",
       overflowY: "hidden",
+      position: "relative",
     }}>
+      {/* Right resize handle */}
+      <div
+        onMouseDown={onDrawerResizeDown}
+        style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", zIndex: 10 }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = `${t.blue}40`; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+      />
       <div style={{ ...drawerHeader(t), padding: "6px 10px 6px 14px" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={drawerTitle(t)}>Pull requests</div>
-          {!loading && (
+          {!busy && (
             <div style={{ color: t.green, fontSize: 11, marginTop: 3, ...MONO_FONT }}>
-              {ownerFilter ? `${filteredPRs.length}/${prs.length}` : prs.length} open PRs · {pinnedRepos.size > 0 ? `${pinnedRepos.size} pinned` : `${repos.length} local repos`} · {!localLoading ? `${localOnly.length} branches` : "loading…"}
+              {headerCount} PRs
+              {/* Only the inbox is bounded by what's cloned; search-backed views span every repo. */}
+              {view === "inbox" && ` · ${repos.length} local repos`}
               <span style={{ color: t.label4 }}> · {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            </div>
-          )}
-          {!loading && uniqueOwners.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
-              {uniqueOwners.map((login) => {
-                const active = ownerFilter === login;
-                return (
-                  <button
-                    key={login}
-                    onClick={() => setOwnerFilter(active ? null : login)}
-                    style={{
-                      fontSize: 10, fontWeight: 600, ...MONO_FONT,
-                      padding: "2px 7px", borderRadius: RADIUS, cursor: "pointer",
-                      border: `1px solid ${active ? t.blue : t.borderMid}`,
-                      background: active ? `${t.blue}20` : "transparent",
-                      color: active ? t.blue : t.label3,
-                      transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => { if (!active) { e.currentTarget.style.borderColor = t.blue; e.currentTarget.style.color = t.blue; } }}
-                    onMouseLeave={(e) => { if (!active) { e.currentTarget.style.borderColor = t.borderMid; e.currentTarget.style.color = t.label3; } }}
-                  >
-                    {login}
-                  </button>
-                );
-              })}
             </div>
           )}
         </div>
@@ -536,11 +580,151 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
         >✕</button>
       </div>
 
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+        padding: "6px 14px", borderBottom: `1px solid ${t.border}`,
+        position: "relative", flexShrink: 0,
+      }}>
+        {/* Each chip owns its own positioning context so its menu anchors under it, not the row. */}
+        <div style={{ position: "relative" }}>
+        <button
+          onClick={() => { setShowViewMenu((v) => !v); setShowWindowMenu(false); }}
+          title="Switch view"
+          style={{
+            display: "flex", alignItems: "center", gap: 5,
+            background: showViewMenu ? t.surface3 : "transparent",
+            border: `1px solid ${showViewMenu ? t.borderMid : t.borderSubtle}`,
+            borderRadius: RADIUS, color: t.label2,
+            cursor: "pointer", fontSize: 11, padding: "3px 8px",
+            transition: TRANSITION,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = t.surface3; }}
+          onMouseLeave={(e) => { if (!showViewMenu) e.currentTarget.style.background = "transparent"; }}
+        >
+          <span style={{ color: t.label4, fontSize: 11 }}>⊞</span>
+          <span style={{ color: t.label1, fontWeight: 600 }}>
+            {PR_VIEWS.find((v) => v.key === view)?.label}
+          </span>
+          <span style={{ fontSize: 9, color: t.label4 }}>▾</span>
+        </button>
+
+        {showViewMenu && (
+          <>
+            <div
+              onClick={() => setShowViewMenu(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 20 }}
+            />
+            <div style={{
+              position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 21,
+              minWidth: 196, padding: 3,
+              background: t.surface2, border: `1px solid ${t.borderMid}`,
+              borderRadius: RADIUS,
+            }}>
+              {PR_VIEWS.map(({ key, label }) => {
+                const active = key === view;
+                const n = viewCount(key);
+                return (
+                  <button
+                    key={key}
+                    onClick={() => selectView(key)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 7, width: "100%",
+                      background: active ? t.surface3 : "transparent",
+                      border: "none", borderRadius: RADIUS_SM,
+                      color: active ? t.label1 : t.label2,
+                      cursor: "pointer", fontSize: 11, fontWeight: active ? 600 : 400,
+                      padding: "5px 8px", textAlign: "left",
+                      transition: TRANSITION,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = t.surface3; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ width: 9, color: t.teal, fontSize: 10, flexShrink: 0 }}>{active ? "✓" : ""}</span>
+                    <span style={{ flex: 1 }}>{label}</span>
+                    {/* En dash until the view's first search resolves — 0 would read as "nothing here". */}
+                    <span style={{ color: t.label4, fontSize: 10, ...MONO_FONT }}>{n ?? "–"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+        </div>
+
+        <div style={{ position: "relative" }}>
+        <button
+          onClick={() => { setShowWindowMenu((v) => !v); setShowViewMenu(false); }}
+          title="Filter by when the PR was last updated"
+          style={{
+            display: "flex", alignItems: "center", gap: 5,
+            background: showWindowMenu ? t.surface3 : "transparent",
+            border: `1px solid ${showWindowMenu ? t.borderMid : t.borderSubtle}`,
+            borderRadius: RADIUS, color: t.label2,
+            cursor: "pointer", fontSize: 11, padding: "3px 8px",
+            transition: TRANSITION,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = t.surface3; }}
+          onMouseLeave={(e) => { if (!showWindowMenu) e.currentTarget.style.background = "transparent"; }}
+        >
+          <span style={{ color: t.label4, fontSize: 11 }}>◷</span>
+          Updated: <span style={{ color: t.label1, fontWeight: 600 }}>
+            {UPDATED_WINDOWS.find((w) => w.key === updatedWithin)?.label}
+          </span>
+          <span style={{ fontSize: 9, color: t.label4 }}>▾</span>
+        </button>
+
+        {showWindowMenu && (
+          <>
+            <div
+              onClick={() => setShowWindowMenu(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 20 }}
+            />
+            <div style={{
+              position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 21,
+              minWidth: 168, padding: 3,
+              background: t.surface2, border: `1px solid ${t.borderMid}`,
+              borderRadius: RADIUS,
+            }}>
+              {UPDATED_WINDOWS.map(({ key, label }) => {
+                const active = key === updatedWithin;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setUpdatedWithin(key);
+                      localStorage.setItem("tdash:prs-updated-window", key);
+                      setShowWindowMenu(false);
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 7, width: "100%",
+                      background: active ? t.surface3 : "transparent",
+                      border: "none", borderRadius: RADIUS_SM,
+                      color: active ? t.label1 : t.label2,
+                      cursor: "pointer", fontSize: 11, fontWeight: active ? 600 : 400,
+                      padding: "5px 8px", textAlign: "left",
+                      transition: TRANSITION,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = t.surface3; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ width: 9, color: t.teal, fontSize: 10, flexShrink: 0 }}>{active ? "✓" : ""}</span>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+        </div>
+      </div>
+
       <div style={{ flex: 1, overflowY: "auto", padding: "12px 0 20px" }}>
-        {loading && (
+        {busy && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 10 }}>
             <div style={{ color: t.blue, fontSize: 22 }}>⟳</div>
-            <div style={{ color: t.label3, fontSize: 12, ...MONO_FONT }}>Fetching pull requests…</div>
+            <div style={{ color: t.label3, fontSize: 12, ...MONO_FONT }}>
+              {view === "inbox" ? "Fetching pull requests…" : "Searching GitHub…"}
+            </div>
           </div>
         )}
 
@@ -551,58 +735,80 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           </div>
         )}
 
-        {!loading && !error && prs.length === 0 && !ownerFilter && (
+        {/* Surfaced, never swallowed: a search secondary-rate-limit 403 must not read as an empty view. */}
+        {!busy && viewError && (
+          <div style={{ margin: 12, padding: "12px 14px", background: `${t.red}10`, border: `1px solid ${t.red}28`, borderRadius: RADIUS }}>
+            <div style={{ color: t.red, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>GitHub search failed</div>
+            <div style={{ color: t.label2, fontSize: 11, marginBottom: 8, ...MONO_FONT, whiteSpace: "pre-wrap" }}>{viewError}</div>
+            <button
+              onClick={() => loadView(view)}
+              style={{
+                background: "none", border: `1px solid ${t.borderMid}`, borderRadius: RADIUS,
+                color: t.label2, cursor: "pointer", fontSize: 11, padding: "3px 9px",
+              }}
+            >Retry</button>
+          </div>
+        )}
+
+        {!busy && !error && !viewError && headerCount === 0 && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
             <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No open PRs</div>
             <div style={{ color: t.label3, fontSize: 11, ...MONO_FONT }}>
-              {pinnedRepos.size > 0 ? "All caught up in pinned repos!" : "All caught up!"}
+              All caught up!
             </div>
-          </div>
-        )}
-        {!loading && !error && prs.length > 0 && filteredPRs.length === 0 && ownerFilter && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 40, gap: 8 }}>
-            <div style={{ color: t.label1, fontSize: 13, fontWeight: 600 }}>No PRs by @{ownerFilter}</div>
-            <div style={{ color: t.label3, fontSize: 11, ...MONO_FONT }}>Try a different owner filter</div>
           </div>
         )}
 
-        {!loading && !error && Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length).map(([repoFullName, repoPRs]) => (
-          <div key={repoFullName} style={{ marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, flexShrink: 0 }} />
-              <span style={{ color: t.green, fontSize: 13, fontWeight: 600, letterSpacing: 0.3 }}>{repoFullName}</span>
-              <span style={{
-                color: t.green, fontSize: 10,
-                background: `${t.green}15`, border: `1px solid ${t.green}28`,
-                borderRadius: RADIUS, padding: "1px 6px", marginLeft: 2, ...MONO_FONT,
-              }}>{repoPRs.length}</span>
-            </div>
-            {repoPRs.map((pr) => (
-              <PRCard
-                key={pr.number}
-                pr={pr}
-                onOpenTerminal={onOpenTerminal}
-                onRunClaudeAction={(repo, branch, cmd) => {
-                  onRunClaudeAction(repo, branch, cmd);
-                  setTimeout(() => loadWorktrees(), 2500);
-                }}
-              />
-            ))}
-          </div>
+        {!busy && !error && view !== "inbox" && flatPRs.map((pr) => (
+          <PRCard
+            key={`${pr.repository.nameWithOwner}-${pr.number}`}
+            pr={pr}
+            onOpenTerminal={onOpenTerminal}
+            onRunClaudeAction={(repo, branch, cmd) => {
+              onRunClaudeAction(repo, branch, cmd);
+              setTimeout(() => loadWorktrees(), 2500);
+            }}
+            onSelectPR={onSelectPR}
+          />
         ))}
 
-        {cleanMsg && (
+        {!busy && !error && view === "inbox" && ghLogin === null && (
           <div style={{
-            margin: "0 12px 8px", padding: "8px 12px",
-            background: cleanMsg.startsWith("Error") ? `${t.red}10` : `${t.green}10`,
-            border: `1px solid ${cleanMsg.startsWith("Error") ? t.red : t.green}30`,
-            borderRadius: RADIUS,
-            color: cleanMsg.startsWith("Error") ? t.red : t.green,
-            fontSize: 11, ...MONO_FONT,
+            margin: "0 12px 10px", padding: "10px 14px",
+            background: `${t.orange}10`, border: `1px solid ${t.orange}28`, borderRadius: RADIUS,
           }}>
-            {cleanMsg}
+            <div style={{ color: t.orange, fontSize: 11, ...MONO_FONT }}>
+              Could not detect your GitHub login — sections based on PR authorship won't populate.
+              Check <code style={{ color: t.teal }}>gh auth status</code>.
+            </div>
           </div>
         )}
+
+        {!busy && !error && view === "inbox" && CATEGORIES.map(({ key, label }) => {
+          const bucket = buckets[key] ?? [];
+          const color = CATEGORY_COLOR[key];
+          const open = isSectionOpen(key, bucket.length);
+          return (
+            <div key={key} style={{ marginBottom: 2 }}>
+              <PRSectionHeader
+                label={label} count={bucket.length} open={open} color={color}
+                onToggle={() => toggleSection(key, bucket.length)}
+              />
+              {open && bucket.map((pr) => (
+                <PRCard
+                  key={`${pr.repository.nameWithOwner}-${pr.number}`}
+                  pr={pr}
+                  onOpenTerminal={onOpenTerminal}
+                  onRunClaudeAction={(repo, branch, cmd) => {
+                    onRunClaudeAction(repo, branch, cmd);
+                    setTimeout(() => loadWorktrees(), 2500);
+                  }}
+                  onSelectPR={onSelectPR}
+                />
+              ))}
+            </div>
+          );
+        })}
 
         {(claudeWorktrees.length > 0 || wtMsg) && (
           <div style={{ marginTop: 8 }}>
@@ -666,170 +872,6 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           </div>
         )}
 
-        {repos.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: t.borderMid, margin: "4px 16px 10px" }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
-              <button
-                onClick={() => setShowRepos((v) => !v)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6, flex: 1,
-                  background: "none", border: "none", cursor: "pointer", padding: 0,
-                  color: t.blue, fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.blue, flexShrink: 0 }} />
-                Repos
-                <span style={{
-                  color: t.blue, fontSize: 10,
-                  background: `${t.blue}15`, border: `1px solid ${t.blue}28`,
-                  borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
-                }}>{repos.length}</span>
-                <span style={{ fontSize: 10, color: t.label4 }}>{showRepos ? "▾" : "▸"}</span>
-              </button>
-            </div>
-            {showRepos && sortedRepos.map((repo) => {
-              const pinned = pinnedRepos.has(repo.name);
-              return (
-                <div key={repo.name} style={{
-                  margin: "0 12px 5px", padding: "8px 12px",
-                  background: pinned ? `${t.orange}08` : t.surface2,
-                  border: `1px solid ${pinned ? `${t.orange}28` : t.borderSubtle}`,
-                  borderRadius: RADIUS, display: "flex", alignItems: "center", gap: 8,
-                  transition: "all 0.15s",
-                }}>
-                  <button
-                    onClick={() => togglePin(repo.name)}
-                    title={pinned ? "Unpin" : "Pin to top"}
-                    style={{
-                      background: "none", border: "none", cursor: "pointer",
-                      color: pinned ? t.orange : t.label4,
-                      fontSize: 12, padding: "1px 2px", lineHeight: 1,
-                      flexShrink: 0, transition: "color 0.15s",
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = t.orange)}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = pinned ? t.orange : t.label4)}
-                  >{pinned ? "★" : "☆"}</button>
-                  <span style={{
-                    flex: 1, fontSize: 12, color: pinned ? t.label1 : t.label2, ...MONO_FONT,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    fontWeight: pinned ? 600 : 400,
-                  }}>{repo.name}</span>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    {repo.branches.map((branch) => {
-                      const c = branch === "main" || branch === "master" ? t.green : t.blue;
-                      return (
-                        <div key={branch} style={{
-                          display: "flex", alignItems: "stretch",
-                          background: `${c}12`, border: `1px solid ${c}30`,
-                          borderRadius: RADIUS, overflow: "hidden", transition: "all 0.15s",
-                        }}>
-                          <button
-                            onClick={() => repo.repoUrl && window.terminal.openExternal(`${repo.repoUrl}/tree/${branch}`)}
-                            title="View in GitHub"
-                            style={{
-                              background: "none", border: "none", cursor: "pointer",
-                              color: c, fontSize: 10, fontWeight: 600,
-                              padding: "2px 7px", ...MONO_FONT,
-                              display: "flex", alignItems: "center", gap: 3,
-                              transition: "background 0.15s",
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = `${c}20`)}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-                          >
-                            <span style={{ fontSize: 9, opacity: 0.75 }}>↗</span>{branch}
-                          </button>
-                          <div style={{ width: 1, background: `${c}30`, flexShrink: 0 }} />
-                          <button
-                            onClick={() => onOpenRepo(repo.name, branch)}
-                            title="Open terminal"
-                            style={{
-                              background: "none", border: "none", cursor: "pointer",
-                              color: c, fontSize: 11,
-                              padding: "2px 5px",
-                              display: "flex", alignItems: "center",
-                              transition: "background 0.15s",
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = `${c}20`)}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-                          >⌨</button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {!localLoading && !loading && localOnly.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ height: 1, background: t.borderMid, margin: "4px 16px 10px" }} />
-
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px 6px" }}>
-              <button
-                onClick={() => setShowLocal((v) => !v)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6, flex: 1,
-                  background: "none", border: "none", cursor: "pointer", padding: 0,
-                  color: t.green, fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, flexShrink: 0 }} />
-                Local branches
-                <span style={{
-                  color: t.green, fontSize: 10,
-                  background: `${t.green}15`, border: `1px solid ${t.green}28`,
-                  borderRadius: RADIUS, padding: "1px 6px", ...MONO_FONT,
-                }}>{localOnly.length}</span>
-                <span style={{ fontSize: 10, color: t.label4 }}>{showLocal ? "▾" : "▸"}</span>
-              </button>
-
-              {selected.size > 0 && (
-                <button
-                  onClick={handleDeleteSelected} disabled={deleting}
-                  style={{
-                    background: `${t.red}10`, border: `1px solid ${t.red}30`,
-                    borderRadius: RADIUS, color: t.red,
-                    cursor: deleting ? "not-allowed" : "pointer",
-                    fontSize: 10, fontWeight: 600, padding: "3px 8px",
-                    opacity: deleting ? 0.5 : 1,
-                  }}
-                >Delete {selected.size}</button>
-              )}
-            </div>
-
-            {showLocal && Object.entries(localByRepo).sort((a, b) => b[1].length - a[1].length).map(([repo, branches]) => (
-              <div key={repo} style={{ marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px 4px 26px" }}>
-                  <span style={{ color: t.green, fontSize: 12, fontWeight: 600, flex: 1 }}>{repo}</span>
-                  <button
-                    onClick={() => handleCleanMerged(repo)} disabled={deleting}
-                    title="Delete branches already merged into main"
-                    style={{
-                      background: "none", border: `1px solid ${t.borderSubtle}`,
-                      borderRadius: RADIUS, color: t.label3,
-                      cursor: deleting ? "not-allowed" : "pointer",
-                      fontSize: 9, fontWeight: 600, padding: "2px 6px",
-                      opacity: deleting ? 0.5 : 1, transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${t.teal}50`; e.currentTarget.style.color = t.teal; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.borderSubtle; e.currentTarget.style.color = t.label3; }}
-                  >✦ Clean merged</button>
-                </div>
-                {branches.map((b) => {
-                  const key = `${b.repo}::${b.branch}`;
-                  return (
-                    <LocalBranchCard key={key} item={b} selected={selected.has(key)} onToggle={() => toggleSelect(key)} onOpenTerminal={onOpenTerminal} repoUrl={b.repoUrl} />
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

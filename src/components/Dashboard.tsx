@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Component } from "react";
 import type { ReactNode } from "react";
-import { TerminalPanel } from "./TerminalPanel";
+import { CentrePane } from "./CentrePane";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { StatsDrawer } from "./StatsDrawer";
 import { NotesDrawer } from "./NotesDrawer";
 import { ClaudeAgentsDrawer } from "./ClaudeAgentsDrawer";
 import { KBChatDrawer } from "./KBChatDrawer";
 import { TasksDrawer } from "./TasksDrawer";
-import { RepoSidebar, SIDEBAR_W, SelectedPR, TerminalTab } from "./RepoSidebar";
+import { PRsDrawer, SelectedPR } from "./PRsDrawer";
+import { RepoSidebar, SIDEBAR_W, TerminalTab } from "./RepoSidebar";
 import { DirectoryPicker } from "./DirectoryPicker";
-import { DiffDrawer } from "./DiffDrawer";
 import { FileTreeDrawer } from "./FileTreeModal";
 import { loadRoot, saveRoot } from "../rootMemory";
 import type { FileRef } from "./FileTreeModal";
@@ -19,7 +19,6 @@ import { CommandPalette } from "./CommandPalette";
 import type { Command } from "./CommandPalette";
 import { SettingsModal } from "./SettingsModal";
 import { useTheme } from "../ThemeContext";
-import { useSettings } from "../SettingsContext";
 import { SYS_FONT, MONO_FONT, TABULAR } from "../theme";
 import { rowState, chip, dot, CLIP, CLIP_LEFT, RADIUS, RADIUS_SM, TRANSITION } from "../chrome";
 import { shellQuote } from "../shell";
@@ -45,16 +44,10 @@ type SplitDir = "row" | "column";
 /** Panes per split. Below ~300px a pane is too narrow to be useful at 924px window width. */
 const MAX_PANES = 3;
 
-type SidePanel = "stats" | "history" | "notes" | "claude-agents" | "kb-chat" | "tasks";
+type SidePanel = "stats" | "history" | "notes" | "claude-agents" | "kb-chat";
 
-/** Sync freshness for the status bar — "just now", "4m ago", "2h ago". */
-function sinceLabel(epochMs: number): string {
-  const mins = Math.floor((Date.now() - epochMs) / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
-}
+/** What the left sidebar hosts — the nav rail switches between these. */
+type SidebarPanel = "sessions" | "files" | "prs" | "tasks";
 
 class KBChatErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -101,23 +94,24 @@ const isPlaceholderTitle = (title: string) => /^terminal \d+$/.test(title);
 export function Dashboard() {
   const { theme, toggleTheme } = useTheme();
   const t = theme;
-  const { settings } = useSettings();
 
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<SidePanel | null>(null);
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>(() => (localStorage.getItem("tdash:sidebar-panel") as SidebarPanel) || "sessions");
+  const [gitOpen, setGitOpen] = useState(() => localStorage.getItem("tdash:git-open") !== "0");
+  useEffect(() => { localStorage.setItem("tdash:sidebar-panel", sidebarPanel); }, [sidebarPanel]);
+  useEffect(() => { localStorage.setItem("tdash:git-open", gitOpen ? "1" : "0"); }, [gitOpen]);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
-  const [selectedRepoTree, setSelectedRepoTree] = useState<string | null>(null);
   // "" means the tree was closed at quit — must normalise, the linked effect treats non-null as open
   const [fileBrowseRepo, setFileBrowseRepo] = useState<string | null>(() => localStorage.getItem("tdash:file-root") || null);
   const [fileTreeLinked, setFileTreeLinked] = useState(() => localStorage.getItem("tdash:file-tree-linked") !== "0");
   const [showRootPicker, setShowRootPicker] = useState(false);
 
-  const RAIL_W = settings.showNavLabels ? 56 : 44;
+  const RAIL_W = 56;
   const FIXED_W = SIDEBAR_W + RAIL_W; // sessions panel + nav rail
-  const [diffWidth, setDiffWidth] = useState<number>(() => Number(localStorage.getItem("tdash:diff-width")) || Math.floor((window.innerWidth - FIXED_W) * 0.4));
-  const [fileViewWidth, setFileViewWidth] = useState<number>(() => Number(localStorage.getItem("tdash:file-view-width")) || Math.floor((window.innerWidth - FIXED_W) * 0.4));
   const [fileTreeWidth, setFileTreeWidth] = useState<number>(() => Number(localStorage.getItem("tdash:file-tree-width")) || 260);
+  const [prsWidth, setPrsWidth] = useState<number>(() => Number(localStorage.getItem("tdash:prs-width")) || 480);
   const [fileView, setFileView] = useState<FileRef | null>(() => (fileBrowseRepo ? loadRoot(fileBrowseRepo).file : null));
 
   // The tree owns the root; the viewer's file is remembered against it, so switching roots parks both
@@ -126,36 +120,36 @@ export function Dashboard() {
     if (fileBrowseRepo) saveRoot(fileBrowseRepo, { file: f });
   };
 
-  const diffOpen = !!(selectedPR || selectedRepoTree);
-  const fileTreeOpen = !!fileBrowseRepo;
+  // Every group, not just the focused one: the centre keeps the ones you've opened mounted and hides
+  // the rest, so switching sessions never re-mounts an xterm and replays its log. A split travels as
+  // N panes on one tab, never a second tab.
+  const sessionGroups = useMemo(() => {
+    const byGroup = new Map<string, PanelState[]>();
+    for (const p of panels) byGroup.set(p.groupId, [...(byGroup.get(p.groupId) ?? []), p]);
+    return [...byGroup].map(([id, mates]) => ({
+      id,
+      title: mates[0].title,
+      dir: mates[0].groupDir,
+      // The group's own branch — the rail repo's branch would mislabel a shell from elsewhere
+      branch: mates[0].gitBranch,
+      repo: mates[0].cwd?.match(/\/Documents\/GitHub\/([^/]+)/)?.[1],
+      panes: mates.map((p) => ({ sessionId: p.sessionId, number: p.number })),
+    }));
+  }, [panels]);
+
+  const activeGroupId = useMemo(
+    () => (panels.find((p) => p.id === focusedId) ?? panels[0])?.groupId,
+    [panels, focusedId]
+  );
+  const sessionGroup = sessionGroups.find((g) => g.id === activeGroupId);
+
   const viewerOpen = !!fileView;
-  const prevBothWide = useRef(false);
-
-  // Terminal docked below the viewer instead of beside it — sticky, so it survives closing the file.
-  const [stackTerminal, setStackTerminal] = useState(() => localStorage.getItem("tdash:term-stacked") === "1");
-  const [dockHeight, setDockHeight] = useState(() => Number(localStorage.getItem("tdash:term-dock-height")) || 250);
-  useEffect(() => { localStorage.setItem("tdash:term-stacked", stackTerminal ? "1" : "0"); }, [stackTerminal]);
-
-  // ── Maximise the wide right-hand drawers ───────────────────────────────────
-  type WideDrawer = "viewer" | "diff";
-  const [maximizedDrawer, setMaximizedDrawer] = useState<WideDrawer | null>(null);
-  const restoreWidth = useRef<Record<WideDrawer, number>>({ viewer: fileViewWidth, diff: diffWidth });
-  const MIN_TERM_W = 320; // always leave a usable terminal strip
-
-  // Split the right dock evenly when the second wide drawer opens
-  useEffect(() => {
-    const both = viewerOpen && diffOpen;
-    if (both && !prevBothWide.current) {
-      const half = Math.floor(
-        (window.innerWidth - RAIL_W - (sidebarVisible ? SIDEBAR_W : 0) - (fileTreeOpen ? fileTreeWidth : 0) - MIN_TERM_W) / 2
-      );
-      setDiffWidth(Math.max(280, half));
-      setFileViewWidth(Math.max(320, half));
-    }
-    prevBothWide.current = both;
-  }, [viewerOpen, diffOpen]);
   const [showModal, setShowModal] = useState(false);
   const [modalRepos, setModalRepos] = useState<{ name: string }[]>([]);
+  const [localBranches, setLocalBranches] = useState<{ repo: string; branch: string }[]>([]);
+  useEffect(() => {
+    window.terminal.listLocalBranches().then(setLocalBranches).catch(() => {});
+  }, []);
   const togglePanel = (panel: SidePanel) => setActivePanel((v) => (v === panel ? null : panel));
   const handlePanelToggle = (panel: SidePanel) => {
     if (panel === "kb-chat" && activePanel !== "kb-chat") setSplitMode(true);
@@ -170,61 +164,20 @@ export function Dashboard() {
     try { localStorage.setItem("tdash:sidebar-visible", String(next)); } catch {}
     return next;
   });
-  const setDrawerWidth: Record<WideDrawer, (w: number) => void> = { viewer: setFileViewWidth, diff: setDiffWidth };
-  const drawerIsOpen: Record<WideDrawer, boolean> = { viewer: viewerOpen, diff: diffOpen };
-  const drawerMinWidth: Record<WideDrawer, number> = { viewer: 320, diff: 280 };
-
-  // Widest a drawer can get: window minus icon rail, sidebar, every sibling, and a terminal strip
-  const maxDrawerWidth = (self: WideDrawer) => {
-    const siblings = (fileTreeOpen ? fileTreeWidth : 0)
-      + (self !== "viewer" && viewerOpen ? fileViewWidth : 0)
-      + (self !== "diff" && diffOpen ? diffWidth : 0);
-    return Math.max(drawerMinWidth[self], window.innerWidth - RAIL_W - (sidebarVisible ? SIDEBAR_W : 0) - siblings - MIN_TERM_W);
-  };
-
-  // Only one drawer is ever maximised, so toggling just restores the incumbent and flips the flag —
-  // the refit effect below computes the new width once the restored sibling has settled.
-  const toggleMaximized = (key: WideDrawer) => {
-    const cur = maximizedDrawer;
-    if (cur) setDrawerWidth[cur](restoreWidth.current[cur]);
-    if (cur === key) { setMaximizedDrawer(null); return; }
-    restoreWidth.current[key] = key === "viewer" ? fileViewWidth : diffWidth;
-    setMaximizedDrawer(key);
-  };
-
-  // Keep the maximised drawer filling the window as it (or its neighbours) resize
-  useEffect(() => {
-    const key = maximizedDrawer;
-    if (!key) return;
-    // Closing a maximised drawer drops the state so it reopens at its normal width
-    if (!drawerIsOpen[key]) { setDrawerWidth[key](restoreWidth.current[key]); setMaximizedDrawer(null); return; }
-    const refit = () => setDrawerWidth[key](maxDrawerWidth(key));
-    refit();
-    window.addEventListener("resize", refit);
-    return () => window.removeEventListener("resize", refit);
-  }, [maximizedDrawer, viewerOpen, diffOpen, fileTreeOpen, sidebarVisible, fileTreeWidth, fileViewWidth, diffWidth]);
-
   const [splitMode, setSplitMode] = useState(false);
-  const [termFitKey, setTermFitKey] = useState(0);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const splitDragRef = useRef<{ startX: number; startRatio: number; totalWidth: number } | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  // Broadcast: keystrokes in the focused terminal mirror to every session. Off on close for safety.
-  const [broadcast, setBroadcast] = useState(false);
   const [worktreeConfirm, setWorktreeConfirm] = useState<{ repoName: string; branchName: string; wtPath: string } | null>(null);
   const [dirtyConfirm, setDirtyConfirm] = useState<{ repoName: string; branchName: string; files: string[] } | null>(null);
-  const [termFont, setTermFont] = useState<{ family: string; size: number; files: string[] } | null>(null);
   const initialized = useRef(false);
 
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
-    window.terminal.getIterm2Font().then((font) => {
-      setTermFont(font);
-      initPanels();
-    });
+    initPanels();
   }, []);
 
   async function initPanels() {
@@ -283,25 +236,8 @@ export function Dashboard() {
   // The file tree browses any path; the git panels can't — so a non-repo cwd only feeds the tree
   const focusedRoot = focusedRepo ?? focusedPanel?.cwd ?? null;
 
-  // Groups keep panel order, so ⌘1-9 and ⌘⇧↑↓ still walk the flat list predictably.
-  const groups = useMemo(() => {
-    const out: { id: string; dir: SplitDir; panels: PanelState[] }[] = [];
-    const index = new Map<string, number>();
-    for (const p of panels) {
-      const at = index.get(p.groupId);
-      if (at === undefined) { index.set(p.groupId, out.length); out.push({ id: p.groupId, dir: p.groupDir, panels: [p] }); }
-      else out[at].panels.push(p);
-    }
-    return out;
-  }, [panels]);
-  const visibleGroupId = focusedPanel?.groupId ?? groups[0]?.id ?? null;
-  const visibleGroup = groups.find((g) => g.id === visibleGroupId);
-  const focusedGroupSize = visibleGroup?.panels.length ?? 0;
-  const visibleGroupDir = visibleGroup?.dir ?? "row";
-
-  // Always-current ref — read inside effects without adding to deps
-  const diffOpenRef = useRef(diffOpen);
-  diffOpenRef.current = diffOpen;
+  const focusedGroupSize = sessionGroup?.panes.length ?? 0;
+  const visibleGroupDir = sessionGroup?.dir ?? "row";
 
   // Let panel callbacks stay referentially stable (so memo'd panels skip re-render)
   const panelsRef = useRef(panels);
@@ -316,8 +252,6 @@ export function Dashboard() {
 
   // ── Status bar ───────────────────────────────────────────────────────────────
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
-  const [sidebarSummary, setSidebarSummary] = useState({ repos: 0, prs: 0, syncedAt: null as number | null });
-  const onSidebarSummary = useCallback((s: { repos: number; prs: number; syncedAt: number | null }) => setSidebarSummary(s), []);
   const [, setStatusTick] = useState(0);
 
   // Re-polled on every branch change too, since that's when ahead/behind actually moves.
@@ -344,13 +278,6 @@ export function Dashboard() {
   }, [fileBrowseRepo]);
 
   useEffect(() => { localStorage.setItem("tdash:file-tree-linked", fileTreeLinked ? "1" : "0"); }, [fileTreeLinked]);
-
-  // When focused terminal navigates to a different repo, track it in the Git panel (only if already open)
-  useEffect(() => {
-    if (!focusedRepo || !diffOpenRef.current) return;
-    setSelectedRepoTree(focusedRepo);
-    setSelectedPR(null);
-  }, [focusedRepo]);
 
   useEffect(() => {
     const cleanup = window.terminal.onNewPanel((sessionId, number) => {
@@ -563,8 +490,6 @@ export function Dashboard() {
         if (e.key === "Enter") { e.preventDefault(); if (focusedId) handleSplit(focusedId, "row"); return; }
         if (e.key === "D" || e.key === "d") { e.preventDefault(); if (focusedId) handleSplit(focusedId, "column"); return; }
         if (e.key === "R" || e.key === "r") { e.preventDefault(); if (focusedId) handleFlipAxis(focusedId); return; }
-        if (e.key === "O" || e.key === "o") { e.preventDefault(); setStackTerminal((v) => !v); return; }
-        if (e.key === "B" || e.key === "b") { e.preventDefault(); setBroadcast((v) => !v); return; }
         if (e.key === "ArrowUp") {
           e.preventDefault();
           const idx = panels.findIndex((p) => p.id === focusedId);
@@ -589,13 +514,14 @@ export function Dashboard() {
           }
           return;
         }
-        const TABS: SidePanel[] = ["stats", "history", "notes", "claude-agents", "kb-chat", "tasks"];
+        const TABS: SidePanel[] = ["stats", "history", "notes", "claude-agents", "kb-chat"];
         const idx = parseInt(e.key) - 1;
         if (idx >= 0 && idx < TABS.length) {
           e.preventDefault();
           handlePanelToggle(TABS[idx]);
           return;
         }
+        if (e.key === "6") { e.preventDefault(); openSidebarPanel("tasks"); return; }
       }
       if (e.ctrlKey && e.key === "w" && !fromTerminal) {
         e.preventDefault();
@@ -610,61 +536,6 @@ export function Dashboard() {
   useEffect(() => {
     if (activePanel !== "kb-chat") setSplitMode(false);
   }, [activePanel]);
-
-  // Refit terminal immediately when split mode changes, and again after layout settles
-  useEffect(() => {
-    setTermFitKey((k) => k + 1);
-    const id = setTimeout(() => setTermFitKey((k) => k + 1), 100);
-    return () => clearTimeout(id);
-  }, [splitMode]);
-
-  // Terminals only yield the dock when a wide drawer can take it — never leave the row empty.
-  const fillDock = !settings.showTerminal && (viewerOpen || diffOpen);
-
-  // Stacked layout: viewer takes the full width with the terminal as a bottom dock beneath it.
-  // Only reachable with the viewer open and the terminal visible — otherwise there's nothing to stack.
-  const stacked = stackTerminal && viewerOpen && !fillDock && !zenMode;
-
-  // Splitting, closing or flipping the axis reflows every pane in that group — refit them.
-  useEffect(() => {
-    setTermFitKey((k) => k + 1);
-    const id = setTimeout(() => setTermFitKey((k) => k + 1), 80);
-    return () => clearTimeout(id);
-  }, [panels.length, visibleGroupDir, stacked]);
-
-  const handleDockDragStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = dockHeight;
-    const columnHeight = e.currentTarget.parentElement?.clientHeight ?? 800;
-    // Hold the cursor for the whole drag — the handle is thin and the pointer outruns it
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-    const onMove = (ev: MouseEvent) => {
-      // Dragging up grows the dock, so the delta is inverted
-      const next = startHeight - (ev.clientY - startY);
-      setDockHeight(Math.max(120, Math.min(columnHeight - 120, next)));
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      // Refit once on release rather than per pixel — a fit per mousemove stalls the drag
-      setTermFitKey((k) => k + 1);
-      setDockHeight((h) => { localStorage.setItem("tdash:term-dock-height", String(h)); return h; });
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  // Coming back from display:none the xterm has no measured size, so force a refit.
-  useEffect(() => {
-    if (fillDock) return;
-    setTermFitKey((k) => k + 1);
-    const id = setTimeout(() => setTermFitKey((k) => k + 1), 80);
-    return () => clearTimeout(id);
-  }, [fillDock]);
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -695,7 +566,7 @@ export function Dashboard() {
       title={title}
       aria-pressed={active}
       style={{
-        width: "100%", height: settings.showNavLabels ? 46 : 38, flexShrink: 0,
+        width: "100%", height: 46, flexShrink: 0,
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
         border: "none", cursor: "pointer",
         color: active ? t.label1 : t.label3,
@@ -705,15 +576,24 @@ export function Dashboard() {
       onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = t.label3; } }}
     >
       {icon}
-      {settings.showNavLabels && (
-        <span style={{ fontSize: 9, letterSpacing: 0.2, fontWeight: active ? 600 : 400, ...SYS_FONT }}>{label}</span>
-      )}
+      <span style={{ fontSize: 9, letterSpacing: 0.2, fontWeight: active ? 600 : 400, ...SYS_FONT }}>{label}</span>
     </button>
   );
 
-  const railDivider = <div style={{ height: 1, alignSelf: "stretch", background: t.borderSubtle, margin: "3px 10px" }} />;
-
   const RAIL_ICON = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+
+  // Rail items switch the sidebar panel; clicking the active one collapses the sidebar.
+  const openSidebarPanel = (p: SidebarPanel) => {
+    if (sidebarVisible && sidebarPanel === p) { toggleSidebar(); return; }
+    if (p === "files" && !fileBrowseRepo) {
+      setFileBrowseRepo(focusedRoot ?? "~");
+      setFileTreeLinked(!!focusedRoot);
+    }
+    setSidebarPanel(p);
+    if (!sidebarVisible) toggleSidebar();
+  };
+
+  const avatarInitial = (focusedPanel?.cwd ?? panels[0]?.cwd)?.match(/^\/Users\/(\w)/)?.[1]?.toUpperCase() ?? "•";
 
   const navRail = (
     <div style={{
@@ -723,119 +603,34 @@ export function Dashboard() {
       display: "flex", flexDirection: "column", alignItems: "stretch",
       padding: "6px 0", gap: 1, overflow: "hidden",
     }}>
-      {railButton("sessions", "Sessions", sidebarVisible ? "Hide sessions (⌘B)" : "Show sessions (⌘B)",
-        <svg {...RAIL_ICON}><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>,
-        sidebarVisible, toggleSidebar)}
+      {railButton("sessions", "Sessions", "Sessions (⌘B)",
+        <svg {...RAIL_ICON}><circle cx="12" cy="12" r="9"/><path d="M12 5a7 7 0 0 1 7 7"/></svg>,
+        sidebarVisible && sidebarPanel === "sessions", () => openSidebarPanel("sessions"))}
       {railButton("files", "Files", "File tree and search",
-        <svg {...RAIL_ICON}><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>,
-        fileBrowseRepo !== null,
-        () => {
-          if (fileBrowseRepo) { setFileBrowseRepo(null); return; }
-          setFileBrowseRepo(focusedRoot ?? "~");
-          setFileTreeLinked(!!focusedRoot);
-        })}
-      {railButton("git", "Git", "Working tree and pull requests",
+        <svg {...RAIL_ICON}><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>,
+        sidebarVisible && sidebarPanel === "files", () => openSidebarPanel("files"))}
+      {railButton("git", "Git", "Working tree and commits",
         <svg {...RAIL_ICON}><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>,
-        selectedRepoTree !== null || selectedPR !== null,
-        () => {
-          if (selectedRepoTree || selectedPR) { setSelectedRepoTree(null); setSelectedPR(null); return; }
-          if (focusedRepo) { setSelectedRepoTree(focusedRepo); setSelectedPR(null); }
-        })}
-      {railDivider}
+        gitOpen, () => setGitOpen((v) => !v))}
+      {railButton("prs", "PRs", "Pull requests",
+        <svg {...RAIL_ICON}><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>,
+        sidebarVisible && sidebarPanel === "prs", () => openSidebarPanel("prs"))}
       {railButton("tasks", "Tasks", "Tasks  ⌘⇧6",
-        <svg {...RAIL_ICON}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12l3 3 5-6"/></svg>,
-        activePanel === "tasks", () => handlePanelToggle("tasks"))}
-      {railButton("notes", "Notes", "Notes  ⌘⇧3",
-        <svg {...RAIL_ICON}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>,
-        activePanel === "notes", () => handlePanelToggle("notes"))}
-      {railButton("stats", "Stats", "Stats  ⌘⇧1",
-        <svg {...RAIL_ICON}><path d="M3 20h18"/><path d="M6 20v-7M12 20V5M18 20v-9"/></svg>,
-        activePanel === "stats", () => handlePanelToggle("stats"))}
-      {railButton("history", "History", "History  ⌘⇧2",
-        <svg {...RAIL_ICON}><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>,
-        activePanel === "history", () => handlePanelToggle("history"))}
-      {railButton("claude-agents", "Claude", "Claude agents  ⌘⇧4",
-        <svg {...RAIL_ICON}><path d="M12 2l2 8 8 2-8 2-2 8-2-8-8-2 8-2z"/></svg>,
-        activePanel === "claude-agents", () => handlePanelToggle("claude-agents"))}
-      {railButton("kb-chat", "KB", "KB chat  ⌘⇧5",
-        <svg {...RAIL_ICON}><path d="M5 4h14v16H7a2 2 0 0 1-2-2z"/><path d="M5 18a2 2 0 0 1 2-2h12"/></svg>,
-        activePanel === "kb-chat", () => handlePanelToggle("kb-chat"))}
+        <svg {...RAIL_ICON}><polyline points="20 6 9 17 4 12"/></svg>,
+        sidebarVisible && sidebarPanel === "tasks", () => openSidebarPanel("tasks"))}
 
       <div style={{ flex: 1 }} />
 
-      {panels.length > 1 && railDivider}
-      {panels.length > 1 && railButton("broadcast", "Send all",
-        broadcast ? "Broadcast on — typing goes to all terminals (⌘⇧B)" : "Broadcast input to all terminals (⌘⇧B)",
-        <svg {...RAIL_ICON}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg>,
-        broadcast, () => setBroadcast((v) => !v))}
+      <div title="You" style={{
+        width: 26, height: 26, borderRadius: "50%", margin: "6px auto 4px", flexShrink: 0,
+        background: t.surface2, border: `1px solid ${t.borderMid}`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: t.label2, fontSize: 10, fontWeight: 600, ...SYS_FONT,
+      }}>{avatarInitial}</div>
     </div>
   );
 
-  // Rendered either as the row's own column or inside the stacked column below the viewer,
-  // so the two layouts share one definition and can't drift.
-  const terminalDock = (
-    <div style={{
-      ...(stacked
-        ? { height: dockHeight, flex: "none" }
-        : {
-            flex: splitMode && activePanel === "kb-chat" ? splitRatio : 1,
-            minWidth: splitMode && activePanel === "kb-chat" ? 300 : undefined,
-          }),
-      display: fillDock ? "none" : "flex",
-      flexDirection: "column",
-      minHeight: 0, overflow: "hidden",
-      position: "relative",
-    }}>
-      {/* Every group is laid out at full size and hidden with visibility, not display: a
-          display:none group has no box, so fit() would leave its PTYs at a stale size. */}
-      {groups.map((group) => (
-        <div
-          key={group.id}
-          style={{
-            position: "absolute", inset: 0,
-            display: "flex", flexDirection: group.dir, gap: 4, padding: 4,
-            visibility: group.id === visibleGroupId ? "visible" : "hidden",
-          }}
-        >
-          {group.panels.map((panel) => (
-            <div
-              key={panel.id}
-              style={{
-                flex: 1, minWidth: 0, minHeight: 0, display: "flex",
-                // Broadcast on: ring every live panel so it's unmistakable they all receive input.
-                outline: broadcast ? `2px solid ${t.orange}` : undefined,
-                outlineOffset: broadcast ? -2 : undefined,
-                borderRadius: broadcast ? RADIUS : undefined,
-              }}
-            >
-              <TerminalPanel
-                id={panel.id}
-                sessionId={panel.sessionId}
-                panelNumber={panel.number}
-                title={panel.title}
-                cwd={panel.cwd}
-                gitBranch={panel.gitBranch}
-                focused={panel.id === focusedId}
-                fontFamily={termFont?.family}
-                fontSize={termFont?.size}
-                onFocus={focusPanel}
-                onRename={handleRename}
-                canClose={panels.length > 1}
-                onClose={handleClose}
-                canSplit={group.panels.length < MAX_PANES}
-                onSplit={handleSplit}
-                splitDir={group.panels.length > 1 ? group.dir : undefined}
-                onFlipAxis={handleFlipAxis}
-                fitTrigger={termFitKey}
-                broadcast={broadcast && panel.id === focusedId}
-              />
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-
+  // Always embedded — the centre pane hosts the viewer as a tab, never a second wide column.
   const fileViewer = viewerOpen && (
     <FileViewer
       repo={fileView!.repo}
@@ -844,13 +639,7 @@ export function Dashboard() {
       match={fileView!.match}
       treeRepo={fileBrowseRepo}
       onClose={() => openFile(null)}
-      width={fileViewWidth}
-      onWidthChange={(w) => { setMaximizedDrawer(null); setFileViewWidth(w); localStorage.setItem("tdash:file-view-width", String(w)); }}
-      maximized={maximizedDrawer === "viewer"}
-      onToggleMaximize={() => toggleMaximized("viewer")}
-      fill={fillDock || stacked}
-      stacked={stacked}
-      onToggleStacked={() => setStackTerminal((v) => !v)}
+      embedded
     />
   );
 
@@ -1094,33 +883,20 @@ export function Dashboard() {
       {/* Content row */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
         {!zenMode && navRail}
-        {!zenMode && sidebarVisible && (
+        {!zenMode && sidebarVisible && sidebarPanel === "sessions" && (
           <RepoSidebar
             tabs={panels.map((p): TerminalTab => ({ id: p.id, number: p.number, title: p.title, cwd: p.cwd, gitBranch: p.gitBranch }))}
             focusedId={focusedId}
             onFocusTab={(id) => { setFocusedId(id); const p = panels.find((x) => x.id === id); if (p) window.terminal.setFocused(p.sessionId); }}
             onCloseTab={handleClose}
             onAddTab={() => setShowModal(true)}
-            selected={selectedPR}
-            onSelectPR={(pr) => { setSelectedPR(pr); if (pr) setSelectedRepoTree(null); }}
-            onOpenTerminal={handleOpenBranchTerminal}
-            onOpenRepoTerminal={handleOpenInRepo}
-            onSelectRepoTree={(name) => { setSelectedRepoTree(name); setSelectedPR(null); }}
-            onRunClaudeAction={(repo, branch, cmd) => { handleRunClaudeAction(repo, branch, cmd); }}
             onReposLoaded={setModalRepos}
-            onCheckoutBranch={(repoName, branch) => { window.terminal.writeToFocusedTerminal(`cd ~/Documents/GitHub/${repoName} && git checkout ${branch}\n`); }}
-            onBrowseFiles={(name) => {
-              if (fileBrowseRepo === name) { setFileBrowseRepo(null); return; }
-              setFileTreeLinked(false);
-              setFileBrowseRepo(name);
-            }}
-            onSummary={onSidebarSummary}
           />
         )}
-        {!zenMode && fileBrowseRepo && (
+        {!zenMode && sidebarVisible && sidebarPanel === "files" && (
           <FileTreeDrawer
-            repoName={fileBrowseRepo}
-            onClose={() => setFileBrowseRepo(null)}
+            repoName={fileBrowseRepo ?? focusedRoot ?? "~"}
+            onClose={() => setSidebarPanel("sessions")}
             linked={fileTreeLinked}
             onToggleLink={() => setFileTreeLinked((v) => !v)}
             allRepos={modalRepos.map((r) => r.name)}
@@ -1131,23 +907,45 @@ export function Dashboard() {
             onPickRoot={() => setShowRootPicker(true)}
           />
         )}
-        {stacked ? (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
-            {fileViewer}
-            <div
-              onMouseDown={handleDockDragStart}
-              style={{
-                height: 9, margin: "-4px 0", flexShrink: 0, zIndex: 10, position: "relative",
-                cursor: "row-resize", display: "flex", alignItems: "center",
-              }}
-              onMouseEnter={(e) => ((e.currentTarget.firstElementChild as HTMLElement).style.background = t.blue)}
-              onMouseLeave={(e) => ((e.currentTarget.firstElementChild as HTMLElement).style.background = t.border)}
-            >
-              <div style={{ height: 1, width: "100%", background: t.border, transition: "background 0.15s" }} />
-            </div>
-            {terminalDock}
-          </div>
-        ) : terminalDock}
+        {!zenMode && sidebarVisible && sidebarPanel === "prs" && (
+          <PRsDrawer
+            onClose={() => setSidebarPanel("sessions")}
+            onOpenTerminal={handleOpenBranchTerminal}
+            onOpenRepo={handleOpenRepoTerminal}
+            onRunClaudeAction={handleRunClaudeAction}
+            onSelectPR={setSelectedPR}
+            width={prsWidth}
+            onWidthChange={(w) => { setPrsWidth(w); localStorage.setItem("tdash:prs-width", String(w)); }}
+          />
+        )}
+        {!zenMode && sidebarVisible && sidebarPanel === "tasks" && (
+          <TasksDrawer onClose={() => setSidebarPanel("sessions")} />
+        )}
+
+        {/* Permanent centre: session tab + open file + working-tree diff, CHANGES rail on its right */}
+        <div style={{
+          flex: splitMode && activePanel === "kb-chat" ? splitRatio : 1,
+          minWidth: splitMode && activePanel === "kb-chat" ? 300 : 0,
+          display: "flex", minHeight: 0, overflow: "hidden",
+        }}>
+          <CentrePane
+            repoName={focusedRepo}
+            sessionGroups={sessionGroups}
+            activeGroupId={activeGroupId}
+            viewerTab={viewerOpen ? { path: fileView!.path, body: fileViewer, onClose: () => openFile(null) } : undefined}
+            showRail={gitOpen || !!selectedPR}
+            localBranches={localBranches}
+            onCheckoutBranch={(repoName, branch) => { window.terminal.writeToFocusedTerminal(`cd ~/Documents/GitHub/${repoName} && git checkout ${branch}\n`); }}
+            prReview={selectedPR ? {
+              repoName: selectedPR.repoName,
+              prNumber: selectedPR.prNumber,
+              prTitle: selectedPR.prTitle,
+              prUrl: selectedPR.prUrl,
+              headRefName: selectedPR.branch,
+              onClose: () => setSelectedPR(null),
+            } : undefined}
+          />
+        </div>
 
         {!zenMode && activePanel === "stats" && <StatsDrawer onClose={() => setActivePanel(null)} onOpenSession={handleOpenSessionTerminal} />}
         {!zenMode && activePanel === "history" && (
@@ -1155,7 +953,6 @@ export function Dashboard() {
         )}
         {!zenMode && activePanel === "notes" && <NotesDrawer onClose={() => setActivePanel(null)} />}
         {!zenMode && activePanel === "claude-agents" && <ClaudeAgentsDrawer onClose={() => setActivePanel(null)} onOpenTerminal={handleOpenSessionTerminal} />}
-        {!zenMode && activePanel === "tasks" && <TasksDrawer onClose={() => setActivePanel(null)} />}
         {splitMode && !zenMode && activePanel === "kb-chat" && (
           <div
             onMouseDown={handleSplitDragStart}
@@ -1172,25 +969,6 @@ export function Dashboard() {
               onToggleSplit={() => setSplitMode((v) => !v)}
             />
           </KBChatErrorBoundary>
-        )}
-
-        {/* Stacked mode renders the viewer inside the terminal column instead */}
-        {!zenMode && !stacked && fileViewer}
-
-        {!zenMode && (selectedPR || selectedRepoTree) && (
-          <DiffDrawer
-            repoName={selectedPR?.repoName ?? selectedRepoTree!}
-            prNumber={selectedPR?.prNumber}
-            prTitle={selectedPR?.prTitle}
-            prUrl={selectedPR?.prUrl}
-            headRefName={selectedPR?.branch}
-            onClose={() => { setSelectedPR(null); setSelectedRepoTree(null); }}
-            width={diffWidth}
-            onWidthChange={(w) => { setMaximizedDrawer(null); setDiffWidth(w); localStorage.setItem("tdash:diff-width", String(w)); }}
-            maximized={maximizedDrawer === "diff"}
-            onToggleMaximize={() => toggleMaximized("diff")}
-            fill={fillDock}
-          />
         )}
 
         {showSwitcher && (
@@ -1227,8 +1005,6 @@ export function Dashboard() {
                 ...(focusedId && focusedGroupSize > 1
                   ? [{ id: "flip-split", section: "Terminal", title: visibleGroupDir === "row" ? "Stack split vertically" : "Place split side by side", hint: "⌘⇧R", keywords: "flip rotate axis orientation split", run: () => handleFlipAxis(focusedId) }]
                   : []),
-                { id: "stack-terminal", section: "Terminal", title: stackTerminal ? "Terminal beside the file" : "Terminal below the file", hint: "⌘⇧O", keywords: "dock bottom stack layout viewer", run: () => setStackTerminal((v) => !v) },
-                { id: "toggle-broadcast", section: "Terminal", title: broadcast ? "Stop broadcasting input" : "Broadcast input to all terminals", hint: "⌘⇧B", keywords: "broadcast mirror all", run: () => setBroadcast((v) => !v) },
               ] as Command[] : []),
               ...panels.map((p, i): Command => ({
                 id: `goto-${p.id}`, section: "Go to panel", title: p.title,
@@ -1242,7 +1018,7 @@ export function Dashboard() {
               { id: "notes", section: "Panels", title: "Notes", hint: "⌘⇧3", run: () => handlePanelToggle("notes") },
               { id: "claude-agents", section: "Panels", title: "Claude Agents", hint: "⌘⇧4", run: () => handlePanelToggle("claude-agents") },
               { id: "kb-chat", section: "Panels", title: "KB Chat", hint: "⌘⇧5", run: () => handlePanelToggle("kb-chat") },
-              { id: "tasks", section: "Panels", title: "Tasks", hint: "⌘⇧6", run: () => handlePanelToggle("tasks") },
+              { id: "tasks", section: "Panels", title: "Tasks", hint: "⌘⇧6", run: () => openSidebarPanel("tasks") },
               { id: "settings", section: "View", title: "Settings", hint: "⌘,", keywords: "preferences config", run: () => setShowSettings(true) },
               { id: "zen", section: "View", title: zenMode ? "Exit zen mode" : "Zen mode", hint: "⌘\\", keywords: "focus fullscreen", run: () => setZenMode((v) => !v) },
               { id: "sidebar", section: "View", title: sidebarVisible ? "Hide sidebar" : "Show sidebar", hint: "⌘B", keywords: "repos", run: toggleSidebar },
@@ -1281,36 +1057,10 @@ export function Dashboard() {
             <span style={{ flex: "0 1 auto", color: t.label4, ...CLIP }}>No repo</span>
           )}
 
-          <span style={{ flex: 1, minWidth: 0 }} />
-
-          <span style={{ flex: "none", color: sidebarSummary.prs > 0 ? t.label2 : t.label4 }}>
-            {sidebarSummary.prs} open PRs
-          </span>
-          <span style={{ flex: "none", color: t.label4 }}>{sidebarSummary.repos} repos</span>
-          <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={dot(t, sidebarSummary.syncedAt ? "running" : "idle")} />
-            {sidebarSummary.syncedAt ? `synced ${sinceLabel(sidebarSummary.syncedAt)}` : "not synced"}
-          </span>
         </div>
       )}
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {broadcast && (
-        <div
-          style={{
-            position: "fixed", top: 8, left: "50%", transform: "translateX(-50%)",
-            zIndex: 200, display: "flex", alignItems: "center", gap: 8,
-            background: t.orange, color: "#1a1200", borderRadius: RADIUS,
-            padding: "5px 12px 5px 10px", fontSize: 11.5, fontWeight: 600, ...SYS_FONT,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.4)", pointerEvents: "auto", cursor: "pointer",
-          }}
-          onClick={() => setBroadcast(false)}
-          title="Click to stop broadcasting"
-        >
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1a1200" }} />
-          Broadcasting to all terminals — ⌘⇧B to stop
-        </div>
-      )}
     </div>
   );
 }

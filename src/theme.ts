@@ -32,6 +32,14 @@ export interface Theme {
   red: string;
   purple: string;
   teal: string;
+  // Diff — full-bleed row wash (`Bg`) plus a brighter accent shared by line numbers, gutter sign and
+  // stat bars (`Fg`/`Bar`, same value). `Fg` doubles as text so it still holds ≥3.5:1 over `Bg`.
+  diffAddBg: string;
+  diffDelBg: string;
+  diffAddBar: string;
+  diffDelBar: string;
+  diffAddFg: string;
+  diffDelFg: string;
 }
 
 export const darkTheme: Theme = {
@@ -59,6 +67,12 @@ export const darkTheme: Theme = {
   red: "#FF453A",
   purple: "#BF5AF2",
   teal: "#5AC8FA",
+  diffAddBg: "#295e12",
+  diffDelBg: "#560d06",
+  diffAddBar: "#82d46a",
+  diffDelBar: "#c76762",
+  diffAddFg: "#82d46a",
+  diffDelFg: "#c76762",
 };
 
 export const slackTheme: Theme = {
@@ -86,6 +100,12 @@ export const slackTheme: Theme = {
   red: "#E01E5A",
   purple: "#6C37C9",
   teal: "#1BA8A8",
+  diffAddBg: "#295e12",
+  diffDelBg: "#560d06",
+  diffAddBar: "#82d46a",
+  diffDelBar: "#c76762",
+  diffAddFg: "#82d46a",
+  diffDelFg: "#c76762",
 };
 
 // Skedulo Breeze, adapted to dark. Single accent hue — purple/teal fold onto accent-bright
@@ -116,6 +136,12 @@ export const breezeTheme: Theme = {
   red: "#e0736a",
   purple: "#66baff",
   teal: "#33a3ff",
+  diffAddBg: "#295e12",
+  diffDelBg: "#560d06",
+  diffAddBar: "#82d46a",
+  diffDelBar: "#c76762",
+  diffAddFg: "#82d46a",
+  diffDelFg: "#c76762",
 };
 
 export const lightTheme: Theme = {
@@ -143,4 +169,10 @@ export const lightTheme: Theme = {
   red: "#FF3B30",
   purple: "#AF52DE",
   teal: "#32ADE6",
+  diffAddBg: "#eef7f1",
+  diffDelBg: "#fbf0ef",
+  diffAddBar: "#3f7d55",
+  diffDelBar: "#a5453c",
+  diffAddFg: "#3f7d55",
+  diffDelFg: "#a5453c",
 };

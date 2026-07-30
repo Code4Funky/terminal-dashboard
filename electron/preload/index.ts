@@ -41,9 +41,6 @@ contextBridge.exposeInMainWorld("terminal", {
   write: (id: string, data: string): void =>
     ipcRenderer.send("terminal:write", id, data),
 
-  writeToAll: (data: string): void =>
-    ipcRenderer.send("terminal:write-broadcast", data),
-
   resize: (id: string, cols: number, rows: number): void =>
     ipcRenderer.send("terminal:resize", id, cols, rows),
 
@@ -221,7 +218,7 @@ contextBridge.exposeInMainWorld("terminal", {
   cleanupMerged: (repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
     ipcRenderer.invoke("prs:cleanup-merged", repo),
 
-  listPRs: (pinnedRepoNames: string[]): Promise<{
+  listPRs: (repoNames: string[]): Promise<{
     number: number;
     title: string;
     url: string;
@@ -229,15 +226,29 @@ contextBridge.exposeInMainWorld("terminal", {
     headRefOid: string;
     isDraft: boolean;
     createdAt: string;
+    updatedAt: string;
     reviewDecision: string | null;
     author: { login: string };
     repository: { name: string; nameWithOwner: string };
     additions?: number;
     deletions?: number;
-  }[]> => ipcRenderer.invoke("prs:list", pinnedRepoNames),
+    reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+    statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+    mergeable: string;
+    mergeStateStatus: string;
+  }[]> => ipcRenderer.invoke("prs:list", repoNames),
 
   getGhLogin: (): Promise<string | null> =>
     ipcRenderer.invoke("gh:current-user"),
+
+  getMyTeams: (): Promise<string[]> =>
+    ipcRenderer.invoke("gh:my-teams"),
+
+  searchPRRefs: (view: string): Promise<{ nameWithOwner: string; number: number }[]> =>
+    ipcRenderer.invoke("prs:search-refs", view),
+
+  hydratePRs: (refs: { nameWithOwner: string; number: number }[]): Promise<any[]> =>
+    ipcRenderer.invoke("prs:hydrate", refs),
 
   getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
     ipcRenderer.invoke("prs:get-diff", repoName, prNumber),

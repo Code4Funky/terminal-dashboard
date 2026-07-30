@@ -31,7 +31,6 @@ interface Props {
   focused: boolean;
   onFocus: (id: string) => void;
   fitTrigger?: number;
-  broadcast?: boolean;
 }
 
 function formatCwd(cwd: string): string {
@@ -41,7 +40,7 @@ function formatCwd(cwd: string): string {
 
 export const TerminalPanel = memo(function TerminalPanel({
   id, sessionId, panelNumber, title, cwd, gitBranch,
-  fontFamily, fontSize, onClose, onRename, onSplit, onFlipAxis, splitDir, canClose = true, canSplit = false, focused, onFocus, fitTrigger, broadcast = false,
+  fontFamily, fontSize, onClose, onRename, onSplit, onFlipAxis, splitDir, canClose = true, canSplit = false, focused, onFocus, fitTrigger,
 }: Props) {
   const { theme: t } = useTheme();
   const { settings } = useSettings();
@@ -55,7 +54,6 @@ export const TerminalPanel = memo(function TerminalPanel({
       cursorStyle: settings.cursorStyle,
       cursorBlink: settings.cursorBlink,
       rendererType: settings.rendererType,
-      broadcast,
     });
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(title);

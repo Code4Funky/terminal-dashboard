@@ -12,7 +12,7 @@ const TOOL_ENV = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/b
 import * as pty from "node-pty";
 import os from "os";
 
-app.name = "Flight Deck";
+app.name = "Flight Deck"; 
 
 // ── Resolve ccusage binary + a PATH that includes its node runtime ────────────
 function resolveCcusageEnv(): { bin: string; env: NodeJS.ProcessEnv } {
@@ -1436,11 +1436,6 @@ ipcMain.on("terminal:write", (_, id: string, data: string) => {
   sessions.get(id)?.write(data);
 });
 
-// Broadcast: mirror the focused terminal's keystrokes to every live session.
-ipcMain.on("terminal:write-broadcast", (_, data: string) => {
-  for (const s of sessions.values()) s.write(data);
-});
-
 ipcMain.on("terminal:resize", (_, id: string, cols: number, rows: number) => {
   sessions.get(id)?.resize(cols, rows);
 });
@@ -2127,6 +2122,10 @@ interface PRNode {
   repository: { name: string; nameWithOwner: string };
   additions?: number;
   deletions?: number;
+  reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+  statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+  mergeable: string;
+  mergeStateStatus: string;
 }
 
 ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
@@ -2298,12 +2297,77 @@ ipcMain.handle("gh:current-user", async (): Promise<string | null> => {
   } catch { return null; }
 });
 
-ipcMain.handle("prs:list", async (_, pinnedRepoNames: string[]): Promise<PRNode[]> => {
+// Teams you're actually on, as `org/slug` — needs the token's `read:org` scope.
+async function fetchMyTeams(): Promise<string[]> {
   try {
-    if (!pinnedRepoNames || pinnedRepoNames.length === 0) return [];
+    const { stdout } = await execAsync(
+      `gh api user/teams --paginate --jq '.[] | "\\(.organization.login)/\\(.slug)"'`,
+      { env: TOOL_ENV, timeout: 20000 }
+    );
+    return [...new Set(stdout.trim().split("\n").filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle("gh:my-teams", fetchMyTeams);
+
+// Shared by the repo fan-out and by hydration so cached and hydrated PRs are interchangeable.
+const PR_JSON_FIELDS =
+  "number,title,url,headRefName,headRefOid,isDraft,createdAt,updatedAt,reviewDecision," +
+  "author,additions,deletions,reviewRequests,statusCheckRollup,mergeable,mergeStateStatus";
+
+// Qualifiers must be gh *flags*: `gh search prs -- "a:b c:d"` quotes the whole string as one term.
+const PR_VIEW_FLAGS: Record<string, string> = {
+  authored: "--author=@me",
+  assigned: "--assignee=@me",
+  involves: "--involves=@me",
+  reviewRequested: "--review-requested=@me",
+};
+
+// Identity only — `gh search prs --json` can't return headRef/CI/diff fields, so the caller hydrates.
+// Deliberately not caught: a swallowed 403 secondary-rate-limit reads as "no PRs", which hid it before.
+ipcMain.handle("prs:search-refs", async (_, view: string): Promise<{ nameWithOwner: string; number: number }[]> => {
+  const flag = PR_VIEW_FLAGS[view];
+  if (!flag) throw new Error(`Unknown PR view: ${view}`);
+  try {
+    const { stdout } = await execAsync(
+      `gh search prs ${flag} --state=open --limit 100 --json repository,number`,
+      { env: TOOL_ENV, timeout: 20000 }
+    );
+    const rows = JSON.parse(stdout) as { repository: { nameWithOwner: string }; number: number }[];
+    return rows.map((r) => ({ nameWithOwner: r.repository.nameWithOwner, number: r.number }));
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim();
+    throw new Error(stderr || (err as Error).message || "GitHub search failed");
+  }
+});
+
+// Fills refs the renderer couldn't satisfy from the fan-out cache — works for repos with no local clone.
+ipcMain.handle("prs:hydrate", async (_, refs: { nameWithOwner: string; number: number }[]): Promise<PRNode[]> => {
+  if (!refs?.length) return [];
+  const results = await Promise.all(
+    refs.map(({ nameWithOwner, number }) =>
+      execAsync(
+        `gh pr view ${number} --repo "${nameWithOwner}" --json ${PR_JSON_FIELDS}`,
+        { env: TOOL_ENV, timeout: 20000 }
+      )
+        .then(({ stdout }) => ({
+          ...(JSON.parse(stdout) as Omit<PRNode, "repository">),
+          repository: { name: nameWithOwner.split("/").pop() ?? nameWithOwner, nameWithOwner },
+        }))
+        .catch(() => null)
+    )
+  );
+  return results.filter((pr): pr is PRNode => pr !== null);
+});
+
+ipcMain.handle("prs:list", async (_, repoNames: string[]): Promise<PRNode[]> => {
+  try {
+    if (!repoNames || repoNames.length === 0) return [];
 
     const repoInfos: { name: string; nameWithOwner: string }[] = [];
-    for (const name of pinnedRepoNames) {
+    for (const name of repoNames) {
       const repoPath = join(githubDir, name);
       try {
         if (!fs.existsSync(join(repoPath, ".git"))) continue;
@@ -2316,7 +2380,7 @@ ipcMain.handle("prs:list", async (_, pinnedRepoNames: string[]): Promise<PRNode[
     const results = await Promise.all(
       repoInfos.map(({ name, nameWithOwner }) =>
         execAsync(
-          `gh pr list --repo "${nameWithOwner}" --state open --json number,title,url,headRefName,headRefOid,isDraft,createdAt,updatedAt,reviewDecision,author,additions,deletions`,
+          `gh pr list --repo "${nameWithOwner}" --state open --limit 100 --json ${PR_JSON_FIELDS}`,
           { env: TOOL_ENV, timeout: 20000 }
         ).then(({ stdout }) => {
           const prs = JSON.parse(stdout) as Omit<PRNode, "repository">[];

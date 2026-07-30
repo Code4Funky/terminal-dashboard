@@ -50,6 +50,8 @@ interface Props {
   /** Terminal is docked below this viewer rather than beside it. */
   stacked?: boolean;
   onToggleStacked?: () => void;
+  /** Living inside another pane's tab strip — the width controls have nothing to act on. */
+  embedded?: boolean;
   /** 1-based line of the search hit that opened this file — scrolled to and marked current. */
   line?: number;
   /** The search query behind that hit, so every occurrence is marked. */
@@ -145,7 +147,7 @@ function matchHighlighter(query: string, currentAt: number): Extension {
   );
 }
 
-export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWidth, onWidthChange, maximized = false, onToggleMaximize, fill = false, stacked = false, onToggleStacked, line, match }: Props) {
+export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWidth, onWidthChange, maximized = false, onToggleMaximize, fill = false, stacked = false, onToggleStacked, embedded = false, line, match }: Props) {
   const { theme: t } = useTheme();
 
   // ── Drawer resize ────────────────────────────────────────────────────────────
@@ -462,9 +464,9 @@ export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWid
   return (
     <div
       style={{
-        ...(fill ? { flex: 1, minHeight: 0 } : { width: drawerWidth, flexShrink: 0 }),
-        minWidth: 320,
-        background: t.surface1, borderLeft: `1px solid ${t.border}`,
+        ...(fill || embedded ? { flex: 1, minHeight: 0 } : { width: drawerWidth, flexShrink: 0 }),
+        ...(embedded ? null : { minWidth: 320, borderLeft: `1px solid ${t.border}` }),
+        background: t.surface1,
         display: "flex", flexDirection: "column", position: "relative",
       }}
       onKeyDown={(e) => {
@@ -472,8 +474,8 @@ export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWid
         if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); e.stopPropagation(); void save(); }
       }}
     >
-      {/* Left resize handle — nothing to drag against when filling */}
-      {!fill && (
+      {/* Left resize handle — nothing to drag against when filling or embedded */}
+      {!fill && !embedded && (
         <div
           onMouseDown={onResizeMouseDown}
           style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", zIndex: 10 }}
@@ -504,7 +506,7 @@ export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWid
         {saveError && <span style={{ color: t.red, fontSize: 10, flexShrink: 0, ...SYS_FONT }}>{saveError}</span>}
         {justSaved && !dirty && <span style={{ color: t.green, fontSize: 10, flexShrink: 0, ...SYS_FONT }}>Saved</span>}
 
-        {onToggleStacked && (
+        {onToggleStacked && !embedded && (
           <button
             onMouseEnter={() => setHoveredBtn("stack")}
             onMouseLeave={() => setHoveredBtn(null)}
@@ -520,7 +522,7 @@ export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWid
         )}
 
         {/* Maximise is a width control, so it means nothing once the viewer already fills the row */}
-        {onToggleMaximize && !stacked && (
+        {onToggleMaximize && !stacked && !embedded && (
           <button
             onMouseEnter={() => setHoveredBtn("max")}
             onMouseLeave={() => setHoveredBtn(null)}
@@ -625,12 +627,15 @@ export function FileViewer({ repo, path, treeRepo, onClose, width: controlledWid
           }
         </button>
 
+        {/* Embedded: the tab carries the close, and this one would sit right under the drawer's own × */}
+        {!embedded && (
         <button
           onClick={() => { flush(); onClose(); }}
           style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 14, lineHeight: 1, padding: "0 2px" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
           onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
         >×</button>
+        )}
       </div>
 
       {/* Find bar */}

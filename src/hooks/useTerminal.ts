@@ -5,6 +5,30 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import type { TaskSummary } from "../types/tasks";
+// Lives with the hook, not a component: without it xterm's panes lose absolute positioning and
+// paint outside their host.
+import "@xterm/xterm/css/xterm.css";
+
+// One shape for both the repo fan-out and search hydration, so their results are interchangeable.
+export type GhPRNode = {
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  headRefOid: string;
+  isDraft: boolean;
+  createdAt: string;
+  updatedAt: string;
+  reviewDecision: string | null;
+  author: { login: string };
+  repository: { name: string; nameWithOwner: string };
+  additions?: number;
+  deletions?: number;
+  reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+  statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+  mergeable: string;
+  mergeStateStatus: string;
+};
 
 declare global {
   interface Window {
@@ -23,7 +47,6 @@ declare global {
       listHistory: () => Promise<{ number: number; size: number; lastModified: number; title?: string }[]>;
       savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]) => void;
       write: (id: string, data: string) => void;
-      writeToAll: (data: string) => void;
       resize: (id: string, cols: number, rows: number) => void;
       close: (id: string) => void;
       deleteHistory: (num: number) => void;
@@ -90,21 +113,13 @@ declare global {
       listLocalBranches: () => Promise<{ repo: string; branch: string; repoUrl: string }[]>;
       deleteBranches: (repo: string, branches: string[]) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
       cleanupMerged: (repo: string) => Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }>;
-      listPRs: () => Promise<{
-        number: number;
-        title: string;
-        url: string;
-        headRefName: string;
-        headRefOid: string;
-        isDraft: boolean;
-        createdAt: string;
-        reviewDecision: string | null;
-        repository: { name: string; nameWithOwner: string };
-        additions?: number;
-        deletions?: number;
-      }[]>;
+      listPRs: (repoNames: string[]) => Promise<GhPRNode[]>;
+      // Identity only — search can't return headRef/CI/diff fields; pass the refs to hydratePRs.
+      searchPRRefs: (view: string) => Promise<{ nameWithOwner: string; number: number }[]>;
+      hydratePRs: (refs: { nameWithOwner: string; number: number }[]) => Promise<GhPRNode[]>;
       getPRDiff: (repoName: string, prNumber: number) => Promise<string>;
       getGhLogin: () => Promise<string | null>;
+      getMyTeams: () => Promise<string[]>;
       openExternal: (url: string) => Promise<void>;
       // repoOrPath: a bare repo name (under ~/Documents/GitHub) or an absolute / ~-prefixed root
       openFolder: (repoOrPath: string) => Promise<void>;
@@ -230,7 +245,8 @@ export interface TermOptions {
   cursorStyle?: "bar" | "block" | "underline";
   cursorBlink?: boolean;
   rendererType?: "webgl" | "dom";
-  broadcast?: boolean;
+  /** Off for a mirror of a session owned elsewhere — two views would otherwise fight over the PTY size. */
+  ownsPtySize?: boolean;
 }
 
 export function useTerminal(
@@ -242,13 +258,13 @@ export function useTerminal(
   isDark = true,
   opts: TermOptions = {}
 ) {
-  const { scrollback = 10000, cursorStyle = "bar", cursorBlink = true, rendererType = "webgl", broadcast = false } = opts;
+  const { scrollback = 10000, cursorStyle = "bar", cursorBlink = true, rendererType = "webgl", ownsPtySize = true } = opts;
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  // Read latest broadcast flag inside onData without re-subscribing (PTY effect deps stay [sessionId, panelNumber]).
-  const broadcastRef = useRef(broadcast);
-  broadcastRef.current = broadcast;
+  // Ownership can flip after mount (a mirror becomes the only visible view), so the resize closures read a ref.
+  const ownsSizeRef = useRef(ownsPtySize);
+  ownsSizeRef.current = ownsPtySize;
 
   useEffect(() => {
     if (termRef.current) {
@@ -267,7 +283,7 @@ export function useTerminal(
     term.options.cursorBlink = cursorBlink;
     term.options.scrollback = scrollback;
     fitAddonRef.current?.fit();
-    if (sessionId) window.terminal.resize(sessionId, term.cols, term.rows);
+    if (sessionId && ownsSizeRef.current) window.terminal.resize(sessionId, term.cols, term.rows);
   }, [fontFamily, fontSize, cursorStyle, cursorBlink, scrollback]);
 
   useEffect(() => {
@@ -333,8 +349,7 @@ export function useTerminal(
     // escape sequences would otherwise be sent to the new shell's stdin.
     term.onData((data) => {
       if (!historyDone) return;
-      if (broadcastRef.current) window.terminal.writeToAll(data);
-      else window.terminal.write(sessionId, data);
+      window.terminal.write(sessionId, data);
     });
 
     const cleanupRef = { current: () => {} };
@@ -378,7 +393,7 @@ export function useTerminal(
         const el = containerRef.current;
         if (!el?.clientWidth || !el.clientHeight) return; // collapsed box — see applyFit
         fitAddon.fit();
-        if (term.cols !== lastCols || term.rows !== lastRows) {
+        if (ownsSizeRef.current && (term.cols !== lastCols || term.rows !== lastRows)) {
           lastCols = term.cols; lastRows = term.rows;
           window.terminal.resize(sessionId, term.cols, term.rows);
         }
@@ -403,7 +418,7 @@ export function useTerminal(
     const el = containerRef.current;
     if (!el?.clientWidth || !el.clientHeight) return;
     fitAddonRef.current?.fit();
-    if (termRef.current && sessionId) {
+    if (termRef.current && sessionId && ownsSizeRef.current) {
       window.terminal.resize(sessionId, termRef.current.cols, termRef.current.rows);
     }
   };

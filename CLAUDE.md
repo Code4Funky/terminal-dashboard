@@ -19,6 +19,26 @@ npx tsc --noEmit -p tsconfig.web.json   # renderer — 28 pre-existing errors, t
 npx tsc --noEmit -p tsconfig.node.json  # main + preload — clean
 ```
 
+## Verifying UI changes
+
+Type-checking proves a layout change compiles, not that it renders. Drive the app with Playwright's
+`_electron` and read the screenshot. Two things that cost a debugging cycle each:
+
+- **`electron .` boots the built `out/` bundle, not the dev server** — source edits are invisible until
+  you rebuild, and the driver then screenshots the *old* UI, which reads as "my fix didn't work".
+  Always chain: `npm run build >/dev/null 2>&1 && node drive.mjs`. (Under `npm run dev` the renderer
+  does hot-reload; that rule does not apply here.)
+- **`electron.launch()` needs an explicit `executablePath`** when Playwright is installed outside the
+  project: `<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`.
+
+Selectors are fragile because the UI is inline-styled with no test ids: caps come from
+`textTransform` (so match `Repositories`, not `REPOSITORIES`), placeholders use `…` (U+2026), and a
+repo name can match three nodes across unrelated panes. Print every candidate's `boundingBox()` once
+and select on geometry rather than guessing `.first()` / `.last()`.
+
+Fuller write-up: `knowledge-base/wiki/electron-app-automation.md`. Worth capturing properly as a
+project skill via `/run-skill-generator`.
+
 ## Design system
 
 The UI follows the Skedulo Breeze dark ramp. Shared primitives live in `src/chrome.ts` and the token

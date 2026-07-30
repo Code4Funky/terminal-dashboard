@@ -1,153 +1,33 @@
 import { useState, useEffect, useRef } from "react";
 import { useTheme } from "../ThemeContext";
-import { MONO_FONT, SYS_FONT } from "../theme";
-import { RADIUS } from "../chrome";
+import { MONO_FONT, SYS_FONT, TABULAR } from "../theme";
+import { RADIUS, RADIUS_SM, CLIP, panel, panelHeader, panelTitle, rowState, sectionLabel } from "../chrome";
+import {
+  DiffFile, WTFile, CommitEntry, parseDiff, DiffChunks, StatBlocks, DiffFileRow,
+  RepoGlyph, CopyGlyph, CheckGlyph, OpenGlyph, RefreshGlyph, paneTabStyle, SessionMirror,
+} from "./DiffKit";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface DiffLine { type: "add" | "del" | "ctx"; content: string; }
-interface DiffChunk { header: string; lines: DiffLine[]; }
-interface DiffFile { path: string; additions: number; deletions: number; chunks: DiffChunk[]; status: "A" | "D" | "M"; }
-
-interface WTFile {
-  path: string; filename: string; dir: string;
-  status: string; additions: number; deletions: number;
-}
-
-interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; isLocal: boolean; }
-
-// ── ANSI escape code stripper ─────────────────────────────────────────────────
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
-const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
-
-// ── Hunk header parser ────────────────────────────────────────────────────────
-
-function parseHunkHeader(header: string): { oldStart: number; newStart: number } {
-  const m = header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-  return m ? { oldStart: parseInt(m[1]), newStart: parseInt(m[2]) } : { oldStart: 1, newStart: 1 };
-}
-
-// ── Diff parser ───────────────────────────────────────────────────────────────
-
-function parseDiff(raw: string): DiffFile[] {
-  const files: DiffFile[] = [];
-  const sections = raw.split(/^diff --git /m).filter(Boolean);
-  for (const section of sections) {
-    const lines = section.split("\n");
-    const pathMatch = lines[0].match(/b\/(.+)$/);
-    if (!pathMatch) continue;
-    const path = pathMatch[1].trim();
-    const chunks: DiffChunk[] = [];
-    let currentChunk: DiffChunk | null = null;
-    let additions = 0, deletions = 0;
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.startsWith("@@")) {
-        if (currentChunk) chunks.push(currentChunk);
-        currentChunk = { header: line, lines: [] };
-      } else if (currentChunk) {
-        if (line.startsWith("+") && !line.startsWith("+++")) { currentChunk.lines.push({ type: "add", content: stripAnsi(line.slice(1)) }); additions++; }
-        else if (line.startsWith("-") && !line.startsWith("---")) { currentChunk.lines.push({ type: "del", content: stripAnsi(line.slice(1)) }); deletions++; }
-        else if (line.startsWith(" ")) currentChunk.lines.push({ type: "ctx", content: stripAnsi(line.slice(1)) });
-      }
-    }
-    if (currentChunk) chunks.push(currentChunk);
-    if (chunks.length > 0) {
-      const status: "A" | "D" | "M" = additions === 0 ? "D" : deletions === 0 ? "A" : "M";
-      files.push({ path, additions, deletions, chunks, status });
-    }
-  }
-  return files;
-}
-
-// ── Shared diff renderer ──────────────────────────────────────────────────────
-
-function DiffChunks({ files, t }: { files: DiffFile[]; t: ReturnType<typeof useTheme>["theme"] }) {
-  return (
-    <>
-      {files.map((file, fi) => (
-        <div key={fi}>
-          {file.chunks.map((chunk, ci) => {
-            const { oldStart, newStart } = parseHunkHeader(chunk.header);
-            let oldLine = oldStart, newLine = newStart;
-            return (
-              <div key={ci}>
-                <div style={{
-                  padding: "2px 8px",
-                  background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
-                  color: t.blue, fontSize: 12, ...MONO_FONT,
-                  borderTop: `1px solid ${t.border}`,
-                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                }}>{chunk.header}</div>
-                {chunk.lines.map((line, li) => {
-                  const oln = line.type !== "add" ? oldLine : null;
-                  const nln = line.type !== "del" ? newLine : null;
-                  if (line.type !== "add") oldLine++;
-                  if (line.type !== "del") newLine++;
-                  return (
-                    <div key={li} style={{
-                      display: "flex",
-                      background: line.type === "add" ? (t.isDark ? "#0d2818" : "#eaffee") : line.type === "del" ? (t.isDark ? `${t.red}28` : "#fff0f0") : "transparent",
-                      borderLeft: `2px solid ${line.type === "add" ? t.green : line.type === "del" ? t.red : "transparent"}`,
-                    }}>
-                      {/* Old line number */}
-                      <span style={{
-                        width: 38, flexShrink: 0, textAlign: "right" as const,
-                        color: t.label4, fontSize: 12, ...MONO_FONT,
-                        padding: "0 4px 0 0", userSelect: "none",
-                        borderRight: `1px solid ${t.borderSubtle}`,
-                      }}>{oln ?? ""}</span>
-                      {/* New line number */}
-                      <span style={{
-                        width: 38, flexShrink: 0, textAlign: "right" as const,
-                        color: t.label4, fontSize: 12, ...MONO_FONT,
-                        padding: "0 6px 0 0", userSelect: "none",
-                        borderRight: `1px solid ${t.borderSubtle}`, marginRight: 4,
-                      }}>{nln ?? ""}</span>
-                      {/* +/- gutter */}
-                      <span style={{ color: line.type === "add" ? t.green : line.type === "del" ? t.red : t.label4, fontSize: 13, ...MONO_FONT, padding: "0 4px", flexShrink: 0, userSelect: "none" }}>
-                        {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-                      </span>
-                      <span style={{
-                        color: line.type === "add" ? (t.isDark ? "#aff3c8" : "#24692e") : line.type === "del" ? (t.isDark ? "#ffa198" : "#82071e") : t.label3,
-                        fontSize: 13, ...MONO_FONT,
-                        whiteSpace: "pre", paddingRight: 16, flexShrink: 0,
-                      }}>{line.content || " "}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-    </>
-  );
-}
-
-// ── Change bar ────────────────────────────────────────────────────────────────
-
-function ChangeBar({ additions, deletions, t }: { additions: number; deletions: number; t: ReturnType<typeof useTheme>["theme"] }) {
-  const total = additions + deletions;
-  if (total === 0) return <div style={{ width: 52, flexShrink: 0 }} />;
-  return (
-    <div style={{
-      display: "flex", width: 52, height: 5, borderRadius: 3,
-      overflow: "hidden", flexShrink: 0, gap: 1,
-      background: t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-    }}>
-      {additions > 0 && <div style={{ flex: additions, background: t.green, borderRadius: "3px 0 0 3px" }} />}
-      {deletions > 0 && <div style={{ flex: deletions, background: t.red, borderRadius: additions > 0 ? "0 3px 3px 0" : "3px" }} />}
-    </div>
-  );
-}
+/** Fixed width of the CHANGES rail; the diff pane takes whatever is left. */
+const RAIL_W = 240;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   repoName: string;
+  /** The focused shell group, mirrored into a single pane tab — a split shows as N panes on one tab,
+   *  never a second tab. Follows the focused session, so it may sit outside this repo. */
+  sessionGroup?: {
+    title: string;
+    dir: "row" | "column";
+    /** The mirrored session's own branch, not the drawer repo's. */
+    branch?: string;
+    panes: { sessionId: string; number: number }[];
+  };
+  /** The open file, folded in as a tab instead of a second wide column beside this one. */
+  viewerTab?: { path: string; body: React.ReactNode; onClose: () => void };
+  /** `flightDeck`: this pane owns the row, so Dashboard hands it the viewer instead of docking one.
+   *  `hostsSession`: the shell lives in a tab here, so the dock's panel would be a duplicate. */
+  onLayout?: (s: { flightDeck: boolean; hostsSession: boolean }) => void;
   onClose: () => void;
   prNumber?: number;
   prTitle?: string;
@@ -163,12 +43,24 @@ interface Props {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, onClose, width: controlledWidth, onWidthChange, maximized = false, onToggleMaximize, fill = false }: Props) {
+export function DiffDrawer({ prNumber, repoName, sessionGroup, viewerTab, onLayout, prTitle, prUrl, headRefName, onClose, width: controlledWidth, onWidthChange, maximized = false, onToggleMaximize, fill = false }: Props) {
   const { theme: t } = useTheme();
 
+  // ── Tab ──────────────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<"branch-diff" | "working-tree" | "commits">(
+    prNumber ? "branch-diff" : "working-tree"
+  );
+
+  // Declared up here, ahead of the rest of the commits state, because the width floor below needs it.
+  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
+
   // ── Resize ───────────────────────────────────────────────────────────────────
+  // Every rail-bearing view hands RAIL_W away, so the floor has to leave the diff pane something to
+  // work with — a persisted narrow width would otherwise crush it. Only the bare commit list is exempt.
+  const railless = activeTab === "commits" && !selectedCommitHash;
+  const minWidth = railless ? 280 : RAIL_W + 400;
   const [internalWidth, setInternalWidth] = useState(controlledWidth ?? 720);
-  const drawerWidth = controlledWidth ?? internalWidth;
+  const drawerWidth = Math.max(minWidth, controlledWidth ?? internalWidth);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -179,7 +71,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       const delta = dragState.current.startX - ev.clientX;
       // Ceiling tracks the window so dragging a maximised drawer doesn't snap it narrow
       const max = Math.max(900, window.innerWidth - 360);
-      const w = Math.max(280, Math.min(max, dragState.current.startWidth + delta));
+      const w = Math.max(minWidth, Math.min(max, dragState.current.startWidth + delta));
       if (controlledWidth !== undefined) { onWidthChange?.(w); } else { setInternalWidth(w); }
     };
     const onUp = () => {
@@ -191,10 +83,37 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     window.addEventListener("mouseup", onUp);
   };
 
-  // ── Tab ──────────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<"branch-diff" | "working-tree" | "commits">(
-    prNumber ? "branch-diff" : "working-tree"
-  );
+  // ── Diff-pane tabs (session · file) ──────────────────────────────────────────
+  // The session tab mirrors the focused session's panels; it never spawns a shell, so with no panel
+  // open at all there is nothing to show and the tab is hidden.
+  const panes = sessionGroup?.panes ?? [];
+  const paneLayoutKey = `${panes.length}:${sessionGroup?.dir}:${drawerWidth}`;
+  // Opening git shouldn't move the shell out from under you — it lands on the session tab and adds
+  // file tabs beside it. `homeTab` is where every fallback returns to.
+  const homeTab = panes.length ? "terminal" : "file";
+  const [paneTab, setPaneTab] = useState<"viewer" | "file" | "terminal">(homeTab);
+  const [termOpened, setTermOpened] = useState(false);
+
+  // Attach on first open, not on mount — a drawer opened with no session never touches the mirror
+  useEffect(() => {
+    if (paneTab === "terminal") setTermOpened(true);
+  }, [paneTab]);
+
+  // Fall back to the file tab when the mirrored panels close
+  useEffect(() => {
+    if (!panes.length && paneTab === "terminal") setPaneTab("file");
+  }, [panes.length]);
+
+  // Opening a file is a request to read it; closing it drops back to the shell
+  useEffect(() => {
+    setPaneTab(viewerTab ? "viewer" : homeTab);
+  }, [viewerTab?.path]);
+
+  // A repo switch invalidates the file tabs but not the session tab — that follows the focused
+  // session, so staying on it is right. Keeping `termOpened` avoids detaching a live mirror.
+  useEffect(() => {
+    setPaneTab((cur) => (cur === "terminal" ? cur : homeTab));
+  }, [repoName]);
 
   // ── Branch diff state ─────────────────────────────────────────────────────
   const [files, setFiles] = useState<DiffFile[]>([]);
@@ -239,7 +158,6 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   // ── Commits tab state ─────────────────────────────────────────────────────
   const [commits, setCommits] = useState<CommitEntry[]>([]);
   const [commitsLoading, setCommitsLoading] = useState(false);
-  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
   const [commitDiff, setCommitDiff] = useState<DiffFile[]>([]);
   const [commitDiffLoading, setCommitDiffLoading] = useState(false);
   const [hoveredCommitHash, setHoveredCommitHash] = useState<string | null>(null);
@@ -247,6 +165,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const copiedHashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitsLoadedFor = useRef<string | null>(null);
   const [selectedCommitFileIdx, setSelectedCommitFileIdx] = useState<number | null>(null);
+  // Re-selecting the same hash is a React no-op, so the rail's refresh needs its own trigger.
+  const [commitDiffTick, setCommitDiffTick] = useState(0);
 
   useEffect(() => () => { if (copiedHashTimer.current) clearTimeout(copiedHashTimer.current); }, []);
 
@@ -310,9 +230,11 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
       setCommitDiff(parseDiff(raw));
       setCommitDiffLoading(false);
     }).catch(() => setCommitDiffLoading(false));
-  }, [selectedCommitHash]);
+  }, [selectedCommitHash, commitDiffTick]);
 
   const totalWtChanges = wtStaged.length + wtUnstaged.length;
+  const wtAdditions = [...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.additions, 0);
+  const wtDeletions = [...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.deletions, 0);
 
   const handleStageFile = async (path: string) => {
     await window.terminal.stageFile(repoName, path).catch(() => {});
@@ -327,10 +249,13 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   const handleStageAll = async () => {
     await window.terminal.stageAll(repoName).catch(() => {});
     loadWorkingTree();
+    // The open diff would otherwise point at an unstaged copy that no longer exists
+    if (selectedFile && !selectedFile.staged) setSelectedFile({ path: selectedFile.path, staged: true });
   };
   const handleUnstageAll = async () => {
     await window.terminal.unstageAll(repoName).catch(() => {});
     loadWorkingTree();
+    if (selectedFile?.staged) setSelectedFile({ path: selectedFile.path, staged: false });
   };
   const [discardConfirm, setDiscardConfirm] = useState(false);
 
@@ -355,9 +280,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   };
 
   const statusColor = (s: string) =>
-    s === "M" ? t.blue : s === "A" || s === "?" ? t.teal : s === "D" ? t.red : t.label3;
-
-  const hoverBg = t.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)";
+    s === "M" ? t.blue : s === "A" || s === "?" ? t.teal : s === "D" ? t.diffDelFg : t.label3;
 
   const [copiedFilePath, setCopiedFilePath] = useState<string | null>(null);
 
@@ -366,28 +289,27 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
     const isSelected = selectedFile?.path === file.path && selectedFile?.staged === isStaged;
     const isHov = wtHovered === rowKey;
     const col = statusColor(file.status);
-    const selColor = isStaged ? t.green : t.orange;
-    const totalChanges = file.additions + file.deletions;
+    const parts = file.dir.split("/").filter(Boolean);
+    const shortDir = parts.length === 0 ? "" : parts.length <= 2 ? `/${parts.join("/")}/` : `/${parts.slice(-2).join("/")}/…`;
     return (
       <div
         key={rowKey}
-        onClick={() => setSelectedFile({ path: file.path, staged: isStaged })}
+        // Picking a changed file means "show me its diff" — never the editor or the shell
+        onClick={() => { setSelectedFile({ path: file.path, staged: isStaged }); setPaneTab("file"); }}
         onMouseEnter={() => setWtHovered(rowKey)}
         onMouseLeave={() => setWtHovered(null)}
         style={{
           display: "flex", alignItems: "flex-start", gap: 8,
-          padding: "5px 12px 5px 10px", cursor: "pointer",
-          background: isSelected ? `${selColor}10` : isHov ? hoverBg : "transparent",
-          borderLeft: `3px solid ${isSelected ? selColor : "transparent"}`,
-          transition: "background 0.1s",
+          padding: "6px 10px 7px 12px", cursor: "pointer",
+          ...rowState(t, isSelected, isHov),
         }}
       >
         {/* Status badge */}
         <span style={{
-          fontSize: 9, fontWeight: 600, color: col, background: `${col}18`,
-          border: `1px solid ${col}30`, borderRadius: RADIUS, padding: "1px 5px",
-          flexShrink: 0, lineHeight: 1.5, minWidth: 14, textAlign: "center" as const,
-          marginTop: 1,
+          width: 15, height: 15, flexShrink: 0, marginTop: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 9, fontWeight: 600, color: col, background: `${col}22`,
+          borderRadius: RADIUS_SM, lineHeight: 1, ...SYS_FONT,
         }}>{file.status === "?" ? "A" : file.status}</span>
 
         {/* Content column: filename row + dir + stats */}
@@ -395,9 +317,9 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           {/* Row 1: filename + hover actions */}
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <div style={{
-              flex: 1, minWidth: 0,
-              color: file.status === "D" ? t.red : t.label1, fontSize: 11, fontWeight: 500,
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              flex: 1, ...CLIP,
+              color: file.status === "D" ? t.diffDelFg : t.label1,
+              fontSize: 12, fontWeight: isSelected ? 600 : 400,
               textDecoration: file.status === "D" ? "line-through" : "none",
               ...SYS_FONT,
             }}>{file.filename}</div>
@@ -414,55 +336,36 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   style={{
                     background: t.surface2, border: `1px solid ${t.borderMid}`,
                     borderRadius: RADIUS, color: copiedFilePath === file.path ? t.green : t.label2,
-                    cursor: "pointer", fontSize: 9, padding: "2px 6px", transition: "all 0.12s",
+                    cursor: "pointer", padding: "1px 4px 0", lineHeight: 0,
                   }}
-                >{copiedFilePath === file.path ? "✓" : "⎘"}</button>
+                >{copiedFilePath === file.path ? <CheckGlyph /> : <CopyGlyph />}</button>
                 <button
                   onClick={(e) => { e.stopPropagation(); isStaged ? handleUnstageFile(file.path) : handleStageFile(file.path); }}
                   style={{
-                    background: t.surface2,
-                    border: `1px solid ${isStaged ? t.border : t.green + "50"}`,
-                    borderRadius: RADIUS, color: isStaged ? t.label2 : t.green,
-                    cursor: "pointer", fontSize: 9, fontWeight: 600, padding: "2px 8px",
+                    background: t.surface2, border: `1px solid ${t.borderMid}`,
+                    borderRadius: RADIUS, color: t.label2,
+                    cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "1px 7px", ...SYS_FONT,
                   }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = isStaged ? t.orange : t.green; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = t.label2; }}
                 >{isStaged ? "Unstage" : "Stage"}</button>
               </div>
             )}
           </div>
 
-          {/* Row 2: dir path */}
-          {file.dir && (() => {
-            const parts = file.dir.split("/").filter(Boolean);
-            const short = parts.length <= 2 ? file.dir : "…/" + parts.slice(-2).join("/");
-            return (
-              <div style={{
-                color: t.label4, fontSize: 9, ...MONO_FONT,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                marginTop: 1,
-              }}>{short}/</div>
-            );
-          })()}
+          {/* Row 2: dir path — last two segments keep the file in context */}
+          {shortDir && (
+            <div style={{ color: t.label4, fontSize: 10, marginTop: 1, ...MONO_FONT, ...CLIP }}>{shortDir}</div>
+          )}
 
-          {/* Row 3: stats + change bar */}
-          {totalChanges > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3 }}>
-              <span style={{
-                fontSize: 9, ...MONO_FONT,
-                background: t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
-                border: `1px solid ${t.borderMid}`, borderRadius: RADIUS,
-                padding: "0 5px", display: "flex", gap: 3, lineHeight: 1.6,
-              }}>
-                {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
-                {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
-                {file.deletions > 0 && <span style={{ color: t.red }}>-{file.deletions}</span>}
+          {/* Row 3: stats */}
+          {(file.additions > 0 || file.deletions > 0) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+              <span style={{ display: "flex", gap: 4, fontSize: 10, ...MONO_FONT, ...TABULAR }}>
+                {file.additions > 0 && <span style={{ color: t.diffAddFg }}>+{file.additions}</span>}
+                {file.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{file.deletions}</span>}
               </span>
-              <div style={{
-                display: "flex", width: 36, height: 3, borderRadius: 2, overflow: "hidden",
-                background: t.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-              }}>
-                {file.additions > 0 && <div style={{ width: `${(file.additions / totalChanges) * 100}%`, background: t.green }} />}
-                {file.deletions > 0 && <div style={{ flex: 1, background: t.red }} />}
-              </div>
+              <StatBlocks additions={file.additions} deletions={file.deletions} t={t} />
             </div>
           )}
         </div>
@@ -471,33 +374,244 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
   };
 
   const renderSectionHeader = (label: string, count: number, actionLabel: string, onAction: () => void, disabled?: boolean) => (
-    <div style={{
-      display: "flex", alignItems: "center", padding: "5px 12px",
-      background: t.isDark ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.025)",
-      borderTop: label === "UNSTAGED" ? `1px solid ${t.border}` : "none",
-    }}>
-      <span style={{ color: t.label4, fontSize: 9, letterSpacing: "0.06em", fontWeight: 600, flex: 1 }}>{label}</span>
-      <span style={{ color: t.label4, fontSize: 9, marginRight: 8 }}>{count} file{count !== 1 ? "s" : ""}</span>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "14px 12px 5px" }}>
+      <span style={{ ...sectionLabel(t), padding: 0, flex: 1 }}>{label}</span>
+      <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT, ...TABULAR }}>{count}</span>
       {!disabled && (
         <button
           onClick={onAction}
           style={{
-            background: t.surface2, border: `1px solid ${t.border}`,
-            borderRadius: RADIUS, color: t.label2,
-            cursor: "pointer",
-            fontSize: 9, fontWeight: 600, padding: "2px 8px",
+            background: "none", border: "none", padding: 0,
+            color: t.blue, cursor: "pointer", fontSize: 11, ...SYS_FONT,
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = t.label1; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = t.label2; }}
+          onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
         >{actionLabel}</button>
       )}
     </div>
   );
 
+  // ── Shared diff-file chrome (branch diff + commits) ───────────────────────
+  // Both tabs list `DiffFile`s beside a diff body, so the rail and the pane are written once here
+  // rather than copied per tab — which is how the two drifted off the design system before. The row
+  // itself lives in DiffKit as `DiffFileRow`, shared with the centre pane's PR rail.
+
+  const railIconBtn: React.CSSProperties = {
+    background: "none", border: "none", cursor: "pointer", color: t.label3, padding: "0 2px", lineHeight: 0,
+  };
+
+  /** Same geometry as the working tree's CHANGES rail, so switching drawer tabs never moves it. */
+  const renderFileRail = (opts: {
+    files: DiffFile[];
+    loading: boolean;
+    selectedIdx: number | null;
+    onSelect: (i: number) => void;
+    onRefresh: () => void;
+    /** Namespaces hover/selection keys so the two tabs can't collide. */
+    keyPrefix: string;
+    chip?: string;
+    trailing?: React.ReactNode;
+    emptyHint?: React.ReactNode;
+  }) => {
+    const { files, loading, selectedIdx, onSelect, onRefresh, keyPrefix, chip, trailing, emptyHint } = opts;
+    const adds = files.reduce((s, f) => s + f.additions, 0);
+    const dels = files.reduce((s, f) => s + f.deletions, 0);
+    return (
+      <div style={{ ...panel(t, "left"), width: RAIL_W, flexShrink: 0, overflow: "hidden" }}>
+        <div style={panelHeader(t)}>
+          <span style={{ ...panelTitle(t), flex: 1 }}>Files</span>
+          {chip && (
+            <span title={chip} style={{
+              maxWidth: 90, fontSize: 10, color: t.label2, background: t.surface2,
+              borderRadius: RADIUS_SM, padding: "1px 6px", lineHeight: 1.6,
+              ...MONO_FONT, ...CLIP,
+            }}>{chip}</span>
+          )}
+          <button
+            onClick={onRefresh}
+            title="Refresh"
+            style={railIconBtn}
+            onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+          ><RefreshGlyph /></button>
+          {prUrl && (
+            <button
+              onClick={() => window.terminal.openExternal(prUrl)}
+              title={`Open in GitHub: ${prUrl}`}
+              style={railIconBtn}
+              onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+            ><OpenGlyph /></button>
+          )}
+        </div>
+
+        {/* Summary */}
+        <div style={{
+          flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
+          padding: "0 12px", height: 30, borderBottom: `1px solid ${t.borderSubtle}`,
+        }}>
+          <span style={{ color: t.label2, fontSize: 12, ...SYS_FONT }}>
+            {files.length} file{files.length === 1 ? "" : "s"}
+          </span>
+          <span style={{ display: "flex", gap: 5, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+            {adds > 0 && <span style={{ color: t.diffAddFg }}>+{adds}</span>}
+            {dels > 0 && <span style={{ color: t.diffDelFg }}>−{dels}</span>}
+          </span>
+          <div style={{ flex: 1 }} />
+          {trailing}
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {loading && <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>Loading diff…</div>}
+          {!loading && files.length === 0 && (
+            <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>
+              No diff available.{emptyHint}
+            </div>
+          )}
+          {!loading && files.map((f, i) => (
+            <DiffFileRow key={`${keyPrefix}:${i}`} file={f} selected={i === selectedIdx} onSelect={() => onSelect(i)} t={t} />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  /** One pane tab, not a strip — the drawer's own tab bar already owns tab switching here. */
+  const renderDiffPane = (file: DiffFile | null, emptyLabel: string) => {
+    if (!file) {
+      return (
+        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ color: t.label4, fontSize: 12, ...SYS_FONT }}>{emptyLabel}</span>
+        </div>
+      );
+    }
+    const filename = file.path.split("/").pop() ?? file.path;
+    const crumbs = [repoName, ...file.path.split("/").slice(0, -1)];
+    const stats = (
+      <span style={{ display: "flex", gap: 5, flexShrink: 0, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+        {file.additions > 0 && <span style={{ color: t.diffAddFg }}>+{file.additions}</span>}
+        {file.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{file.deletions}</span>}
+      </span>
+    );
+    return (
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <div style={{ ...panelHeader(t), padding: 0, gap: 0 }}>
+          <div style={{ ...paneTabStyle(t, true), cursor: "default" }}>
+            <span style={{ ...MONO_FONT, ...CLIP, maxWidth: 260 }}>{filename}</span>
+            {stats}
+          </div>
+          <div style={{ flex: 1, borderBottom: "2px solid transparent" }} />
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(file.path);
+              setCopiedFilePath(file.path);
+              setTimeout(() => setCopiedFilePath(null), 1400);
+            }}
+            title="Copy path"
+            style={{
+              background: "none", border: "none", cursor: "pointer", padding: "0 5px", lineHeight: 0,
+              color: copiedFilePath === file.path ? t.green : t.label3,
+            }}
+            onMouseEnter={(e) => { if (copiedFilePath !== file.path) e.currentTarget.style.color = t.label1; }}
+            onMouseLeave={(e) => { if (copiedFilePath !== file.path) e.currentTarget.style.color = t.label3; }}
+          >{copiedFilePath === file.path ? <CheckGlyph /> : <CopyGlyph />}</button>
+          {/* Opens the local working copy, which on a PR branch may not be this revision */}
+          <button
+            onClick={() => window.terminal.openRepoFile(repoName, file.path)}
+            title="Open in editor"
+            style={{ background: "none", border: "none", cursor: "pointer", color: t.label3, padding: "0 5px", marginRight: 8, lineHeight: 0 }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+          ><OpenGlyph /></button>
+        </div>
+
+        {/* Breadcrumb path */}
+        <div
+          title={`${repoName}/${file.path}`}
+          style={{
+            height: 28, flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
+            padding: "0 12px 0 14px", borderBottom: `1px solid ${t.borderSubtle}`,
+            background: t.surface0,
+          }}
+        >
+          <RepoGlyph color={t.label4} />
+          <div style={{ flex: 1, fontSize: 11, color: t.label3, ...MONO_FONT, ...CLIP }}>
+            {crumbs.map((seg, i) => (
+              <span key={i}>
+                {i > 0 && <span style={{ color: t.label4, padding: "0 4px" }}>/</span>}
+                {seg}
+              </span>
+            ))}
+          </div>
+          {stats}
+        </div>
+
+        {/* Diff body */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+          <div style={{ minWidth: "max-content" }}>
+            <DiffChunks files={[file]} t={t} />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Maximise / refresh / close — in the drawer header normally, folded into the pane tab strip
+  // when the working-tree layout drops that header.
+  const drawerControls = (
+    <>
+      {onToggleMaximize && (
+        <button
+          title={maximized ? "Restore width" : "Maximise"}
+          onClick={onToggleMaximize}
+          style={{ background: "none", border: "none", cursor: "pointer", color: maximized ? t.blue : t.label4, padding: "0 5px", lineHeight: 0 }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label1)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label4)}
+        >
+          <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {maximized
+              ? <><polyline points="4 4 10 10 4 16" /><polyline points="11 4 17 10 11 16" /></>
+              : <><polyline points="16 4 10 10 16 16" /><polyline points="9 4 3 10 9 16" /></>}
+          </svg>
+        </button>
+      )}
+      <button
+        title="Refresh"
+        onClick={() => {
+          if (activeTab === "branch-diff") setBranchDiffTick(n => n + 1);
+          else if (activeTab === "working-tree") loadWorkingTree();
+          else if (activeTab === "commits" && effectiveBranch) loadCommits(effectiveBranch);
+        }}
+        style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 12, padding: "0 6px 0 2px", lineHeight: 1 }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+        onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+      >↻</button>
+      <button
+        onClick={onClose}
+        style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 14, padding: "0 2px", lineHeight: 1 }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+        onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+      >×</button>
+    </>
+  );
+
+  /** The mock's layout: the tab strip is the pane header, so the drawer's own header goes away.
+   *  Only for a plain repo working tree — a PR still needs its Branch diff switch. */
+  const flightDeckLayout = activeTab === "working-tree" && !prNumber;
+
+  const hostsSession = flightDeckLayout && panes.length > 0;
+  const onLayoutRef = useRef(onLayout);
+  onLayoutRef.current = onLayout;
+  useEffect(() => {
+    onLayout?.({ flightDeck: flightDeckLayout, hostsSession });
+  }, [flightDeckLayout, hostsSession]);
+  // Reset on unmount only — clearing on every dep change would flash `false` and remount the viewer
+  useEffect(() => () => onLayoutRef.current?.({ flightDeck: false, hostsSession: false }), []);
+
   return (
     <div style={{
       ...(fill ? { flex: 1 } : { width: drawerWidth, flexShrink: 0 }),
-      minWidth: 280,
+      minWidth,
       background: t.surface1, borderLeft: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column", position: "relative",
     }}>
@@ -555,6 +669,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         />
       )}
       {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {!flightDeckLayout && (
       <div style={{ padding: "8px 12px 7px", borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
         {/* Tab bar */}
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
@@ -591,38 +706,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
             );
           })}
           <div style={{ flex: 1 }} />
-          {onToggleMaximize && (
-            <button
-              title={maximized ? "Restore width" : "Maximise"}
-              onClick={onToggleMaximize}
-              style={{ background: "none", border: "none", cursor: "pointer", color: maximized ? t.blue : t.label4, padding: "0 5px", lineHeight: 0 }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label1)}
-              onMouseLeave={(e) => (e.currentTarget.style.color = maximized ? t.blue : t.label4)}
-            >
-              <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                {maximized
-                  ? <><polyline points="4 4 10 10 4 16" /><polyline points="11 4 17 10 11 16" /></>
-                  : <><polyline points="16 4 10 10 16 16" /><polyline points="9 4 3 10 9 16" /></>}
-              </svg>
-            </button>
-          )}
-          <button
-            title="Refresh"
-            onClick={() => {
-              if (activeTab === "branch-diff") setBranchDiffTick(n => n + 1);
-              else if (activeTab === "working-tree") loadWorkingTree();
-              else if (activeTab === "commits" && effectiveBranch) loadCommits(effectiveBranch);
-            }}
-            style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 12, padding: "0 6px 0 2px", lineHeight: 1 }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-          >↻</button>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", color: t.label4, fontSize: 14, padding: "0 2px", lineHeight: 1 }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
-          >×</button>
+          {drawerControls}
         </div>
 
         {/* PR title / repo name */}
@@ -643,15 +727,15 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {/* Repo + branch pill */}
             <span style={{ color: t.label1, fontSize: 12, fontWeight: 600, ...SYS_FONT }}>{repoName}</span>
-            {currentBranch && (
+            {/* Branch and counts live in the changes rail on the working-tree tab */}
+            {currentBranch && activeTab !== "working-tree" && (
               <span style={{
                 fontSize: 10, ...MONO_FONT, color: t.red,
                 background: `${t.red}12`, border: `1px solid ${t.red}30`,
                 borderRadius: RADIUS, padding: "0 7px", lineHeight: 1.6,
               }}>git:{currentBranch}</span>
             )}
-            {/* File + stat counts */}
-            {totalWtChanges > 0 && (
+            {totalWtChanges > 0 && activeTab !== "working-tree" && (
               <span style={{
                 fontSize: 10, ...MONO_FONT, color: t.label3,
                 background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
@@ -660,187 +744,51 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
               }}>
                 {totalWtChanges} · {wtStaged.length > 0 || wtUnstaged.length > 0 ? (
                   <>
-                    <span style={{ color: t.green }}>+{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.additions, 0)}</span>
+                    <span style={{ color: t.diffAddFg }}>+{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.additions, 0)}</span>
                     {" "}
-                    <span style={{ color: t.red }}>-{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.deletions, 0)}</span>
+                    <span style={{ color: t.diffDelFg }}>-{[...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.deletions, 0)}</span>
                   </>
                 ) : null}
               </span>
             )}
             <div style={{ flex: 1 }} />
-            {activeTab !== "commits" && (
-              <>
-                {/* Uncommitted changes pill */}
-                <span style={{
-                  fontSize: 9, color: t.orange, ...SYS_FONT, fontWeight: 600,
-                  background: `${t.orange}12`, border: `1px solid ${t.orange}28`,
-                  borderRadius: RADIUS, padding: "1px 8px", flexShrink: 0,
-                }}>Uncommitted</span>
-                {/* Discard all */}
-                <button
-                  onClick={handleDiscardUnstaged}
-                  title="Discard all unstaged"
-                  style={{
-                    background: "none", border: `1px solid ${t.borderMid}`,
-                    borderRadius: RADIUS, color: t.label3, cursor: "pointer",
-                    fontSize: 10, padding: "1px 7px", flexShrink: 0, ...SYS_FONT,
-                    transition: "all 0.13s",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = t.red; e.currentTarget.style.borderColor = `${t.red}50`; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = t.label3; e.currentTarget.style.borderColor = t.borderMid; }}
-                >↺ Discard all</button>
-              </>
-            )}
           </div>
         )}
 
       </div>
+      )}
 
       {/* ── Branch diff tab ─────────────────────────────────────────────────── */}
       {activeTab === "branch-diff" && (
-        <>
-          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            {/* ── Left: file list ── */}
-            <div style={{
-              width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
-              display: "flex", flexDirection: "column", overflow: "hidden",
-            }}>
-              {/* Summary strip */}
-              {!loading && files.length > 0 && (
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
-                  borderBottom: `1px solid ${t.border}`,
-                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                  flexShrink: 0,
-                }}>
-                  <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
-                    {files.length} file{files.length !== 1 ? "s" : ""}
-                  </span>
-                  <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{totalAdditions}</span>
-                  <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{totalDeletions}</span>
-                </div>
-              )}
+        <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+          {/* ── Left: diff pane ── */}
+          {renderDiffPane(
+            selectedBranchFileIdx == null ? null : files[selectedBranchFileIdx],
+            loading ? "Fetching diff…" : "Select a file to view its diff."
+          )}
 
-              <div style={{ flex: 1, overflowY: "auto" }}>
-                {loading && (
-                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Fetching diff…</div>
-                )}
-                {!loading && files.length === 0 && (
-                  <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>
-                    No diff available.
-                    <div style={{ marginTop: 5, ...MONO_FONT }}>Ensure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
-                  </div>
-                )}
-                {!loading && files.map((file, fi) => {
-                  const isSelected = fi === selectedBranchFileIdx;
-                  const fileName = file.path.split("/").pop() ?? file.path;
-                  const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-                  const statusColor = file.status === "A" ? t.teal : file.status === "D" ? t.red : file.status === "M" ? t.blue : t.label3;
-                  return (
-                    <div
-                      key={fi}
-                      onClick={() => setSelectedBranchFileIdx(fi)}
-                      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = hoverBg; }}
-                      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
-                      style={{
-                        padding: "6px 10px", cursor: "pointer",
-                        background: isSelected ? (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)") : "transparent",
-                        borderLeft: `3px solid ${isSelected ? statusColor : "transparent"}`,
-                        borderBottom: `1px solid ${t.border}`,
-                        transition: "background 0.1s",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
-                        <span style={{
-                          fontSize: 9, fontWeight: 600, color: statusColor,
-                          background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
-                          borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
-                        }}>{file.status}</span>
-                        <span style={{
-                          color: file.status === "D" ? t.red : isSelected ? t.label1 : t.label2,
-                          fontSize: 11, fontWeight: isSelected ? 600 : 400,
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          textDecoration: file.status === "D" ? "line-through" : "none",
-                          flex: 1, ...SYS_FONT,
-                        }}>{fileName}</span>
-                      </div>
-                      {fileDir && (
-                        <div style={{
-                          color: t.label4, fontSize: 9, ...MONO_FONT,
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          marginBottom: 3, paddingLeft: 22,
-                        }}>{fileDir}</div>
-                      )}
-                      <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
-                        {(file.additions > 0 || file.deletions > 0) && (
-                          <span style={{ display: "flex", gap: 3, fontSize: 9, ...MONO_FONT }}>
-                            {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
-                            {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
-                            {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
-                          </span>
-                        )}
-                        <ChangeBar additions={file.additions} deletions={file.deletions} t={t} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Open in GitHub button */}
-              <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", flexShrink: 0 }}>
-                <button
-                  onClick={() => prUrl && window.terminal.openExternal(prUrl)}
-                  title={prUrl ? `Open in GitHub: ${prUrl}` : "Open in GitHub"}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5, width: "100%",
-                    background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                    border: `1px solid ${t.border}`, borderRadius: RADIUS,
-                    color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.09)"; e.currentTarget.style.color = t.label1; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; }}
-                >↗ Open in GitHub</button>
-              </div>
-            </div>
-
-            {/* ── Right: diff detail ── */}
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-              {selectedBranchFileIdx == null ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
-                </div>
-              ) : (() => {
-                const file = files[selectedBranchFileIdx];
-                const fileName = file.path.split("/").pop() ?? file.path;
-                const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-                return (
-                  <>
-                    {/* File header */}
-                    <div style={{
-                      display: "flex", alignItems: "center", gap: 7, padding: "5px 12px",
-                      borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                      background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                    }}>
-                      {fileDir && (
-                        <span style={{ color: t.label4, fontSize: 10, ...MONO_FONT }}>{fileDir}</span>
-                      )}
-                      <span style={{ color: t.label1, fontSize: 11, fontWeight: 600, ...MONO_FONT }}>{fileName}</span>
-                      <div style={{ flex: 1 }} />
-                      {file.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{file.additions}</span>}
-                      {file.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{file.deletions}</span>}
-                    </div>
-                    {/* Diff content */}
-                    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
-                      <div style={{ minWidth: "max-content" }}>
-                        <DiffChunks files={[file]} t={t} />
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        </>
+          {/* ── Right: files rail ── */}
+          {renderFileRail({
+            files,
+            loading,
+            selectedIdx: selectedBranchFileIdx,
+            onSelect: setSelectedBranchFileIdx,
+            onRefresh: () => setBranchDiffTick((n) => n + 1),
+            keyPrefix: "bd",
+            chip: headRefName,
+            trailing: effectiveBranch ? (
+              <button
+                onClick={() => setActiveTab("commits")}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: t.label3, fontSize: 11, ...SYS_FONT, ...TABULAR }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+              >{commits.length > 0 ? `${commits.length} commits` : "Commits"}</button>
+            ) : undefined,
+            emptyHint: (
+              <div style={{ marginTop: 5, ...MONO_FONT }}>Ensure <code style={{ color: t.teal }}>gh</code> is authenticated.</div>
+            ),
+          })}
+        </div>
       )}
 
       {/* ── Working tree tab ─────────────────────────────────────────────────── */}
@@ -871,9 +819,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                     style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
                       cursor: "pointer",
-                      background: isHov ? hoverBg : "transparent",
-                      borderLeft: "2px solid transparent",
-                      borderBottom: `1px solid ${t.border}`,
+                      borderBottom: `1px solid ${t.borderSubtle}`,
+                      ...rowState(t, false, isHov),
                     }}
                   >
                     <div title={dotTooltip} style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
@@ -891,7 +838,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           <span title="Not yet pushed to remote" style={{
                             color: t.orange, fontSize: 9, ...MONO_FONT,
                             background: `${t.orange}18`, border: `1px solid ${t.orange}30`,
-                            borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
+                            borderRadius: RADIUS, padding: "0 5px", lineHeight: 1.5,
                           }}>local</span>
                         )}
                         <span
@@ -904,7 +851,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                           style={{
                             color: t.blue, fontSize: 9, ...MONO_FONT,
                             background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
-                            borderRadius: 3, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
+                            borderRadius: RADIUS, padding: "0 5px", lineHeight: 1.5, cursor: "pointer",
                           }}
                         >{shortHash}</span>
                         <button
@@ -924,8 +871,8 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                         >{isCopied ? "✓" : "⎘"}</button>
                       </div>
                       <div style={{ display: "flex", gap: 3 }}>
-                        {commit.additions > 0 && <span style={{ color: t.green, fontSize: 9, ...MONO_FONT }}>+{commit.additions}</span>}
-                        {commit.deletions > 0 && <span style={{ color: t.red, fontSize: 9, ...MONO_FONT }}>-{commit.deletions}</span>}
+                        {commit.additions > 0 && <span style={{ color: t.diffAddFg, fontSize: 9, ...MONO_FONT }}>+{commit.additions}</span>}
+                        {commit.deletions > 0 && <span style={{ color: t.diffDelFg, fontSize: 9, ...MONO_FONT }}>-{commit.deletions}</span>}
                       </div>
                     </div>
                   </div>
@@ -945,7 +892,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
             const selectedFileData = selectedCommitFileIdx != null ? commitDiff[selectedCommitFileIdx] : null;
             const navBtnStyle = (enabled: boolean) => ({
               background: "none", border: `1px solid ${t.border}`,
-              borderRadius: 3, color: enabled ? t.label2 : t.label4,
+              borderRadius: RADIUS, color: enabled ? t.label2 : t.label4,
               cursor: enabled ? "pointer" : "default" as const,
               fontSize: 10, padding: "1px 6px", lineHeight: 1.4,
             });
@@ -955,7 +902,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                 <div style={{
                   display: "flex", alignItems: "center", gap: 5, padding: "5px 10px",
                   borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                  background: t.surface0,
                 }}>
                   <button
                     onClick={() => { setSelectedCommitHash(null); setSelectedCommitFileIdx(null); }}
@@ -967,7 +914,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                   <span style={{
                     color: t.blue, fontSize: 9, ...MONO_FONT,
                     background: `${t.blue}18`, border: `1px solid ${t.blue}30`,
-                    borderRadius: 3, padding: "0 5px", lineHeight: 1.5, flexShrink: 0,
+                    borderRadius: RADIUS, padding: "0 5px", lineHeight: 1.5, flexShrink: 0,
                   }}>{selectedCommitHash.slice(0, 7)}</span>
                   <button
                     onClick={() => {
@@ -1011,7 +958,7 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                 {/* Commit header */}
                 <div style={{
                   padding: "8px 12px", borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                  background: t.surface0,
                 }}>
                   <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, lineHeight: 1.4, marginBottom: 5, ...SYS_FONT }}>
                     {selectedCommit.subject}
@@ -1021,109 +968,26 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       {selectedCommit.author} · {selectedCommit.date}
                     </span>
                     <div style={{ flex: 1 }} />
-                    {selectedCommit.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>+{selectedCommit.additions}</span>}
-                    {selectedCommit.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>-{selectedCommit.deletions}</span>}
+                    {selectedCommit.additions > 0 && <span style={{ color: t.diffAddFg, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>+{selectedCommit.additions}</span>}
+                    {selectedCommit.deletions > 0 && <span style={{ color: t.diffDelFg, fontSize: 10, ...MONO_FONT, fontWeight: 600 }}>-{selectedCommit.deletions}</span>}
                   </div>
                 </div>
 
-                {/* Split: file list (left) + diff (right) */}
+                {/* Split: diff pane (left) + files rail (right) — same shape as Branch diff */}
                 <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
-                  {/* Left: file list */}
-                  <div style={{
-                    width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
-                    display: "flex", flexDirection: "column", overflow: "hidden",
-                  }}>
-                    {!commitDiffLoading && commitDiff.length > 0 && (
-                      <div style={{
-                        display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
-                        borderBottom: `1px solid ${t.border}`,
-                        background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                        flexShrink: 0,
-                      }}>
-                        <span style={{ color: t.label3, fontSize: 10, fontWeight: 600, flex: 1 }}>
-                          {commitDiff.length} file{commitDiff.length !== 1 ? "s" : ""}
-                        </span>
-                        <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{commitDiff.reduce((s, f) => s + f.additions, 0)}</span>
-                        <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>−{commitDiff.reduce((s, f) => s + f.deletions, 0)}</span>
-                      </div>
-                    )}
-                    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-                      {commitDiffLoading && (
-                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Loading diff…</div>
-                      )}
-                      {!commitDiffLoading && commitDiff.length === 0 && (
-                        <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10 }}>No diff available.</div>
-                      )}
-                      {!commitDiffLoading && commitDiff.map((file, fi) => {
-                        const isFileSel = fi === selectedCommitFileIdx;
-                        const fileName = file.path.split("/").pop() ?? file.path;
-                        const fileDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-                        const statusColor = file.status === "A" ? t.teal : file.status === "D" ? t.red : t.blue;
-                        return (
-                          <div
-                            key={fi}
-                            onClick={() => setSelectedCommitFileIdx(fi)}
-                            onMouseEnter={(e) => { if (!isFileSel) e.currentTarget.style.background = hoverBg; }}
-                            onMouseLeave={(e) => { if (!isFileSel) e.currentTarget.style.background = "transparent"; }}
-                            style={{
-                              padding: "6px 10px", cursor: "pointer",
-                              background: isFileSel ? (t.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)") : "transparent",
-                              borderLeft: `3px solid ${isFileSel ? statusColor : "transparent"}`,
-                              borderBottom: `1px solid ${t.border}`,
-                              transition: "background 0.1s",
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
-                              <span style={{
-                                fontSize: 9, fontWeight: 600, color: statusColor,
-                                background: `${statusColor}18`, border: `1px solid ${statusColor}30`,
-                                borderRadius: 3, padding: "0 4px", lineHeight: 1.5, flexShrink: 0,
-                              }}>{file.status}</span>
-                              <span style={{
-                                color: file.status === "D" ? t.red : isFileSel ? t.label1 : t.label2,
-                                fontSize: 11, fontWeight: isFileSel ? 600 : 400,
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                                textDecoration: file.status === "D" ? "line-through" : "none",
-                                flex: 1, ...SYS_FONT,
-                              }}>{fileName}</span>
-                            </div>
-                            {fileDir && (
-                              <div style={{
-                                color: t.label4, fontSize: 9, ...MONO_FONT,
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                                marginBottom: 3, paddingLeft: 22,
-                              }}>{fileDir}</div>
-                            )}
-                            <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 22 }}>
-                              {(file.additions > 0 || file.deletions > 0) && (
-                                <span style={{ display: "flex", gap: 3, fontSize: 9, ...MONO_FONT }}>
-                                  {file.additions > 0 && <span style={{ color: t.green }}>+{file.additions}</span>}
-                                  {file.additions > 0 && file.deletions > 0 && <span style={{ color: t.label4 }}>·</span>}
-                                  {file.deletions > 0 && <span style={{ color: t.red }}>−{file.deletions}</span>}
-                                </span>
-                              )}
-                              <ChangeBar additions={file.additions} deletions={file.deletions} t={t} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Right: diff detail */}
-                  <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                    {selectedFileData == null ? (
-                      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
-                      </div>
-                    ) : (
-                      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
-                        <div style={{ minWidth: "max-content" }}>
-                          <DiffChunks files={[selectedFileData]} t={t} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  {renderDiffPane(
+                    selectedFileData,
+                    commitDiffLoading ? "Loading diff\u2026" : "Select a file to view its diff."
+                  )}
+                  {renderFileRail({
+                    files: commitDiff,
+                    loading: commitDiffLoading,
+                    selectedIdx: selectedCommitFileIdx,
+                    onSelect: setSelectedCommitFileIdx,
+                    onRefresh: () => setCommitDiffTick((n) => n + 1),
+                    keyPrefix: `c:${selectedCommitHash}`,
+                    chip: selectedCommitHash.slice(0, 7),
+                  })}
                 </div>
               </>
             );
@@ -1131,36 +995,260 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
         </div>
       )}
 
-      {activeTab === "working-tree" && (
-        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-          {/* ── Left: file list + actions ── */}
-          <div style={{
-            width: 220, flexShrink: 0, borderRight: `1px solid ${t.border}`,
-            display: "flex", flexDirection: "column", overflow: "hidden",
-          }}>
+      {activeTab === "working-tree" && (() => {
+        const selMeta = selectedFile
+          ? (selectedFile.staged ? wtStaged : wtUnstaged).find((x) => x.path === selectedFile.path)
+          : undefined;
+        const crumbs = selectedFile
+          ? [repoName, ...selectedFile.path.split("/").slice(0, -1)]
+          : [];
+        return (
+        <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+          {/* ── Left: diff pane ── */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <>
+                {/* Pane tabs: session · open file · diff — the shell is home, files dock beside it */}
+                <div style={{ ...panelHeader(t), padding: 0, gap: 0 }}>
+                  {sessionGroup && panes.length > 0 && (
+                  <button
+                    onClick={() => setPaneTab("terminal")}
+                    style={paneTabStyle(t, paneTab === "terminal")}
+                  >
+                    <span style={{ color: t.label4, ...MONO_FONT }}>&gt;_</span>
+                    <span style={{ ...SYS_FONT, ...CLIP, maxWidth: 200 }}>{sessionGroup.title}</span>
+                    {panes.length > 1 && (
+                      <span style={{ flexShrink: 0, fontSize: 11, color: t.label4, ...MONO_FONT, ...TABULAR }}>
+                        {panes.length}
+                      </span>
+                    )}
+                  </button>
+                  )}
+                  {viewerTab && (
+                  <button
+                    onClick={() => setPaneTab("viewer")}
+                    style={paneTabStyle(t, paneTab === "viewer")}
+                  >
+                    <span style={{ color: t.label4, fontSize: 10, flexShrink: 0, ...MONO_FONT }}>{"</>"}</span>
+                    <span style={{ ...MONO_FONT, ...CLIP, maxWidth: 220 }}>
+                      {viewerTab.path.split("/").pop()}
+                    </span>
+                    <span
+                      role="button"
+                      title="Close file"
+                      onClick={(e) => { e.stopPropagation(); viewerTab.onClose(); }}
+                      style={{ flexShrink: 0, color: t.label4, fontSize: 13, lineHeight: 1, padding: "0 0 0 2px" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = t.label4)}
+                    >×</span>
+                  </button>
+                  )}
+                  {selectedFile && (
+                  <button
+                    onClick={() => setPaneTab("file")}
+                    style={paneTabStyle(t, paneTab === "file")}
+                  >
+                    <span style={{ ...MONO_FONT, ...CLIP, maxWidth: 220 }}>
+                      {selectedFile.path.split("/").pop()}
+                    </span>
+                    {selMeta && (
+                      <span style={{ display: "flex", gap: 5, flexShrink: 0, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                        {selMeta.additions > 0 && <span style={{ color: t.diffAddFg }}>+{selMeta.additions}</span>}
+                        {selMeta.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selMeta.deletions}</span>}
+                      </span>
+                    )}
+                  </button>
+                  )}
+                  <div style={{ flex: 1, borderBottom: `2px solid transparent` }} />
+                  {paneTab === "file" && selectedFile && (
+                    <>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedFile.path);
+                          setCopiedFilePath(selectedFile.path);
+                          setTimeout(() => setCopiedFilePath(null), 1400);
+                        }}
+                        title="Copy path"
+                        style={{
+                          background: "none", border: "none", cursor: "pointer", padding: "0 5px", lineHeight: 0,
+                          color: copiedFilePath === selectedFile.path ? t.green : t.label3,
+                        }}
+                        onMouseEnter={(e) => { if (copiedFilePath !== selectedFile.path) e.currentTarget.style.color = t.label1; }}
+                        onMouseLeave={(e) => { if (copiedFilePath !== selectedFile.path) e.currentTarget.style.color = t.label3; }}
+                      >{copiedFilePath === selectedFile.path ? <CheckGlyph /> : <CopyGlyph />}</button>
+                      <button
+                        onClick={() => window.terminal.openRepoFile(repoName, selectedFile.path)}
+                        title="Open in editor"
+                        style={{ background: "none", border: "none", cursor: "pointer", color: t.label3, padding: "0 5px 0 5px", marginRight: 8, lineHeight: 0 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+                      ><OpenGlyph /></button>
+                    </>
+                  )}
+                  {flightDeckLayout && drawerControls}
+                </div>
+
+                {/* Viewer pane — hidden rather than unmounted so the editor keeps scroll and undo */}
+                {viewerTab && (
+                <div style={{
+                  flex: paneTab === "viewer" ? 1 : undefined,
+                  display: paneTab === "viewer" ? "flex" : "none",
+                  flexDirection: "column", minHeight: 0, minWidth: 0,
+                }}>{viewerTab.body}</div>
+                )}
+
+                {/* Session pane — kept mounted so the mirror survives tab switches */}
+                {sessionGroup && panes.length > 0 && (
+                <div style={{
+                  flex: paneTab === "terminal" ? 1 : undefined,
+                  display: paneTab === "terminal" ? "flex" : "none",
+                  flexDirection: "column", minHeight: 0, background: t.bg,
+                }}>
+                  {/* Shell strip — mirrors the panel title bar the tab replaces */}
+                  <div style={{
+                    height: 28, flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
+                    padding: "0 12px", borderBottom: `1px solid ${t.borderSubtle}`, background: t.surface0,
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, flexShrink: 0 }} />
+                    <span style={{ color: t.label2, fontSize: 11, ...MONO_FONT }}>zsh</span>
+                    {sessionGroup.branch && (
+                      <span title={sessionGroup.branch} style={{
+                        maxWidth: 220, fontSize: 10, color: t.label2, background: t.surface2,
+                        borderRadius: RADIUS_SM, padding: "1px 6px", lineHeight: 1.6, ...MONO_FONT, ...CLIP,
+                      }}>{sessionGroup.branch}</span>
+                    )}
+                  </div>
+                  {/* Split group: every pane on this one tab, on the group's own axis */}
+                  <div style={{
+                    flex: 1, minHeight: 0, display: "flex",
+                    flexDirection: sessionGroup.dir === "column" ? "column" : "row",
+                  }}>
+                    {termOpened && panes.map((p, i) => (
+                      <div key={p.sessionId} style={{
+                        flex: 1, minWidth: 0, minHeight: 0, padding: "6px 0 6px 10px",
+                        ...(i > 0 && sessionGroup.dir === "column"
+                          ? { borderTop: `1px solid ${t.borderSubtle}` }
+                          : i > 0 ? { borderLeft: `1px solid ${t.borderSubtle}` } : null),
+                      }}>
+                        <SessionMirror
+                          sessionId={p.sessionId}
+                          panelNumber={p.number}
+                          visible={paneTab === "terminal"}
+                          owns={fill}
+                          layoutKey={paneLayoutKey}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                )}
+
+                {paneTab === "file" && !selectedFile && (
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ color: t.label4, fontSize: 12, ...SYS_FONT }}>
+                      {totalWtChanges === 0 ? "Working tree is clean." : "Select a file to view its diff."}
+                    </span>
+                  </div>
+                )}
+
+                {paneTab === "file" && selectedFile && (<>
+                {/* Breadcrumb path */}
+                <div
+                  title={`${repoName}/${selectedFile.path}`}
+                  style={{
+                    height: 28, flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
+                    padding: "0 12px 0 14px", borderBottom: `1px solid ${t.borderSubtle}`,
+                    background: t.surface0,
+                  }}
+                >
+                  <RepoGlyph color={t.label4} />
+                  <div style={{ flex: 1, fontSize: 11, color: t.label3, ...MONO_FONT, ...CLIP }}>
+                    {crumbs.map((seg, i) => (
+                      <span key={i}>
+                        {i > 0 && <span style={{ color: t.label4, padding: "0 4px" }}>/</span>}
+                        {seg}
+                      </span>
+                    ))}
+                  </div>
+                  {selMeta && (
+                    <span style={{ display: "flex", gap: 6, flexShrink: 0, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                      {selMeta.additions > 0 && <span style={{ color: t.diffAddFg }}>+{selMeta.additions}</span>}
+                      {selMeta.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selMeta.deletions}</span>}
+                    </span>
+                  )}
+                </div>
+
+                {/* Diff body */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+                  <div style={{ minWidth: "max-content" }}>
+                    {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
+                    {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 12, ...SYS_FONT }}>No diff available.</div>}
+                    {!fileDiffLoading && <DiffChunks files={parsedFileDiff} t={t} />}
+                  </div>
+                </div>
+                </>)}
+              </>
+          </div>
+
+          {/* ── Right: changes rail ── */}
+          <div style={{ ...panel(t, "left"), width: RAIL_W, flexShrink: 0, overflow: "hidden" }}>
+            <div style={panelHeader(t)}>
+              <span style={{ ...panelTitle(t), flex: 1 }}>Changes</span>
+              {effectiveBranch && (
+                <span title={effectiveBranch} style={{
+                  maxWidth: 90, fontSize: 10, color: t.label2, background: t.surface2,
+                  borderRadius: RADIUS_SM, padding: "1px 6px", lineHeight: 1.6,
+                  ...MONO_FONT, ...CLIP,
+                }}>{effectiveBranch}</span>
+              )}
+              <button
+                onClick={loadWorkingTree}
+                title="Refresh"
+                style={{ background: "none", border: "none", cursor: "pointer", color: t.label3, padding: "0 2px", lineHeight: 0 }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+              ><RefreshGlyph /></button>
+            </div>
+
+            {/* Working-tree summary */}
+            <div style={{
+              flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
+              padding: "0 12px", height: 30, borderBottom: `1px solid ${t.borderSubtle}`,
+            }}>
+              <span style={{ color: t.label2, fontSize: 12, ...SYS_FONT }}>Working tree</span>
+              <span style={{ display: "flex", gap: 5, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                {wtAdditions > 0 && <span style={{ color: t.diffAddFg }}>+{wtAdditions}</span>}
+                {wtDeletions > 0 && <span style={{ color: t.diffDelFg }}>−{wtDeletions}</span>}
+              </span>
+              <div style={{ flex: 1 }} />
+              {effectiveBranch && (
+                <button
+                  onClick={() => setActiveTab("commits")}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: t.label3, fontSize: 11, ...SYS_FONT, ...TABULAR }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+                >{commits.length > 0 ? `${commits.length} commits` : "Commits"}</button>
+              )}
+            </div>
+
             {wtLoading ? (
-              <div style={{ padding: "16px 10px", color: t.label4, fontSize: 10, ...MONO_FONT }}>Loading…</div>
+              <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>Loading…</div>
             ) : (
               <>
-                <div style={{ flex: 1, overflowY: "auto" }} onMouseLeave={() => setWtHovered(null)}>
-                  {renderSectionHeader("STAGED", wtStaged.length, "Unstage all", handleUnstageAll, wtStaged.length === 0)}
+                <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }} onMouseLeave={() => setWtHovered(null)}>
+                  {renderSectionHeader("Staged", wtStaged.length, "Unstage all", handleUnstageAll, wtStaged.length === 0)}
                   {wtStaged.length === 0 ? (
-                    <div style={{ padding: "7px 10px 6px", color: t.label4, fontSize: 9, fontStyle: "italic" }}>
-                      No staged changes
-                    </div>
+                    <div style={{ padding: "2px 12px 4px", color: t.label4, fontSize: 12, ...SYS_FONT }}>Nothing staged yet.</div>
                   ) : wtStaged.map((f) => renderFileRow(f, true))}
 
-                  {renderSectionHeader("UNSTAGED", wtUnstaged.length, "Stage all", handleStageAll, wtUnstaged.length === 0)}
+                  {renderSectionHeader("Unstaged", wtUnstaged.length, "Stage all", handleStageAll, wtUnstaged.length === 0)}
                   {wtUnstaged.length === 0 ? (
-                    <div style={{ padding: "7px 10px 6px", color: t.label4, fontSize: 9, fontStyle: "italic" }}>
-                      No unstaged changes
-                    </div>
+                    <div style={{ padding: "2px 12px 4px", color: t.label4, fontSize: 12, ...SYS_FONT }}>Nothing to stage.</div>
                   ) : wtUnstaged.map((f) => renderFileRow(f, false))}
                 </div>
 
-                {/* Commit area */}
+                {/* Commit box — only meaningful once something is staged */}
                 {wtStaged.length > 0 && (
-                  <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 5 }}>
+                  <div style={{ borderTop: `1px solid ${t.borderMid}`, padding: "8px 12px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
                     <textarea
                       value={commitMsg}
                       onChange={(e) => setCommitMsg(e.target.value)}
@@ -1169,93 +1257,56 @@ export function DiffDrawer({ prNumber, repoName, prTitle, prUrl, headRefName, on
                       onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCommit(); }}
                       style={{
                         width: "100%", boxSizing: "border-box", resize: "none",
-                        background: t.surface2, border: `1px solid ${t.border}`,
-                        borderRadius: RADIUS, color: t.label1, fontSize: 11,
-                        fontFamily: "inherit", padding: "5px 8px", outline: "none",
+                        background: t.surface0, border: `1px solid ${t.borderMid}`,
+                        borderRadius: RADIUS, color: t.label1, fontSize: 12,
+                        padding: "6px 8px", outline: "none", ...SYS_FONT,
                       }}
                     />
                     <button
                       onClick={handleCommit}
                       disabled={!commitMsg.trim() || committing}
                       style={{
-                        background: commitMsg.trim() && !committing ? `${t.green}18` : t.surface2,
-                        border: `1px solid ${commitMsg.trim() && !committing ? t.green + "40" : t.border}`,
-                        borderRadius: RADIUS, color: commitMsg.trim() && !committing ? t.green : t.label4,
+                        background: t.surface2, border: `1px solid ${t.borderMid}`,
+                        borderRadius: RADIUS, color: commitMsg.trim() && !committing ? t.label1 : t.label4,
                         cursor: commitMsg.trim() && !committing ? "pointer" : "not-allowed",
-                        fontSize: 11, fontWeight: 600, padding: "5px 0", opacity: committing ? 0.6 : 1,
+                        fontSize: 12, fontWeight: 600, padding: "6px 0", ...SYS_FONT,
                       }}
                     >{committing ? "Committing…" : "Commit staged"}</button>
                   </div>
                 )}
 
-                {/* Action buttons */}
-                <div style={{ borderTop: `1px solid ${t.border}`, padding: "7px 10px", display: "flex", gap: 6, flexShrink: 0 }}>
-                  {([
-                    { label: "Stage all", action: handleStageAll, hoverCol: t.green },
-                    { label: "Discard", action: handleDiscardUnstaged, hoverCol: t.red },
-                  ] as const).map(({ label, action, hoverCol }) => (
-                    <button
-                      key={label}
-                      onClick={action}
-                      style={{
-                        flex: 1, background: t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
-                        border: `1px solid ${t.border}`, borderRadius: RADIUS,
-                        color: t.label2, cursor: "pointer", fontSize: 10, fontWeight: 600, padding: "5px 0",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = `${hoverCol}18`; e.currentTarget.style.color = hoverCol; e.currentTarget.style.borderColor = `${hoverCol}40`; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = t.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"; e.currentTarget.style.color = t.label2; e.currentTarget.style.borderColor = t.border; }}
-                    >{label}</button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* ── Right: diff detail ── */}
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-            {!selectedFile ? (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: t.label4, fontSize: 11 }}>Select a file to view diff</span>
-              </div>
-            ) : (
-              <>
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 7, padding: "5px 12px",
-                  borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-                  background: t.isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                }}>
-                  <span style={{
-                    fontSize: 9, fontWeight: 600,
-                    color: selectedFile.staged ? t.green : t.orange,
-                    background: selectedFile.staged ? `${t.green}18` : `${t.orange}18`,
-                    border: `1px solid ${selectedFile.staged ? t.green + "30" : t.orange + "30"}`,
-                    borderRadius: 3, padding: "0 5px", lineHeight: 1.5,
-                  }}>{selectedFile.staged ? "staged" : "unstaged"}</span>
-                  <span style={{ flex: 1, color: t.label1, fontSize: 11, fontWeight: 600, ...MONO_FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {selectedFile.path.split("/").pop()}
-                  </span>
-                  {(() => {
-                    const f = (selectedFile.staged ? wtStaged : wtUnstaged).find((x) => x.path === selectedFile.path);
-                    return f ? (
-                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                        {f.additions > 0 && <span style={{ color: t.green, fontSize: 10, ...MONO_FONT }}>+{f.additions}</span>}
-                        {f.deletions > 0 && <span style={{ color: t.red, fontSize: 10, ...MONO_FONT }}>-{f.deletions}</span>}
-                      </div>
-                    ) : null;
-                  })()}
-                </div>
-                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
-                  <div style={{ minWidth: "max-content" }}>
-                    {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
-                    {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11 }}>No diff available.</div>}
-                    {!fileDiffLoading && <DiffChunks files={parsedFileDiff} t={t} />}
-                  </div>
+                {/* Footer actions */}
+                <div style={{ borderTop: `1px solid ${t.borderMid}`, padding: "8px 12px", display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={handleStageAll}
+                    disabled={wtUnstaged.length === 0}
+                    style={{
+                      flex: 1, borderRadius: RADIUS, border: "none", padding: "7px 0",
+                      background: wtUnstaged.length === 0 ? t.surface2 : t.blue,
+                      color: wtUnstaged.length === 0 ? t.label4 : "#FFFFFF",
+                      cursor: wtUnstaged.length === 0 ? "not-allowed" : "pointer",
+                      fontSize: 12, fontWeight: 600, ...SYS_FONT,
+                    }}
+                  >Stage all</button>
+                  <button
+                    onClick={handleDiscardUnstaged}
+                    disabled={wtUnstaged.length === 0}
+                    style={{
+                      borderRadius: RADIUS, border: `1px solid ${t.borderMid}`, padding: "7px 14px",
+                      background: "none", color: wtUnstaged.length === 0 ? t.label4 : t.label2,
+                      cursor: wtUnstaged.length === 0 ? "not-allowed" : "pointer",
+                      fontSize: 12, fontWeight: 600, ...SYS_FONT,
+                    }}
+                    onMouseEnter={(e) => { if (wtUnstaged.length > 0) { e.currentTarget.style.color = t.red; e.currentTarget.style.borderColor = `${t.red}55`; } }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = wtUnstaged.length === 0 ? t.label4 : t.label2; e.currentTarget.style.borderColor = t.borderMid; }}
+                  >Discard</button>
                 </div>
               </>
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

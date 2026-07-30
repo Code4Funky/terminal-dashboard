@@ -23,6 +23,8 @@ import { SYS_FONT, MONO_FONT, TABULAR } from "../theme";
 import { rowState, chip, dot, CLIP, CLIP_LEFT, RADIUS, RADIUS_SM, TRANSITION } from "../chrome";
 import { shellQuote } from "../shell";
 import type { RepoStatus } from "../hooks/useTerminal";
+import { usePRInbox } from "../hooks/usePRInbox";
+import { bucketPRs } from "../prs";
 
 interface PanelState {
   id: string;
@@ -145,7 +147,17 @@ export function Dashboard() {
 
   const viewerOpen = !!fileView;
   const [showModal, setShowModal] = useState(false);
-  const [modalRepos, setModalRepos] = useState<{ name: string }[]>([]);
+
+  // One PR fan-out for the whole app: the PRs panel renders it, the Sessions panel counts it, and the
+  // new-terminal / file-tree pickers take their repo list from the same sweep of local clones.
+  const prInbox = usePRInbox();
+  const modalRepos = useMemo(() => prInbox.repos.map((r) => ({ name: r.name })), [prInbox.repos]);
+  const needYouCount = useMemo(
+    () => (prInbox.loading
+      ? null
+      : bucketPRs(prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin).needsYourReview?.length ?? 0),
+    [prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin, prInbox.loading],
+  );
   const [localBranches, setLocalBranches] = useState<{ repo: string; branch: string }[]>([]);
   useEffect(() => {
     window.terminal.listLocalBranches().then(setLocalBranches).catch(() => {});
@@ -890,7 +902,9 @@ export function Dashboard() {
             onFocusTab={(id) => { setFocusedId(id); const p = panels.find((x) => x.id === id); if (p) window.terminal.setFocused(p.sessionId); }}
             onCloseTab={handleClose}
             onAddTab={() => setShowModal(true)}
-            onReposLoaded={setModalRepos}
+            prs={prInbox.prs}
+            needYouCount={needYouCount}
+            onOpenPRs={() => openSidebarPanel("prs")}
           />
         )}
         {!zenMode && sidebarVisible && sidebarPanel === "files" && (
@@ -916,6 +930,16 @@ export function Dashboard() {
             onSelectPR={setSelectedPR}
             width={prsWidth}
             onWidthChange={(w) => { setPrsWidth(w); localStorage.setItem("tdash:prs-width", String(w)); }}
+            prs={prInbox.prs}
+            repos={prInbox.repos}
+            loading={prInbox.loading}
+            error={prInbox.error}
+            lastRefreshed={prInbox.lastRefreshed}
+            ghLogin={prInbox.ghLogin}
+            myTeams={prInbox.myTeams}
+            updatedWithin={prInbox.updatedWithin}
+            onUpdatedWithinChange={prInbox.setUpdatedWithin}
+            onRefresh={prInbox.reload}
           />
         )}
         {!zenMode && sidebarVisible && sidebarPanel === "tasks" && (

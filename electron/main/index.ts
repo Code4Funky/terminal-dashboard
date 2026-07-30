@@ -561,6 +561,9 @@ const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const OUTPUT_FLUSH_MS = 8;
 const OUTPUT_FLUSH_BYTES = 64 * 1024;
 
+// Last time each session produced output — the sidebar reads silence as "the agent is waiting on you".
+const sessionLastData = new Map<string, number>();
+
 function flushOutput(sessionId: string) {
   const timer = outputFlushTimers.get(sessionId);
   if (timer) { clearTimeout(timer); outputFlushTimers.delete(sessionId); }
@@ -569,6 +572,7 @@ function flushOutput(sessionId: string) {
 }
 
 function queueOutput(sessionId: string, data: string) {
+  sessionLastData.set(sessionId, Date.now());
   const merged = (pendingOutput.get(sessionId) ?? "") + data;
   pendingOutput.set(sessionId, merged);
   if (merged.length >= OUTPUT_FLUSH_BYTES) { flushOutput(sessionId); return; } // bound latency/memory on big bursts
@@ -736,6 +740,7 @@ function createSession(
     if (timer) { clearTimeout(timer); outputFlushTimers.delete(sessionId); }
     sessionLastRepo.delete(sessionId);
     sessionCwd.delete(sessionId);
+    sessionLastData.delete(sessionId);
     untrackGitHead(sessionId);
     sessionPanelNumbers.delete(sessionId);
     histStream.end();
@@ -1297,6 +1302,14 @@ cd() {
   fi
   builtin cd "$@"
 }
+
+# Bare repo name → cd there. AUTO_CD resolves the word itself and never reaches cd(),
+# and command_not_found_handler runs in a forked child where the cd would be discarded,
+# so an alias is the only hook that lands in this shell. Never shadows a real command.
+for _td_repo in "$HOME/Documents/GitHub"/*(N/); do
+  command -v -- "\${_td_repo:t}" &>/dev/null || alias -- "\${_td_repo:t}"="builtin cd \${(q)_td_repo}"
+done
+unset _td_repo
 `
   );
 }
@@ -1383,6 +1396,17 @@ app.on("before-quit", () => {
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
 ipcMain.handle("terminal:get-state", () => state);
+
+// Panel → epoch ms of its last PTY output. Polled, not pushed: a push per chunk would out-rate the
+// output batching it sits behind.
+ipcMain.handle("terminal:get-activity", (): Record<number, number> => {
+  const out: Record<number, number> = {};
+  for (const [sessionId, at] of sessionLastData) {
+    const num = sessionPanelNumbers.get(sessionId);
+    if (num !== undefined) out[num] = Math.max(out[num] ?? 0, at);
+  }
+  return out;
+});
 
 ipcMain.handle(
   "terminal:create",
@@ -2687,9 +2711,10 @@ ipcMain.handle("repo:show-in-finder", (_, repoOrPath: string, filePath: string) 
   shell.showItemInFolder(join(resolveRoot(repoOrPath), filePath));
 });
 
-ipcMain.handle("git:current-branch", async (_, repoName: string): Promise<string | null> => {
+ipcMain.handle("git:current-branch", async (_, repoOrPath: string): Promise<string | null> => {
   try {
-    const repoPath = join(githubDir, repoName);
+    // resolveRoot, not join(githubDir, …) — the Files panel roots at `~` or an arbitrary path too
+    const repoPath = resolveRoot(repoOrPath);
     const { stdout } = await execAsync("git branch --show-current", { cwd: repoPath, env: TOOL_ENV });
     return stdout.trim() || null;
   } catch {

@@ -1,5 +1,202 @@
 # Todo
 
+## Phase 2 — Sessions panel: agent/shell rows + PR cross-link (agreed spec 2026-07-30)
+
+Approved: **lift PR state into Dashboard** for the `N need you` count, and a **PTY-idle heuristic** for
+`needs input`. Both chosen over the cheaper alternatives — see the two decision notes below.
+
+### Gap vs the Phase 2 line
+
+| Spec | Before |
+|---|---|
+| AGENTS: dot, age / `needs input`, branch/ticket subtitle | dot ✓, age ✓, subtitle ✓ — **`needs input` never computed** |
+| SHELLS: `⟳ branch` + working-tree ± | shared the agent renderer; `⎇` glyph |
+| `Pull requests · N need you ›` row | missing entirely |
+| Selecting a shell re-points the Terminal tab | already works (Phase 1 fix) — a regression guard, not new work |
+
+`RepoSidebar`'s own `load()` was dead: it called `listPRs([...pinnedRepos])` off
+`localStorage["tdash:pinned-repos"]`, which nothing has written since pin management was deleted, and
+`prs:list` short-circuits to `[]` on an empty array (`electron/main/index.ts:2367`). So `prs` was
+permanently empty, `loading` was set but never read, and the `#PR` badges came only from `tabPRCache`.
+
+### Agreed layout
+
+```
+┌─ nav ──┬──────────── Sessions 264 ─────────────┐
+│ 56     │ SESSIONS                            + │  34px panelHeader (unchanged)
+│        ├───────────────────────────────────────┤
+│ ◉ Sess │ ⑃ Pull requests · 1 need you         › │  32px cross-link row, rowState hover
+│ ✎ File ├───────────────────────────────────────┤
+│ ⑂ Git  │ AGENTS · 2                            │  sectionLabel
+│ → PRs  │▏● mobile-edge-service              4m │  green dot + age
+│ ✓ Task │▏  ⎇ MOB-396-token-cache         #1425 │  branch/ticket, CLIP_LEFT
+│        │ ◐ terminal-dashboard      needs input │  orange dot + orange text
+│        │   ⎇ cowork                            │
+│        │ SHELLS · 3                            │
+│        │ ○ phoenix                             │
+│        │   ⟳ main                    +120 −8   │  ⟳ + working-tree ±
+│        │ ○ knowledge-base                      │
+│        │   ⟳ main                              │
+└────────┴───────────────────────────────────────┘
+```
+
+### Pinned rules
+
+1. Two renderers, not one: `renderAgentRow` (dot · name · **age / `needs input` / `3/7` / `done`**;
+   line 2 = `⎇` branch + `#PR`) and `renderShellRow` (dot · name; line 2 = `⟳` branch + `+a −d`).
+   The ± stats leave the agent row — 264px can't hold branch + ± + `#PR`, and an agent's diff belongs
+   to the Changes rail.
+2. Status slot, one value, in precedence order: `needs input` (orange) → age (green, running) →
+   `3/7` → `done` → nothing.
+3. The PR row is **not** the panel footer — Phase 6 reserves the footer for the status-bar mirror. It's
+   the first row of the scroll list, so it doesn't move as sessions come and go.
+4. It calls the same `openSidebarPanel("prs")` the nav rail uses — no new state.
+5. Selection stays `rowState`. No new colours, no pills. Sentence case.
+6. `isBranchTab` (dead before this change) stays untouched.
+
+### Decision — `N need you` comes from Dashboard, not a second fetch
+
+`needsYourReview` is only meaningful after the team narrowing *and* the Updated window, both of which
+lived in `PRsDrawer`. A separate `gh search prs --review-requested=@me` count would have read 17 beside
+the drawer's 1. So the inbox fan-out moves up: new `src/prs.ts` (pure domain — `categorizePR`,
+`withinUpdatedWindow`, `teamMatchSet`, `UPDATED_WINDOWS`, typed on the existing `GhPRNode`, not a
+second `PR` interface) plus `src/hooks/usePRInbox.ts` (the fetch + 5-min refresh). `Dashboard` calls the
+hook once; `PRsDrawer` becomes a consumer, `updatedWithin` joining `width` as a controlled prop.
+
+Falls out of it: the ~9s refetch on every PRs-panel toggle is gone (the drawer no longer owns the
+fetch), `RepoSidebar`'s dead `load()`/`prs`/`loading`/`pinnedRepos` go, and `tabPRCache`'s per-repo
+`listPRs([repo])` goes too — the shared fan-out already covers every local repo at `--limit 100`.
+
+### Decision — `needs input` is a PTY-idle heuristic
+
+No signal existed. The Claude Code `Notification` hook would be exact but needs an edit to
+`~/.claude/settings.json`, so it only works on a configured machine. Main already sees every PTY chunk,
+so it stamps `lastDataAt` per session and exposes it; the renderer polls while any agent is open:
+
+- `running` — output within 3s
+- `needs-input` — silent ≥10s **and** the panel's task summary still has `inProgress > 0`
+- `idle` — otherwise
+
+Deliberate limits: an agent with no task list never reads as `needs input` (no `inProgress` to gate on),
+and a long silent build inside an agent session reads as `needs input` too. Both are acceptable — the
+gate keeps it from firing on every idle shell, which is the failure that would make the dot noise.
+
+**Done 2026-07-30.** Seven files: `electron/main/index.ts` (`sessionLastData` map stamped in
+`queueOutput` — the single choke point both `onData` paths go through — cleared in `onExit`, exposed as
+`terminal:get-activity` keyed by panel number), `electron/preload/index.ts` + `useTerminal.ts`
+(`getActivity`), `src/prs.ts` **new** (domain moved out of the drawer, plus `bucketPRs` so the count and
+the sections bucket once, identically), `src/hooks/usePRInbox.ts` **new** (fan-out + 5-min refresh +
+`ghLogin`/`myTeams`/`updatedWithin`), `PRsDrawer.tsx` (−~120 lines, now a consumer; `load()` keeps only
+the search-cache drop), `RepoSidebar.tsx` (PR cross-link row, activity poll, `renderRow(tab, kind)`),
+`Dashboard.tsx` (`usePRInbox` once; `modalRepos` and `needYouCount` derived from it).
+
+Verified under Playwright `_electron` across three driver runs — all mockup assertions hold:
+
+- Cross-link row renders `⑃ Pull requests · 1 need you ›`; clicking it opens the PRs panel.
+- Agent row second line `⎇ cowork`; shell row `⟳ cowork  +254 −232`. `prBadges` empty on shells,
+  `diffBadges` empty on agents — the kind gate holds both ways.
+- `needs input` fires: row 1 read `2d` green `rgb(110,191,129)` at ~15s, then `needs input` orange
+  `rgb(233,145,73)` at ~35s once the PTY had been silent past `SILENT_MS` with `inProgress > 0`.
+- Regression guard passes — clicking a session row re-points the Terminal tab (`>_ terminal-dashboard`
+  → `>_ ~`).
+- `tsconfig.node.json` clean; `tsconfig.web.json` at the 15-error baseline, none in a touched file
+  (proven by stashing `src` + `electron` and re-running, which also gives 15).
+
+Deviation from pinned rule 1: **one `renderRow(tab, kind)`, not two renderers.** Two would have been two
+copies of the row frame for a two-span difference; `kind` gates only the second line's icon and trailing
+badge. Everything else in the rule (± off the agent row, `#PR` off the shell row) holds as written.
+
+Three things worth keeping:
+- **The `+` button opens the directory picker, not a panel.** A driver that clicks it and then calls
+  `writeToFocusedTerminal` types into the *previously* focused panel and the modal backdrop swallows
+  every later click — reads as three unrelated failures. Drive it: type, `Enter` to navigate, `⌘Enter`
+  to open.
+- **A restored panel starts at `~` with no branch**, so neither second-line icon renders until something
+  `cd`s it. Verifying the two shapes needs a repo-rooted panel, not just a launch.
+- **`terminal:get-activity` errors in replayed scrollback are stale history**, not a live failure — the
+  log predates the rebuild. `needs input` firing at all is the proof the handler is registered, since
+  that branch needs a non-null `lastData`.
+
+## Phase 3 — Files panel: repo header + branch chip (agreed spec 2026-07-30)
+
+Approved: **drop the `×`** to make room for the chip. Chosen over sacrificing global search or adding a
+second header row.
+
+### Gap vs the Phase 3 line
+
+| Spec | Before |
+|---|---|
+| Port `FileTreeModal` into the sidebar | already hosted (`Dashboard.tsx:910`), same slot as Sessions/PRs/Tasks — "Modal" is a leftover name |
+| `In files │ Filenames` segmented control | already there (`FileTreeModal.tsx:509`) |
+| Content search via grep IPC | `repo:grep-matches` exists (`electron/main/index.ts:2579`) — no new IPC |
+| Picking a file adds the `</> name` tab and switches | already works (`CentrePane.tsx:542` + switch effect at `:167`) — a regression guard, not new work |
+| **Repo header + branch chip** | **missing — the branch appears nowhere in the panel** |
+
+Same shape as Phase 2: most of the line was already standing, one thing genuinely absent.
+
+### Agreed layout
+
+```
+┌─ nav ──┬──────────────── Files 260 ─────────────────┐
+│ 56     │ terminal-dashboard   ⟳ cowork    🌐 📁 ⇄  │  34px panelHeader, title CLIP
+│        ├────────────────────────────────────────────┤
+│ ◉ Sess │ 🔍 Search filenames…                       │  26px query field  (unchanged)
+│ ✎ File │ [In files│Filenames]  Aa  .*               │  20px control row  (unchanged)
+│ ⑂ Git  ├────────────────────────────────────────────┤
+│ → PRs  │ ▾ src                                      │
+│ ✓ Task │   ▾ components                             │
+│        │     </> CentrePane.tsx                     │
+└────────┴────────────────────────────────────────────┘
+
+search state — the chip slot swaps, it does not stack:
+│ Search              40 files       🌐 📁 ⇄        │
+```
+
+### Pinned rules
+
+1. Branch chip is `chip(t, "neutral")` with the `⟳` glyph — the same glyph Phase 2 gave shell rows for a
+   working tree, so one glyph keeps one meaning. Not `⎇`; Phase 2 reserved that for an agent's branch.
+2. **One chip slot.** Browse → `⟳ branch`; search → `N files`. Never both — 260px won't hold two chips
+   plus three icons.
+3. Drop the `×`. Sessions has no close button and the nav rail already toggles the panel. Escape in the
+   filter field still closes (`FileTreeModal.tsx:475`) — only the chrome goes, the keyboard path stays.
+4. No branch for a non-repo root (`~`, an arbitrary folder) → chip absent, not `—`. `getRepoBranch`
+   returns null there.
+5. Refetch on root change only, mirroring `CentrePane.tsx:184`. No polling — a live branch belongs in
+   Phase 6's status bar.
+6. Everything below the header is untouched: tree, segmented control, grep, global search, result
+   grouping, ↑↓ nav.
+7. Filename stays `FileTreeModal.tsx`. Phase 2 left `RepoSidebar.tsx` unrenamed despite the todo calling
+   it `SessionsPanel`; renames are Phase 7 sweep work.
+
+**Done 2026-07-30.** Two files: `src/components/FileTreeModal.tsx` (`branch` state + refetch effect
+keyed on `repoName`, guarded by `rootRef` like the existing tree fetch; chip in the header; `×` removed)
+and `electron/main/index.ts` (`git:current-branch` now resolves through `resolveRoot`).
+
+The main-process line was not optional. `git:current-branch` did `join(githubDir, repoName)`, which for
+an absolute root produces `…/GitHub/Users/tungtran/…` — a path that throws, caught, returned null. The
+panel explicitly supports absolute roots via `onPickRoot`, so every folder browsed that way would have
+shown no branch. `resolveRoot` was already sitting at `:2451` doing exactly this for the six `repoOrPath`
+handlers; the change is strictly more permissive, since a bare repo name resolves identically.
+
+Verified under Playwright `_electron`:
+
+| Check | Result |
+|---|---|
+| Browse header | `TERMINAL-DASHBOARD` + chip `⟳ cowork`, buttons `[svg, svg, ⇄]` — no `×` |
+| Search header | `SEARCH` + chip `1 files`, same three buttons — branch chip yields the slot |
+| `</> name` tab (regression guard) | `</> Dashboard.tsx ×` active in the centre strip, body rendered |
+| Rule 4, all four root shapes | `terminal-dashboard`→`cowork`, `~`→null, `/…/knowledge-base`→`main`, `/etc`→null |
+| Type-check | `tsconfig.node.json` clean; `tsconfig.web.json` at the 15-error baseline, none in a touched file |
+
+Driver gotchas, both costing a run:
+- **The nav rail items are `<button title="…">`, not divs.** `div:text-is("Files")` times out with no
+  pointer-event message, so it reads as the panel being missing. Use `button[title="File tree and search"]`.
+- **Descending from the panel root finds the scroll container, not the header.** `panels[last]` matching
+  on width+height latches onto the inner list, whose children are the 26px tree rows — the probe then
+  reports "no header" for a header that is on screen. Match the ~35px band globally by geometry instead
+  (34px `height` + 1px border = 35 in `getBoundingClientRect`, so a `=== 34` test never fires).
+
 ## PR diff docks in the centre pane, not a fourth column (agreed spec 2026-07-30)
 
 Approved: **centre-pane tab** — the PR review becomes a tab beside the shell, exactly like the
@@ -297,12 +494,17 @@ entirely**; terminal dock/stacked/even-split layouts fully replaced.
       every `sessionGroups` entry and `CentrePane` keeps each group it has shown mounted, hiding the
       inactive ones (`display: none`) ✓ 25/25 driver checks, incl. three new permanent guards: the
       stamped xterm node survives a switch round trip, ≤1 restore banner, exactly one visible group.
-- [ ] Phase 2 — `SessionsPanel`: AGENTS (status dot, age / `needs input`, branch/ticket subtitle) +
+- [x] Phase 2 — `SessionsPanel`: AGENTS (status dot, age / `needs input`, branch/ticket subtitle) +
       SHELLS (⟳ branch + working-tree ±) from the existing agents/shells split; `Pull requests · N
       need you ›` row jumps to the PRs panel → verify: selecting a shell re-points the Terminal tab
-- [ ] Phase 3 — `FilesPanel`: port `FileTreeModal` into the sidebar; repo header + branch chip;
+      ✓ driver confirms the re-point, both row shapes, and the orange `needs input` transition — full
+      write-up in the Phase 2 spec section at the top of this file
+- [x] Phase 3 — `FilesPanel`: port `FileTreeModal` into the sidebar; repo header + branch chip;
       filter with `In files │ Filenames` segmented control (content search via grep IPC if missing)
       → verify: picking a file adds the `</> name` tab and switches to it
+      ✓ only the branch chip was actually missing — hosting, the segmented control and `repo:grep-matches`
+      all already shipped; driver confirms both header states, the `</>` tab and all four root shapes —
+      full write-up in the Phase 3 spec section at the top of this file
 - [x] Phase 4 — `PRsPanel`: replace the repo-grouped list with GitHub-Inbox-style sections (mockup
       approved 2026-07-30 against the user's screenshot): **Needs your review** / **Needs your teams'
       review** / **Your drafts** / **Waiting for review or checks** / **Needs action** / **Ready to

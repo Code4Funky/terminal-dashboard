@@ -44,6 +44,8 @@ declare global {
         initialCommand?: string
       ) => Promise<{ sessionId: string; number: number }>;
       getHistory: (num: number) => Promise<string>;
+      /** Panel number → epoch ms of its last PTY output. */
+      getActivity: () => Promise<Record<number, number>>;
       listHistory: () => Promise<{ number: number; size: number; lastModified: number; title?: string }[]>;
       savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]) => void;
       write: (id: string, data: string) => void;

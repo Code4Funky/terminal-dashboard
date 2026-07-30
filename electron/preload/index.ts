@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld("terminal", {
   getHistory: (num: number): Promise<string> =>
     ipcRenderer.invoke("terminal:get-history", num),
 
+  getActivity: (): Promise<Record<number, number>> =>
+    ipcRenderer.invoke("terminal:get-activity"),
+
   listHistory: (): Promise<
     { number: number; size: number; lastModified: number; title?: string }[]
   > => ipcRenderer.invoke("terminal:list-history"),

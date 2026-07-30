@@ -2,85 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { useTheme } from "../ThemeContext";
 import { RADIUS, RADIUS_SM, TRANSITION, drawerHeader, drawerTitle } from "../chrome";
 import { MONO_FONT } from "../theme";
+import type { GhPRNode } from "../hooks/useTerminal";
+import type { RepoEntry } from "../hooks/usePRInbox";
+import {
+  PR_CATEGORIES, UPDATED_WINDOWS, bucketPRs, withinUpdatedWindow,
+  type PRCategory, type UpdatedWindow,
+} from "../prs";
 
-interface PR {
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  headRefOid: string;
-  isDraft: boolean;
-  createdAt: string;
-  updatedAt: string;
-  reviewDecision: string | null;
-  author: { login: string };
-  repository: { name: string; nameWithOwner: string };
-  reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
-  statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
-  mergeable: string;
-  mergeStateStatus: string;
-}
-
-type PRCategory = "needsYourReview" | "needsTeamReview" | "yourDrafts" | "waiting" | "needsAction" | "readyToMerge";
-
-const CATEGORIES: { key: PRCategory; label: string }[] = [
-  { key: "needsYourReview", label: "Needs your review" },
-  { key: "needsTeamReview", label: "Needs your teams' review" },
-  { key: "yourDrafts", label: "Your drafts" },
-  { key: "waiting", label: "Waiting for review or checks" },
-  { key: "needsAction", label: "Needs action" },
-  { key: "readyToMerge", label: "Ready to merge" },
-];
-
-// `gh pr list` puts the org-qualified team in `slug` ("Skedulo/v3-backend-core") and the bare one in
-// `name`, so check both against a set holding both forms. Empty myTeams (no `read:org` scope) falls
-// back to matching any team request rather than emptying the section.
-function requestedFromMyTeam(pr: PR, myTeams: Set<string>): boolean {
-  return pr.reviewRequests?.some((r) => {
-    if (r.__typename !== "Team") return false;
-    if (myTeams.size === 0) return true;
-    return (!!r.slug && myTeams.has(r.slug)) || (!!r.name && myTeams.has(r.name));
-  });
-}
-
-// Both `org/slug` and bare `slug`, since either can show up on a review request.
-function teamMatchSet(teams: string[]): Set<string> {
-  return new Set(teams.flatMap((t) => [t, t.split("/").pop() ?? t]));
-}
-
-function categorizePR(pr: PR, ghLogin: string | null, myTeams: Set<string>): PRCategory | null {
-  if (ghLogin && pr.author.login === ghLogin) {
-    if (pr.isDraft) return "yourDrafts";
-    if (pr.reviewDecision === "CHANGES_REQUESTED") return "needsAction";
-    const ciFailing = pr.statusCheckRollup?.some((c) =>
-      c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT" || c.conclusion === "CANCELLED" ||
-      c.state === "FAILURE" || c.state === "ERROR"
-    );
-    if (ciFailing) return "needsAction";
-    if (pr.reviewDecision === "APPROVED" && pr.mergeable !== "CONFLICTING") return "readyToMerge";
-    return "waiting";
-  }
-  if (pr.reviewRequests?.some((r) => r.__typename === "User" && r.login === ghLogin)) return "needsYourReview";
-  if (requestedFromMyTeam(pr, myTeams)) return "needsTeamReview";
-  return null;
-}
-
-type UpdatedWindow = "1mo" | "3mo" | "1y" | "any";
-
-const UPDATED_WINDOWS: { key: UpdatedWindow; label: string; days: number | null }[] = [
-  { key: "1mo", label: "Last month",    days: 30 },
-  { key: "3mo", label: "Last 3 months", days: 90 },
-  { key: "1y",  label: "Last year",     days: 365 },
-  { key: "any", label: "Any time",      days: null },
-];
-
-// Filtered client-side on `updatedAt` (already fetched) rather than via `gh --search`: the search API's
-// secondary rate limit is far tighter than the repo endpoints, and this makes the toggle instant.
-function withinUpdatedWindow(pr: PR, updatedWithin: UpdatedWindow): boolean {
-  const days = UPDATED_WINDOWS.find((w) => w.key === updatedWithin)?.days;
-  if (!days) return true;
-  return Date.now() - new Date(pr.updatedAt).getTime() <= days * 86400000;
-}
+type PR = GhPRNode;
 
 // GitHub's five Pull-requests views. "inbox" is served entirely from the local repo fan-out; the other
 // four go through `gh search prs` for identity, then hydrate, so they also see repos with no local clone.
@@ -110,6 +39,17 @@ interface Props {
   onSelectPR?: (sel: SelectedPR) => void;
   width?: number;
   onWidthChange?: (w: number) => void;
+  // Inbox data is owned by Dashboard (`usePRInbox`) so the Sessions panel counts the same PRs.
+  prs: PR[];
+  repos: RepoEntry[];
+  loading: boolean;
+  error: string | null;
+  lastRefreshed: Date;
+  ghLogin: string | null;
+  myTeams: Set<string>;
+  updatedWithin: UpdatedWindow;
+  onUpdatedWithinChange: (w: UpdatedWindow) => void;
+  onRefresh: () => void;
 }
 
 function timeAgo(iso: string): string {
@@ -371,9 +311,11 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction, onSelectPR }: {
   );
 }
 
-interface RepoEntry { name: string; branches: string[]; repoUrl: string }
-
-export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeAction, onSelectPR, width: controlledWidth, onWidthChange }: Props) {
+export function PRsDrawer({
+  onClose, onOpenTerminal, onOpenRepo, onRunClaudeAction, onSelectPR,
+  width: controlledWidth, onWidthChange,
+  prs, repos, loading, error, lastRefreshed, ghLogin, myTeams, updatedWithin, onUpdatedWithinChange, onRefresh,
+}: Props) {
   const { theme: t } = useTheme();
 
   // ── Drawer resize ────────────────────────────────────────────────────────────
@@ -396,19 +338,9 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     window.addEventListener("mouseup", onUp);
   };
 
-  const [prs, setPRs] = useState<PR[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [claudeWorktrees, setClaudeWorktrees] = useState<{ repo: string; branch: string; path: string; merged: boolean }[]>([]);
   const [showWorktrees, setShowWorktrees] = useState(true);
   const [wtMsg, setWtMsg] = useState<string | null>(null);
-  const [repos, setRepos] = useState<RepoEntry[]>([]);
-  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [ghLogin, setGhLogin] = useState<string | null>(null);
-  const [myTeams, setMyTeams] = useState<Set<string>>(new Set());
-  const [updatedWithin, setUpdatedWithin] = useState<UpdatedWindow>(
-    () => (localStorage.getItem("tdash:prs-updated-window") as UpdatedWindow) ?? "3mo"
-  );
   const [showWindowMenu, setShowWindowMenu] = useState(false);
   // Not persisted on purpose: opening straight onto a search-backed view would fire a search on mount.
   const [view, setView] = useState<PRView>("inbox");
@@ -447,16 +379,10 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     setClaudeWorktrees((prev) => prev.filter((w) => w.path !== path));
   };
 
+  // The fan-out itself lives in Dashboard; ↺ still drops the search caches, which don't.
   const load = () => {
-    setLoading(true); setError(null);
     setViewCache({});
-    window.terminal.listGithubRepos()
-      .then((repoList) => {
-        setRepos(repoList);
-        return window.terminal.listPRs(repoList.map((r) => r.name));
-      })
-      .then((data) => { setPRs(data); setLoading(false); setLastRefreshed(new Date()); })
-      .catch((err: Error) => { setError(err.message ?? "Failed to load PRs"); setLoading(false); });
+    onRefresh();
     loadWorktrees();
   };
 
@@ -493,20 +419,6 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     if (v !== "inbox" && !viewCache[v]) loadView(v);
   };
 
-  useEffect(() => { load(); }, []);
-
-  useEffect(() => {
-    window.terminal.getGhLogin().then(setGhLogin).catch(() => setGhLogin(null));
-    window.terminal.getMyTeams()
-      .then((teams) => setMyTeams(teamMatchSet(teams)))
-      .catch(() => setMyTeams(new Set()));
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(load, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
-
   useEffect(() => { loadWorktrees(); }, []);
 
   useEffect(() => {
@@ -520,13 +432,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, showWindowMenu, showViewMenu]);
 
-  // Bucket once: uncategorised PRs render nowhere, so the header counts what's actually in the inbox.
-  const buckets = prs.reduce<Partial<Record<PRCategory, PR[]>>>((acc, pr) => {
-    if (!withinUpdatedWindow(pr, updatedWithin)) return acc;
-    const key = categorizePR(pr, ghLogin, myTeams);
-    if (key) (acc[key] ??= []).push(pr);
-    return acc;
-  }, {});
+  const buckets = bucketPRs(prs, ghLogin, myTeams, updatedWithin);
   const inboxCount = Object.values(buckets).reduce((n, b) => n + (b?.length ?? 0), 0);
 
   // The Updated window applies to every view, so it stays instant — search is never re-issued for it.
@@ -690,11 +596,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
                 return (
                   <button
                     key={key}
-                    onClick={() => {
-                      setUpdatedWithin(key);
-                      localStorage.setItem("tdash:prs-updated-window", key);
-                      setShowWindowMenu(false);
-                    }}
+                    onClick={() => { onUpdatedWithinChange(key); setShowWindowMenu(false); }}
                     style={{
                       display: "flex", alignItems: "center", gap: 7, width: "100%",
                       background: active ? t.surface3 : "transparent",
@@ -784,7 +686,7 @@ export function PRsDrawer({ onClose, onOpenTerminal, onOpenRepo, onRunClaudeActi
           </div>
         )}
 
-        {!busy && !error && view === "inbox" && CATEGORIES.map(({ key, label }) => {
+        {!busy && !error && view === "inbox" && PR_CATEGORIES.map(({ key, label }) => {
           const bucket = buckets[key] ?? [];
           const color = CATEGORY_COLOR[key];
           const open = isSectionOpen(key, bucket.length);

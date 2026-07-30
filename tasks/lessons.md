@@ -1564,3 +1564,181 @@ the ones it does not.
   assert `git diff --numstat <pinned-base> HEAD`, and state in the commit message whose work it carries —
   nothing is lost when both sides use anchored read-modify-write, but the attribution is wrong and only
   the log entry records it.
+- **`2>/dev/null` on an *existence* check makes a wrong command look like an absent file.**
+  `ls -la --time-style=+%s /tmp/linear-*.json 2>/dev/null` printed nothing — `--time-style` is GNU
+  coreutils and macOS BSD `ls` rejects it, so the usage error went to stderr and my own redirect ate
+  it. "No prior witnesses exist" was the literal reading; a plain `ls -1` found 20+, and the missing
+  witness would have cost the run its strongest check (a cross-run diff no single-run invariant
+  replaces). It fails *plausibly*: the notes predict `/tmp` may be cleared on reboot, so the empty
+  result had an explanation waiting. Let stderr through on any probe whose emptiness you will act on,
+  or test `rc` separately from the output. Use `stat -f %m` for epoch mtimes on macOS.
+- **A count is an aggregate — do not read it as an identity.** Three artefacts each reported 14 open
+  Linear issues; MOB-495 had left the set and MOB-515 entered it. The habitual phrase "still 14 open,
+  same 14 ids" welds cardinality to membership, and the slice census moved underneath it too
+  (`backlog 10→8, started 2→4`) while the total held. Same family as `grep -c` counting lines and
+  `wc -m` returning bytes: compare the sorted **set**, and treat every summary promoted to "proof two
+  payloads are the same data" as inheriting the blind spot of being a summary.
+
+## 2026-07-30 — Three bug reports, one modal, and none of them named it
+
+No user correction. Phase 2 of the Sessions panel shipped and verified; the cost was entirely in the
+driver, and every failure pointed somewhere other than its cause.
+
+**What happened.** The driver clicked the sidebar's `+` (`aria-label="New terminal"`) expecting a new
+panel. It opens a `DirectoryPicker` modal. Three symptoms followed, none mentioning an overlay:
+
+1. no `SHELLS` section appeared → read as *the agent/shell split is broken*;
+2. `writeToFocusedTerminal("cd …")` put the branch on the **previously** focused row → read as
+   *focus tracking is broken*;
+3. every later `locator.click()` timed out after 30s with `<div> intercepts pointer events` → read as
+   *a flaky selector*.
+
+I had three drafted explanations before the real one arrived, and the real one arrived last because it
+sits behind the longest timeout in the run.
+
+**Second: the terminal showed an error from a build that no longer existed.** The first screenshot had
+`Error occurred in handler for 'terminal:get-activity': No handler registered` — for a handler compiled
+minutes earlier. The app replays `~/.terminal-dashboard/history/terminal-<N>.log` on panel mount, so
+the *bundle* was current and the *pixels* were old. This is the exact inverse of the stale-build entry
+from 2026-07-28 above, with an identical symptom, and the same family as the run-5 and run-10 Linear
+entries: a cached artefact read as a fresh observation.
+
+**Rules for next time.**
+- **Screenshot after any driver action that could open something**, before the next action. One call
+  would have replaced three wrong diagnoses. A click timeout naming `intercepts pointer events` is
+  never a selector problem — stop tuning the locator and find what is on top.
+- **A rendered artefact is not a statement about the current build** when the app replays its own
+  history. Arbitrate from behaviour that could not occur if the claim were true — `needs input` firing
+  proved the handler was registered, because that branch needs a non-null timestamp from it.
+- **Ask what a cold launch does *not* contain.** Restored panels start at `~` with no branch, so the
+  `⎇`/`⟳` second lines render nothing on a bare launch: a driver that launches and screenshots
+  verifies the empty case and reports it as coverage. Same shape as an invariant that cannot fail.
+- **Read state with `page.evaluate`, not locators.** Finding the sidebar by its known 264px width and
+  returning `innerText` + `getComputedStyle(span).color` per row proved the whole state machine by
+  colour (`needs input` `rgb(233,145,73)` vs `2d` `rgb(110,191,129)`) with nothing to guess. Locators
+  are for *acting* on an element, not for asking what is on screen.
+- **`playwright-core` is the whole dependency** for `_electron` — installs in a second, no browser
+  download. "Playwright isn't installed anywhere" is not a reason to stop verifying.
+- Design note that paid off: when two surfaces show the same derived number, share the **derivation**,
+  not the source. Sharing only the raw PR list would still have let the drawer's team + date filters
+  drift from the sidebar's count — 17 next to 1, same label, one screen.
+
+## 2026-07-30 — A default that makes output well-formed is where the guard goes blind
+
+Reshaping the Linear payload to a consumer schema wanting a numeric `priority`, I wrote
+`.priority.value // 0` and guarded it with `priority_numeric` ("every row's priority is a number").
+Both are individually reasonable. Together they are a hole: jq's `//` fires on `null`, on `false` **and**
+on a missing key, and Linear has a genuine `{"value":0,"name":"No priority"}`. So the check passes
+identically whether the `0` came from the API or from my own fallback. The output was in fact correct —
+but only because I went back afterwards and measured that the fallback never fired
+(`select(.priority|has("value")|not) | length` → 0), which is not something the guard could tell me.
+
+**Rules for next time.**
+- **Assert presence, then project without a fallback.** `jq -e '[.[]|.priority|has("value")]|all'` first;
+  `.priority.value` second. Reserve `//` for cases where both inputs genuinely mean the same thing.
+- **Suspect any default that yields a well-formed value** — `0` for a number, `""` for a string, `[]`
+  for a list. That is precisely the shape a downstream invariant cannot question. Same family as the
+  fail-open guards already listed here, but the defect is *upstream* of a correctly-written check.
+- **Measure the field before trusting the wiki's sketch of it.** The page said `priority` is an object;
+  it did not say whether it can be absent. One `[.issues[].priority|type]|unique` settled it (always
+  object, never null, 86/86) and turned a guess into a citable fact.
+- **A tool's param doc is not its payload's vocabulary.** `list_issues` documents `0=None`; the payload
+  says `"No priority"`. Matching on the doc's word silently never fires.
+
+## 2026-07-30 — Listing the existing guard is not the same as running it
+
+Session start ran the prescribed `ls knowledge-base/scripts/linear-*.sh`, and
+`linear-reply-verify.sh` was right there in the output. I then hand-wrote a fresh Python reply-verifier,
+which globbed `<SESSION_DIR>/*.jsonl` and matched nothing — the transcript lives *beside* the session
+directory (`~/.claude/projects/<slug>/<SESSION_ID>.jsonl`), which the existing script already resolves
+correctly. So the hand-roll did not duplicate working code, it regressed to a fixed bug.
+
+**Rules for next time.**
+- **The KB's "look for the executable" rule is necessary, not sufficient.** I looked, found it, and
+  still reimplemented. The step that transfers the knowledge is *invoking* it. Treat "I'll just inline a
+  quick version" as the same defect as never looking.
+- **A missing input must fail differently from a violated invariant.** `[ -f "$TX" ] || die "no
+  transcript at $TX"`. My guard printed `NO_ARRAY_IN_TRANSCRIPT` — the identical string it emits when
+  the array-carrying message genuinely hasn't flushed yet — so it sent me to re-flush a message that was
+  already on disk. A guard that answers questions about itself in the vocabulary of its verdict wastes
+  the cycle twice.
+
+## 2026-07-30 — A tautological assert reads exactly like a passing one
+
+Same recurring Linear query (14 records, reply guard `IDENTICAL`). Three lessons, one of which corrects
+a rule I wrote this morning.
+
+- **A guard whose two sides come from the same source cannot fail, and prints as a pass.** I had recorded
+  `RUN_START=$(stat -f %B <session dir>)` as a lower bound on the query. The session directory is created
+  lazily at the **first spill**, so `%B` *is* the first tool result's mtime: pre-query `date -u +%s` was
+  `1785419040`, `%B` was `1785419155`, the spill was `1785419155`. The earlier run's `delta=0s` was cited
+  as evidence the bound was tight; it was the tautology `spill_mtime >= spill_mtime`. Before trusting a
+  comparison, ask where each side came from — if both derive from the same artefact, the assert is
+  decoration. And a stamp that drifts late doesn't just go inert: every *other* gate measured against it
+  loosens by the drift, so it fails **open**.
+- **"Both obvious repairs are worse than the bug" deserves one more look before it's recorded.** I had
+  dismissed re-stamping because "the next parallel block can overtake it" — true only if the query is
+  batched. Not batching one call was available the whole time. Batching independent calls is an
+  efficiency preference, and I had promoted it to a constraint and then designed around it.
+- **When two prescriptions conflict, check whether the artefact is per-run before picking a side.** The
+  shared guard asserted a colour ramp; the rule said ship `null`. Run 51 resolved it by dropping the
+  script for two inline `jq` lines — and silently gave up the cross-run witness diff. The guard is already
+  snapshotted per run, so patching *that* copy keeps every invariant. Choosing between two options is
+  worth suspecting when the thing being argued over is already private to you.
+- **`sort -n | head` is a truncation that looks like a complete answer.** Projecting 21 dated artefacts
+  oldest-first and capping at 40 lines cut the newest rows, which is precisely where the transition I was
+  arbitrating lived. All 21 surviving rows agreed with each other and with a wrong conclusion. My two
+  earlier `| head` lessons both surface as a bad verdict or a missing side effect — this one surfaces as
+  nothing at all. On ordered data, truncate the end you already understand: `sort -rn`.
+- **The check that guards against duplicates reported a directory that does not exist.** `ls -1d
+  ~/.claude/skills/learned-*/ | wc -l` → `1`; the same glob a command later → `no matches found`; `find`
+  → `0`. Under `nullglob` the pattern vanishes, `ls -1d` runs with no arguments, lists `.`, and the count
+  is one. With `nullglob` off the failed glob kills the whole command, so a multi-directory sweep silently
+  checks nothing and its empty output reads as "clean". Count with `find <dir> -maxdepth 1 -type d -name
+  '<pat>' | wc -l`. Fourth in my agrees-with-any-hypothesis list — and the first to fire inside a gate
+  rather than inside the work.
+
+## 2026-07-30 — The shared git index is not yours, and neither is the worktree
+
+Three concurrent `claude -p` peers were committing to `knowledge-base` throughout the capture. HEAD moved
+four times in twenty minutes (`0fac1b5 → fa184da → eaf54df → 94c82e5`), and both wiki pages I needed to
+edit carried other sessions' uncommitted hunks.
+
+**Rules for next time.**
+- **Assert the staged path set, then don't trust `git commit` anyway.** The count assert fired correctly —
+  4 paths became 6 when a peer staged its own two digests between my `add` and my `commit` — but a
+  path-set assert cannot see *foreign hunks inside a file you legitimately staged*. And the obvious
+  escape, `git commit -m msg -- <paths>`, commits the **worktree**, sweeping peer text in.
+- **Commit through a private index.** `GIT_INDEX_FILE=/tmp/x git read-tree HEAD`, `update-index
+  --cacheinfo` your own blobs, `write-tree`, `commit-tree -p HEAD`, then
+  `update-ref refs/heads/main <new> <old>` — the old-value argument is a CAS that fails if HEAD moved.
+  The shared index is never touched, so a peer's staged paths cannot ride along.
+- **Build the blob from HEAD plus only your transformations, and verify by content.** `git show
+  HEAD:path`, apply your edits, then assert every added line belongs to your own slice
+  (`foreign_added_lines=0`). Slice the inserted text *out of the worktree file* rather than retyping it.
+- **Your commit protects `main`, not the worktree.** After I committed, a peer rewrote `wiki/log.md` in the
+  worktree from a stale base and my just-committed 28-line entry vanished from it — the next peer commit
+  would have silently reverted it from `main`. Re-assert your content in the worktree afterwards, as a
+  union with whatever they added, and verify both survive.
+- **The Edit tool's staleness error is a concurrent-writer detector.** "File has not been read yet" on a
+  file I had read minutes earlier means *someone else wrote it*, not that I forgot. Treat it as a signal
+  to re-grep for your own anchors before re-editing, not as a formality to satisfy with a re-read.
+- **Check who solved it first before writing it up.** Two of my three findings were already recorded by a
+  peer's run 53, one of them better than mine. Grepping the *uncommitted* worktree — not just HEAD — is
+  what surfaced that; a de-dup pass against committed history alone would have shipped a duplicate.
+- **My own commit guard deleted a peer's lines and 16 of my 17, and reported green.** Rebuilding a shared
+  file as HEAD-blob + my signature-carrying hunks, the assert set was `leaked=0` (no *foreign* line got in)
+  and `sigs_present=True` (my signature is *somewhere*). Neither asks the dual question, so a `difflib`
+  `replace` opcode that aligned my 1-line heading against a peer's 3-line heading passed — committing my
+  heading above their body. `mine_removed=3` was printed and **no condition consumed it**: a value in the
+  output but in no assert is documentation, not a guard. Fix: state `expected_added` *before* the rebuild,
+  and for appends assert `result.startswith(head_text)` — one comparison covering dropped lines, reordering
+  and foreign edits, borrowing no diff heuristic. General rule: **an assert over a transformation must bound
+  both directions** — nothing added that shouldn't be, nothing lost that should be. Every green-but-wrong
+  guard I have recorded checked one direction only.
+- **An uncommitted append into a shared file has a lifetime of seconds.** I appended a section to
+  `wiki/log.md`, then spent a few minutes editing three other files. Peer commit `c62b835` rewrote that
+  file wholesale and my section was simply gone — while every section I had already *committed* survived
+  untouched. This is not the recorded "peer commit swallows your staged hunk" case; nothing was staged and
+  nothing warned. Append and commit in the same breath. Batching edits across files and committing at the
+  end is the habit that loses work here.

@@ -7,6 +7,7 @@ import {
 } from "../chrome";
 import type { DotState } from "../chrome";
 import type { TaskSummary } from "../types/tasks";
+import type { GhPRNode } from "../hooks/useTerminal";
 
 // ── Terminal tabs ─────────────────────────────────────────────────────────────
 
@@ -18,32 +19,22 @@ export interface TerminalTab {
   gitBranch?: string;
 }
 
-// ── PR data — feeds the session row badges only; browsing/tracking lives in PRsDrawer ──
-
-interface PR {
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  headRefOid: string;
-  isDraft: boolean;
-  createdAt: string;
-  updatedAt: string;
-  reviewDecision: string | null;
-  repository: { name: string; nameWithOwner: string };
-  author?: { login: string };
-  additions?: number;
-  deletions?: number;
-}
-
 interface Props {
   tabs: TerminalTab[];
   focusedId: string | null;
   onFocusTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onAddTab: () => void;
-  onReposLoaded: (repos: { name: string }[]) => void;
+  /** Dashboard's shared fan-out — feeds the session rows' #PR badges only. */
+  prs: GhPRNode[];
+  needYouCount: number | null;
+  onOpenPRs: () => void;
 }
+
+// An agent that has stopped printing but still has work open is waiting on you. The task gate is what
+// keeps this off every idle shell, and 10s is above Claude's longest gap between spinner frames.
+const SILENT_MS = 10_000;
+const LIVE_MS = 3_000;
 
 /** Compact elapsed time for the session rows — "now", "4m", "2h", "3d". */
 function shortAgo(epochMs: number): string {
@@ -62,12 +53,13 @@ function isBranchTab(title: string): boolean {
 export const SIDEBAR_W = 264;
 
 export function RepoSidebar({
-  tabs, focusedId, onFocusTab, onCloseTab, onAddTab, onReposLoaded,
+  tabs, focusedId, onFocusTab, onCloseTab, onAddTab, prs, needYouCount, onOpenPRs,
 }: Props) {
   const { theme: t } = useTheme();
 
   // Terminal tab hover
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
+  const [prRowHovered, setPrRowHovered] = useState(false);
 
   // Panels that have a recorded Claude session — drives the ✳ icon visibility
   const [claudePanelNums, setClaudePanelNums] = useState<Set<number>>(new Set());
@@ -109,45 +101,20 @@ export function RepoSidebar({
     return () => clearInterval(id);
   }, []);
 
-  // PR data — feeds the session row's #PR / +adds -dels badges only
-  const [prs, setPRs] = useState<PR[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Pinned repos — set by PRsDrawer; read-only here, just scopes which repos we fetch PRs for
-  const [pinnedRepos] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem("tdash:pinned-repos");
-      return new Set(saved ? JSON.parse(saved) : []);
-    } catch { return new Set(); }
-  });
+  // Last-output stamps drive the running / needs-input split. Polled only while an agent is open, so
+  // a window of plain shells costs nothing.
+  const [activity, setActivity] = useState<Record<number, number>>({});
+  const hasAgents = tabs.some((tb) => claudePanelNums.has(tb.number));
+  useEffect(() => {
+    if (!hasAgents) return;
+    const poll = () => window.terminal.getActivity().then(setActivity).catch(() => {});
+    poll();
+    const id = setInterval(poll, 2_000);
+    return () => clearInterval(id);
+  }, [hasAgents]);
 
   // Per-repo working tree line stats (adds + dels) for tab cards
   const [repoTabStats, setRepoTabStats] = useState<Record<string, { adds: number; dels: number }>>({});
-
-  // PR lookup cache for tab branches not covered by the main prs list (e.g. other-author PRs)
-  const [tabPRCache, setTabPRCache] = useState<Record<string, PR>>({});
-
-  const load = () => {
-    setLoading(true);
-    window.terminal.listPRs([...pinnedRepos]).then((data) => {
-      setPRs(data);
-      setLoading(false);
-      window.terminal.listGithubRepos().then((localRepos) => {
-        const names = localRepos.map(r => r.name);
-        const allNames = [...new Set([...data.map((p) => p.repository.name), ...names])];
-        onReposLoaded(allNames.map(name => ({ name })));
-      }).catch(() => {
-        const repos = [...new Map(data.map((p) => [p.repository.name, { name: p.repository.name }])).values()];
-        onReposLoaded(repos);
-      });
-    }).catch(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    const interval = setInterval(load, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Fetch +/- line totals for repos currently open in tabs
   useEffect(() => {
@@ -168,32 +135,6 @@ export function RepoSidebar({
         .catch(() => {});
     });
   }, [tabs.map(t => t.cwd).join("|")]);
-
-  // Fetch PRs for tab branches not already in the main prs list (handles other-author PRs)
-  useEffect(() => {
-    const tabKey = tabs.map(t => `${t.cwd}:${t.gitBranch}`).join("|");
-    if (!tabKey) return;
-    const pairs = tabs
-      .map(tab => ({
-        repo: tab.cwd?.includes("/GitHub/") ? tab.cwd.split("/GitHub/")[1]?.split("/")[0] : null,
-        branch: tab.gitBranch ?? null,
-      }))
-      .filter((p): p is { repo: string; branch: string } => !!p.repo && !!p.branch);
-    // Only fetch for branches not already resolved
-    const missing = pairs.filter(p =>
-      !prs.some(pr => pr.repository.name === p.repo && pr.headRefName === p.branch) &&
-      !tabPRCache[`${p.repo}:${p.branch}`]
-    );
-    const reposToFetch = [...new Set(missing.map(p => p.repo))];
-    reposToFetch.forEach(repo => {
-      window.terminal.listPRs([repo]).then(data => {
-        data.forEach(pr => {
-          const key = `${pr.repository.name}:${pr.headRefName}`;
-          setTabPRCache(prev => ({ ...prev, [key]: pr }));
-        });
-      }).catch(() => {});
-    });
-  }, [tabs.map(t => `${t.cwd}:${t.gitBranch}`).join("|"), prs.length]);
 
   return (
     <div
@@ -225,6 +166,32 @@ export function RepoSidebar({
           >+</button>
         </div>
 
+        {/* Cross-link to the PRs panel. Not the footer — Phase 6 reserves that for the status mirror. */}
+        <button
+          onClick={onOpenPRs}
+          onMouseEnter={() => setPrRowHovered(true)}
+          onMouseLeave={() => setPrRowHovered(false)}
+          style={{
+            height: 32, flexShrink: 0, width: "100%",
+            display: "flex", alignItems: "center", gap: 7,
+            padding: "0 10px 0 12px", textAlign: "left",
+            border: "none", borderBottom: `1px solid ${t.borderMid}`,
+            cursor: "pointer",
+            ...rowState(t, false, prRowHovered),
+          }}
+        >
+          <span style={{ flex: "none", color: t.label4, fontSize: 11 }}>⑃</span>
+          <span style={{ flex: "none", color: t.label2, fontSize: 12, ...SYS_FONT }}>Pull requests</span>
+          {/* Hidden at 0 as well as while loading — "0 need you" is noise, and the empty label says it. */}
+          {needYouCount != null && needYouCount > 0 && (
+            <span style={{ flex: "0 1 auto", color: t.blue, fontSize: 11, ...MONO_FONT, ...TABULAR, ...CLIP }}>
+              · {needYouCount} need you
+            </span>
+          )}
+          <span style={{ flex: 1, minWidth: 0 }} />
+          <span style={{ flex: "none", color: t.label4, fontSize: 12 }}>›</span>
+        </button>
+
         {/* Session rows, grouped by agents vs plain shells */}
         <div style={{ flex: 1, overflowY: "auto", paddingBottom: 6 }}>
           {(() => {
@@ -236,7 +203,9 @@ export function RepoSidebar({
             const agents = tabs.filter((tb) => claudePanelNums.has(tb.number)).sort(byRepo);
             const shells = tabs.filter((tb) => !claudePanelNums.has(tb.number)).sort(byRepo);
 
-            const renderRow = (tab: TerminalTab) => {
+            // One chrome, two shapes: an agent's second line carries branch + PR, a shell's carries
+            // branch + working-tree ±. Splitting the whole row would have been two copies of the frame.
+            const renderRow = (tab: TerminalTab, kind: "agent" | "shell") => {
               const isActive = tab.id === focusedId;
               const isHovered = hoveredTabId === tab.id;
               const gitRepoName = repoOf(tab) || null;
@@ -251,31 +220,41 @@ export function RepoSidebar({
                 return tab.cwd.split("/").filter(Boolean).pop() ?? "idle";
               })();
 
-              // Matching PR: main list first, then the per-tab cache (covers other-author PRs)
-              const cacheKey = gitRepoName && tab.gitBranch ? `${gitRepoName}:${tab.gitBranch}` : null;
               const tabPR = tab.gitBranch
-                ? (prs.find((pr) =>
+                ? prs.find((pr) =>
                     pr.headRefName === tab.gitBranch &&
                     (!tab.cwd || tab.cwd.includes(pr.repository.name))
-                  ) ?? (cacheKey ? tabPRCache[cacheKey] : null) ?? null)
+                  ) ?? null
                 : null;
 
               const wtStats = gitRepoName ? repoTabStats[gitRepoName] : null;
               const prStats = tabPR != null ? { adds: tabPR.additions ?? 0, dels: tabPR.deletions ?? 0 } : null;
               const tabStats = (wtStats && (wtStats.adds > 0 || wtStats.dels > 0)) ? wtStats : prStats;
 
-              // Activity comes from the agent's task list — the only signal that actually means "working"
-              const state: DotState = summary && summary.inProgress > 0 ? "running" : "idle";
-              const statusText = summary
-                ? (summary.inProgress > 0 ? shortAgo(summary.updatedAt)
-                  : summary.completed === summary.total ? "done"
-                  : `${summary.completed}/${summary.total}`)
-                : null;
+              // A silent PTY with tasks still open means the agent is waiting on you; recent output
+              // means it's working. Neither applies to a plain shell, which is always idle.
+              const lastData = activity[tab.number];
+              const working = kind === "agent" && !!summary && summary.inProgress > 0;
+              const silent = lastData != null && Date.now() - lastData >= SILENT_MS;
+              const live = lastData != null && Date.now() - lastData < LIVE_MS;
+              const state: DotState =
+                kind !== "agent" ? "idle"
+                : working && silent ? "needs-input"
+                : live || working ? "running"
+                : "idle";
+
+              const statusText = kind !== "agent" ? null
+                : state === "needs-input" ? "needs input"
+                : summary
+                  ? (summary.inProgress > 0 ? shortAgo(summary.updatedAt)
+                    : summary.completed === summary.total ? "done"
+                    : `${summary.completed}/${summary.total}`)
+                  : null;
 
               const secondLine = tab.gitBranch
-                ? { icon: "⎇", text: tab.gitBranch, clip: CLIP_LEFT }
+                ? { icon: kind === "agent" ? "⎇" : "⟳", text: tab.gitBranch }
                 : tab.cwd
-                  ? { icon: "", text: tab.cwd.replace(/^\/Users\/[^/]+/, "~"), clip: CLIP_LEFT }
+                  ? { icon: "", text: tab.cwd.replace(/^\/Users\/[^/]+/, "~") }
                   : null;
 
               return (
@@ -302,7 +281,7 @@ export function RepoSidebar({
                     {statusText && (
                       <span style={{
                         flex: "none", fontSize: 11,
-                        color: state === "running" ? t.green : t.label3,
+                        color: state === "needs-input" ? t.orange : state === "running" ? t.green : t.label3,
                         ...MONO_FONT, ...TABULAR,
                       }}>{statusText}</span>
                     )}
@@ -332,17 +311,18 @@ export function RepoSidebar({
                         style={{
                           flex: "0 1 auto", fontSize: 11, lineHeight: "15px",
                           color: isActive ? t.label2 : t.label3,
-                          ...MONO_FONT, ...secondLine.clip,
+                          ...MONO_FONT, ...CLIP_LEFT,
                         }}
                       >{secondLine.text}</span>
                       <span style={{ flex: 1, minWidth: 0 }} />
-                      {tabStats && (tabStats.adds > 0 || tabStats.dels > 0) && (
+                      {/* 264px can't hold branch + ± + #PR, so each kind keeps only its own trailing badge */}
+                      {kind === "shell" && tabStats && (tabStats.adds > 0 || tabStats.dels > 0) && (
                         <span style={{ flex: "none", display: "flex", gap: 4, fontSize: 10, ...MONO_FONT, ...TABULAR }}>
                           {tabStats.adds > 0 && <span style={{ color: t.diffAddFg }}>+{tabStats.adds}</span>}
                           {tabStats.dels > 0 && <span style={{ color: t.diffDelFg }}>-{tabStats.dels}</span>}
                         </span>
                       )}
-                      {tabPR && (
+                      {kind === "agent" && tabPR && (
                         <span style={{ flex: "none", fontSize: 10, color: t.blue, ...MONO_FONT, ...TABULAR }}>#{tabPR.number}</span>
                       )}
                     </div>
@@ -356,11 +336,11 @@ export function RepoSidebar({
                 {agents.length > 0 && (
                   <div style={sectionLabel(t)}>Agents · {agents.length}</div>
                 )}
-                {agents.map(renderRow)}
+                {agents.map((tab) => renderRow(tab, "agent"))}
                 {shells.length > 0 && (
                   <div style={sectionLabel(t)}>Shells · {shells.length}</div>
                 )}
-                {shells.map(renderRow)}
+                {shells.map((tab) => renderRow(tab, "shell"))}
               </>
             );
           })()}

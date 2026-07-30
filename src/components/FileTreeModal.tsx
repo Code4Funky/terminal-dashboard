@@ -142,6 +142,16 @@ export function FileTreeDrawer({ repoName, onClose, linked = false, onToggleLink
   // ── Content search mode (grep) ───────────────────────────────────────────────
   const [contentMode, setContentMode] = useState(false);
 
+  // ── Root's git branch ────────────────────────────────────────────────────────
+  // Null for a non-repo root, which is why the chip is absent rather than showing a placeholder
+  const [branch, setBranch] = useState<string | null>(null);
+  useEffect(() => {
+    setBranch(null);
+    window.terminal.getRepoBranch(repoName).then((b) => {
+      if (rootRef.current === repoName) setBranch(b);
+    }).catch(() => {});
+  }, [repoName]);
+
   // ── Search modifiers ────────────────────────────────────────────────────────
   // Sticky: a modifier set once usually applies to the next search too
   const [caseSensitive, setCaseSensitive] = useState(() => loadSearchMode().caseSensitive);
@@ -415,6 +425,10 @@ export function FileTreeDrawer({ repoName, onClose, linked = false, onToggleLink
         {showList && totalFiles > 0 && (
           <span style={{ ...chipStyle(t, "accent"), flex: "none" }}>{totalFiles}{isContentSearch && grepPartial ? "+" : ""} files</span>
         )}
+        {/* One chip slot: the file count owns it while searching — 260px holds one chip, not two */}
+        {!showList && branch && (
+          <span style={{ ...chipStyle(t), ...CLIP }} data-tooltip={`On branch ${branch}`} data-tooltip-pos="below">⟳ {branch}</span>
+        )}
         {allRepos && allRepos.length > 1 && (
           <button
             onClick={() => setGlobalSearch((v) => !v)}
@@ -450,13 +464,6 @@ export function FileTreeDrawer({ repoName, onClose, linked = false, onToggleLink
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
           >⇄</button>
         )}
-        <button
-          onClick={onClose}
-          aria-label="Close"
-          style={{ ...iconBtn, fontSize: 14, color: t.label3 }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = t.surface2; e.currentTarget.style.color = t.label1; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = t.label3; }}
-        >×</button>
       </div>
 
       {/* Query field */}

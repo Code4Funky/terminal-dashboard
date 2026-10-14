@@ -65,7 +65,7 @@ function timeAgo(iso: string): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
-function ReviewPill({ decision }: { decision: string | null }) {
+function ReviewPill({ decision, isDraft }: { decision: string | null; isDraft: boolean }) {
   const { theme: t } = useTheme();
   type Cfg = { label: string; color: string; bg: string };
   const configs: Record<string, Cfg> = {
@@ -73,7 +73,10 @@ function ReviewPill({ decision }: { decision: string | null }) {
     CHANGES_REQUESTED: { label: "Changes requested", color: t.red,    bg: `${t.red}15` },
     REVIEW_REQUIRED:   { label: "Review pending",    color: t.orange, bg: `${t.orange}15` },
   };
-  const cfg = configs[decision ?? "REVIEW_REQUIRED"] ?? configs.REVIEW_REQUIRED;
+  // A draft isn't waiting on you, so it must not wear the same orange call to action.
+  const cfg: Cfg = isDraft
+    ? { label: "Draft", color: t.label3, bg: "transparent" }
+    : configs[decision ?? "REVIEW_REQUIRED"] ?? configs.REVIEW_REQUIRED;
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 5,
@@ -84,6 +87,90 @@ function ReviewPill({ decision }: { decision: string | null }) {
     }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.color, flexShrink: 0 }} />
       {cfg.label}
+    </span>
+  );
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+type CIState = "passing" | "failing" | "running" | "none";
+
+/** One verdict for the whole rollup. `CheckRun` reports conclusion+status, `StatusContext` reports
+ *  state — both collapse to the same three words. Failing outranks running outranks passing. */
+function ciRollup(checks: PR["statusCheckRollup"]): { state: CIState; label: string } {
+  if (!checks?.length) return { state: "none", label: "No checks" };
+  const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "CANCELLED"]);
+  const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+  const verdicts = checks.map((c) => {
+    const v = (c.conclusion ?? c.state ?? "").toUpperCase();
+    return FAILED.has(v) ? "failing" : PASSED.has(v) ? "passing" : "running";
+  });
+  const n = (k: string) => verdicts.filter((v) => v === k).length;
+  if (n("failing")) return { state: "failing", label: `${plural(n("failing"), "check")} failing` };
+  if (n("running")) return { state: "running", label: `${plural(n("running"), "check")} running` };
+  return { state: "passing", label: `${plural(verdicts.length, "check")} passing` };
+}
+
+// Decides whether a PR is reviewable at all, so it leads the signal row.
+function CIStatus({ checks }: { checks: PR["statusCheckRollup"] }) {
+  const { theme: t } = useTheme();
+  const { state, label } = ciRollup(checks);
+  const color = { passing: t.green, failing: t.red, running: t.orange, none: t.label4 }[state];
+  const svg = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" } as const;
+  return (
+    <span title={label} style={{ display: "inline-flex", color, flexShrink: 0 }}>
+      {state === "passing" && <svg {...svg}><circle cx="12" cy="12" r="9" /><polyline points="8.5 12.3 11 14.8 15.5 9.5" /></svg>}
+      {state === "failing" && <svg {...svg}><circle cx="12" cy="12" r="9" /><line x1="9.2" y1="9.2" x2="14.8" y2="14.8" /><line x1="14.8" y1="9.2" x2="9.2" y2="14.8" /></svg>}
+      {state === "running" && <svg {...svg}><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15.4 14" /></svg>}
+      {state === "none"    && <svg {...svg}><circle cx="12" cy="12" r="9" strokeDasharray="2 3" /></svg>}
+    </span>
+  );
+}
+
+// Muted at 0 so a live discussion is what your eye lands on.
+function CommentCount({ count }: { count: number }) {
+  const { theme: t } = useTheme();
+  const color = count > 0 ? t.label2 : t.label4;
+  return (
+    <span
+      title={count === 0 ? "No comments" : plural(count, "comment")}
+      style={{ display: "inline-flex", alignItems: "center", gap: 3, color, flexShrink: 0 }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20 14a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+      </svg>
+      <span style={{ fontSize: 11, ...MONO_FONT }}>{count}</span>
+    </span>
+  );
+}
+
+// `name` before `slug`: a Team's slug is org-qualified (`Skedulo/v3-backend-core`), its name isn't.
+const reviewerName = (r: PR["reviewRequests"][number]) => r.login ?? r.name ?? r.slug ?? "?";
+const isBotReviewer = (r: PR["reviewRequests"][number]) =>
+  r.__typename === "Bot" || /\[bot\]$/i.test(r.login ?? "");
+
+function initials(name: string): string {
+  const parts = name.replace(/\[bot\]$/i, "").split(/[-_. ]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0] ?? "?").slice(0, 2).toUpperCase();
+}
+
+// An unassigned PR gets a dashed ring rather than blank space — "nobody's on this" is itself a signal.
+function ReviewerAvatar({ reviewers }: { reviewers: PR["reviewRequests"] }) {
+  const { theme: t } = useTheme();
+  const RING = { width: 20, height: 20, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } as const;
+  if (!reviewers?.length) {
+    return <span title="No reviewer assigned" style={{ ...RING, border: `1px dashed ${t.label4}` }} />;
+  }
+  const [first, ...rest] = reviewers;
+  const color = isBotReviewer(first) ? t.purple : t.teal;
+  const names = reviewers.map(reviewerName).join(", ");
+  return (
+    <span title={names} style={{ display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+      <span style={{ ...RING, background: `${color}22`, border: `1px solid ${color}45`, color, fontSize: 9, fontWeight: 600 }}>
+        {initials(reviewerName(first))}
+      </span>
+      {rest.length > 0 && <span style={{ color: t.label4, fontSize: 9, ...MONO_FONT }}>+{rest.length}</span>}
     </span>
   );
 }
@@ -173,15 +260,23 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction, onSelectPR }: {
           {pr.isDraft ? "⎓" : "⎇"}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>{pr.title}</div>
+          <div style={{ color: t.label1, fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>
+            {pr.isDraft && (
+              <span style={{
+                color: t.label3, fontSize: 9, fontWeight: 600, letterSpacing: 0.5,
+                border: `1px solid ${t.borderMid}`, borderRadius: RADIUS_SM,
+                padding: "1px 4px", marginRight: 6, verticalAlign: 1,
+              }}>DRAFT</span>
+            )}
+            {pr.title}
+          </div>
           <div style={{ color: t.label4, fontSize: 10, ...MONO_FONT, marginTop: 2 }}>
             {pr.repository.nameWithOwner}#{pr.number} · {pr.author.login} · Updated {timeAgo(pr.updatedAt)}
           </div>
         </div>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        <ReviewPill decision={pr.reviewDecision} />
+        <div style={{ flexShrink: 0, marginTop: 1 }}>
+          <ReviewPill decision={pr.reviewDecision} isDraft={pr.isDraft} />
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
@@ -204,6 +299,13 @@ function PRCard({ pr, onOpenTerminal, onRunClaudeAction, onSelectPR }: {
           <span style={{ color: t.orange, fontSize: 12 }}>◉</span>
           <span style={{ fontSize: 12, color: t.orange, ...MONO_FONT }}>{shortSha}</span>
           <CopyButton text={pr.headRefOid} label="commit SHA" />
+        </div>
+
+        {/* Reviewability at a glance: can it be reviewed, is it being discussed, is anyone on it. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 2, flexShrink: 0 }}>
+          <CIStatus checks={pr.statusCheckRollup} />
+          <CommentCount count={pr.commentCount ?? 0} />
+          <ReviewerAvatar reviewers={pr.reviewRequests} />
         </div>
       </div>
 
@@ -441,7 +543,8 @@ export function PRsDrawer({
   const flatPRs = view === "inbox" ? [] : viewPRs(view) ?? [];
   const viewCount = (v: PRView) => (v === "inbox" ? inboxCount : viewPRs(v)?.length);
   const headerCount = view === "inbox" ? inboxCount : flatPRs.length;
-  const busy = loading || viewLoading;
+  // A background refresh over a cached inbox keeps the cards up; the spinner is for an empty first load.
+  const busy = (loading && prs.length === 0) || viewLoading;
 
   return (
     <div style={{

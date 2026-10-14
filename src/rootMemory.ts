@@ -4,11 +4,13 @@ import type { FileRef } from "./components/FileTreeModal";
 export interface RootState {
   expanded: string[];
   file: FileRef | null;
+  /** Working-tree file open in the diff pane — parked so a session switch doesn't lose your place. */
+  diff: { path: string; staged: boolean } | null;
 }
 
 const KEY = "tdash:file-roots";
 const MAX_ROOTS = 20;
-const EMPTY: RootState = { expanded: [], file: null };
+const EMPTY: RootState = { expanded: [], file: null, diff: null };
 
 function readAll(): Record<string, RootState> {
   try {
@@ -21,7 +23,7 @@ function readAll(): Record<string, RootState> {
 
 export function loadRoot(root: string): RootState {
   const s = readAll()[root];
-  return s ? { expanded: s.expanded ?? [], file: s.file ?? null } : EMPTY;
+  return s ? { expanded: s.expanded ?? [], file: s.file ?? null, diff: s.diff ?? null } : EMPTY;
 }
 
 export function saveRoot(root: string, patch: Partial<RootState>): void {

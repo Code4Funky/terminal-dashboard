@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTheme } from "../ThemeContext";
-import { MONO_FONT, Theme } from "../theme";
+import { MONO_FONT, TABULAR, Theme } from "../theme";
 import { RADIUS, drawerHeader, drawerTitle } from "../chrome";
 
 interface RepoEntry { name: string; visits: number; lastSeen: number }
+
+interface SkillUse { name: string; ts: number; repo: string }
+interface SkillTally { name: string; runs: number; lastUsed: number; repo: string }
 
 interface UsageSession {
   sessionId: string;
@@ -33,6 +36,7 @@ interface ClaudeStats {
   peakHour: number | null;
   allTimeDailyCounts: Record<string, number>;
   allTimeDailyModelTokens: Record<string, Record<string, number>>;
+  skillUses: SkillUse[];
   modelBreakdown: {
     model: string; cost: number; costContent: number; costCache: number;
     inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number;
@@ -194,6 +198,23 @@ function RepoChart({ repos, t }: { repos: RepoEntry[]; t: Theme }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function SkillList({ skills, t }: { skills: SkillTally[]; t: Theme }) {
+  const ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
+  return (
+    // One grid over all rows, so the four columns line up without hand-tuned widths.
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", columnGap: 8, rowGap: 6, alignItems: "baseline" }}>
+      {skills.map((s) => (
+        <React.Fragment key={s.name}>
+          <span style={{ fontSize: 12, color: t.label1, ...MONO_FONT, ...ellipsis }} title={s.name}>{s.name}</span>
+          <span style={{ fontSize: 11, color: t.label2, ...MONO_FONT, ...TABULAR, textAlign: "right" }}>{s.runs}×</span>
+          <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT, maxWidth: 130, ...ellipsis }} title={s.repo}>{s.repo}</span>
+          <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT, textAlign: "right" }}>{timeAgo(s.lastUsed)}</span>
+        </React.Fragment>
+      ))}
     </div>
   );
 }
@@ -463,6 +484,21 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
         return top ? shortModelName(top[0]) : "—";
       })()
     : "—";
+  // Same cutoff as the counters above, so the window boundary is defined once.
+  const skillsInWindow = (claude?.skillUses ?? [])
+    .filter((u) => !overviewCutoff || new Date(u.ts).toISOString().slice(0, 10) >= overviewCutoff);
+  const skillTallies: SkillTally[] = (() => {
+    const byName = new Map<string, SkillTally>();
+    for (const u of skillsInWindow) {
+      const prev = byName.get(u.name);
+      if (!prev) { byName.set(u.name, { name: u.name, runs: 1, lastUsed: u.ts, repo: u.repo }); continue; }
+      prev.runs++;
+      if (u.ts > prev.lastUsed) { prev.lastUsed = u.ts; prev.repo = u.repo; }
+    }
+    return [...byName.values()].sort((a, b) => b.lastUsed - a.lastUsed);
+  })();
+  const topSkills = [...skillTallies].sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name)).slice(0, 5);
+
   const allModels = claude
     ? Array.from(new Set(Object.values(claude.allTimeDailyModelTokens).flatMap(d => Object.keys(d))))
     : [];
@@ -592,6 +628,56 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
               )}
             </section>
 
+            {/* Skills */}
+            <section>
+              <SectionLabel icon="◇" title="Skills" sub={filter === "all" ? "all time" : filter} color={t.purple} />
+              {claude ? (
+                <>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                    <div style={{
+                      background: t.surface2, border: `1px solid ${t.borderMid}`,
+                      borderRadius: RADIUS, padding: "12px 16px", flex: 1, minWidth: 0,
+                    }}>
+                      <div style={{ fontSize: 10, color: t.label3, marginBottom: 6 }}>Top skills</div>
+                      {topSkills.length === 0 ? (
+                        <div style={{ fontSize: 17, fontWeight: 600, color: t.purple, ...MONO_FONT, lineHeight: 1.15 }}>—</div>
+                      ) : (
+                        <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 6, rowGap: 4, alignItems: "baseline" }}>
+                          {topSkills.map((s, i) => (
+                            <React.Fragment key={s.name}>
+                              <span style={{ fontSize: 10, color: t.label3, ...MONO_FONT, ...TABULAR }}>{i + 1}</span>
+                              <span style={{
+                                fontSize: 11, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? t.purple : t.label1, ...MONO_FONT,
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              }} title={s.name}>{s.name}</span>
+                              <span style={{ fontSize: 11, color: t.label3, ...MONO_FONT, ...TABULAR, textAlign: "right" }}>{s.runs}×</span>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{
+                      background: t.surface2, border: `1px solid ${t.borderMid}`,
+                      borderRadius: RADIUS, padding: "12px 16px", flex: 1, minWidth: 0,
+                    }}>
+                      <div style={{ fontSize: 10, color: t.label3, marginBottom: 4 }}>Skills used</div>
+                      <div style={{ fontSize: 22, fontWeight: 600, color: t.label1, ...MONO_FONT, lineHeight: 1 }}>{skillTallies.length}</div>
+                      <div style={{ fontSize: 11, color: t.label3, marginTop: 4 }}>{skillsInWindow.length} run{skillsInWindow.length !== 1 ? "s" : ""} total</div>
+                    </div>
+                  </div>
+                  <div style={card}>
+                    <div style={{ fontSize: 11, color: t.label3, marginBottom: 10, ...MONO_FONT }}>ordered by last use</div>
+                    {skillTallies.length > 0
+                      ? <SkillList skills={skillTallies} t={t} />
+                      : <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>No skills used in this window.</div>
+                    }
+                  </div>
+                </>
+              ) : (
+                <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Loading…</div>
+              )}
+            </section>
+
             {/* GitHub Repos */}
             <section>
               <SectionLabel icon="⎇" title="GitHub Repos" />
@@ -627,6 +713,7 @@ export function StatsDrawer({ onClose, onOpenSession }: Props) {
                 <div style={{ color: t.label3, fontSize: 12, padding: "8px 0" }}>Loading…</div>
               )}
             </section>
+
           </>
         )}
 

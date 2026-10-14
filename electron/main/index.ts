@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
 import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
-import { execSync, exec, spawn, type ChildProcess } from "child_process";
+import { execSync, exec, execFile, spawn, type ChildProcess } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 import * as fs from "fs";
 
 const TOOL_ENV = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
@@ -156,7 +157,7 @@ interface SavedPanel {
   title: string;
   group?: string; // panels sharing a group render as one split; absent on pre-split state files
   dir?: "row" | "column"; // split axis of that group
-  pinned?: boolean; // title was chosen deliberately, so cwd changes must not overwrite it
+  named?: boolean; // title carries what the cwd can't (rename, claude session), so `cd` must not overwrite it
 }
 interface ClaudeSessionEntry {
   claudeSessionId: string;
@@ -203,6 +204,7 @@ interface TaskSummary {
 }
 interface AppState {
   terminalCounter: number;
+  paneSize?: { cols: number; rows: number }; // newest measured terminal-pane geometry, see createSession
   lastPanels: SavedPanel[];
   panelTitles: Record<number, string>;
   panelClaudeSessions: Record<number, ClaudeSessionEntry[]>;
@@ -328,6 +330,118 @@ function collectClaudeJsonlFiles(): { file: string; projectDir: string }[] {
   return results;
 }
 
+// ── Skill usage ───────────────────────────────────────────────────────────────
+// Two forms in the transcript: a `Skill` tool_use (always a real skill) and a typed
+// `<command-name>/x</command-name>` (which also carries CLI built-ins like /exit and /model). Only
+// the second needs filtering, and only against disk — resolving both would erase skills that have
+// since been deleted, which is history the panel exists to show.
+const SKILL_DEDUPE_MS = 120_000;
+const COMMAND_NAME_RE = /<command-name>\/([a-z0-9][\w-]{0,48})<\/command-name>/g;
+
+interface SkillUse { name: string; ts: number; repo: string }
+
+function collectKnownSkillNames(): Set<string> {
+  const names = new Set<string>();
+  const walk = (dir: string, depth: number) => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p, depth + 1); continue; }
+      if (e.name === "SKILL.md") names.add(basename(dir));
+      else if (e.name.endsWith(".md") && basename(dir) === "commands") names.add(e.name.slice(0, -3));
+    }
+  };
+  walk(claudeSkillsDir, 0);
+  walk(claudeCommandsDir, 0);
+  walk(join(os.homedir(), ".claude", "plugins"), 0);
+  return names;
+}
+
+// ── Claude session titles ─────────────────────────────────────────────────────
+// Claude names its own sessions in the transcript: `custom-title` when you rename one, `ai-title`
+// for its guess (a rename stops the ai stream). Both are re-emitted as the conversation grows, so
+// the newest lands within a few KB of EOF — worth relying on, because transcripts reach 35 MB and
+// this is polled.
+const TITLE_TAIL_BYTES = 256 * 1024;
+const TITLE_MISS_RETRY_MS = 30_000;
+
+interface ClaudeTitle { title: string; source: "custom" | "ai" }
+interface TitleRead { path: string; size: number; mtimeMs: number; hit: ClaudeTitle | null; scannedWhole: boolean }
+
+const claudeTitleCache = new Map<string, TitleRead>();  // claudeSessionId → last read
+const claudeTitleMiss = new Map<string, number>();      // claudeSessionId → epoch ms before re-resolving
+
+function resolveTranscript(claudeSessionId: string, cwd: string): string | null {
+  const slug = cwd.replace(/[/.]/g, "-");
+  if (slug) {
+    const guess = join(claudeProjectsDir, slug, `${claudeSessionId}.jsonl`);
+    if (fs.existsSync(guess)) return guess;
+  }
+  // Claude rewrites some path segments, so the slug isn't recoverable from every cwd — scan instead.
+  try {
+    for (const proj of fs.readdirSync(claudeProjectsDir)) {
+      const p = join(claudeProjectsDir, proj, `${claudeSessionId}.jsonl`);
+      if (fs.existsSync(p)) return p;
+    }
+  } catch {}
+  return null;
+}
+
+// Newest wins, except that a custom title outranks an ai one sharing the same window.
+function scanTitle(text: string): ClaudeTitle | null {
+  const lines = text.split("\n");
+  let ai: ClaudeTitle | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('-title"')) continue;
+    try {
+      const e = JSON.parse(lines[i]);
+      if (e.type === "custom-title" && e.customTitle) return { title: String(e.customTitle), source: "custom" };
+      if (e.type === "ai-title" && e.aiTitle && !ai) ai = { title: String(e.aiTitle), source: "ai" };
+    } catch { /* the first line of a tail read is usually truncated */ }
+  }
+  return ai;
+}
+
+function readTail(path: string, size: number): string {
+  const start = Math.max(0, size - TITLE_TAIL_BYTES);
+  const fd = fs.openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+
+function readClaudeTitle(claudeSessionId: string, cwd: string): ClaudeTitle | null {
+  const cached = claudeTitleCache.get(claudeSessionId);
+  let path = cached?.path;
+  if (!path) {
+    if (Date.now() < (claudeTitleMiss.get(claudeSessionId) ?? 0)) return null;
+    path = resolveTranscript(claudeSessionId, cwd) ?? undefined;
+    if (!path) { claudeTitleMiss.set(claudeSessionId, Date.now() + TITLE_MISS_RETRY_MS); return null; }
+    claudeTitleMiss.delete(claudeSessionId);
+  }
+
+  try {
+    const st = fs.statSync(path);
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) return cached.hit;
+    let hit = scanTitle(readTail(path, st.size));
+    // Backstop for a title set once and never re-emitted; one whole-file pass per session, then never again.
+    const wholePass = !hit && !cached?.scannedWhole && st.size > TITLE_TAIL_BYTES;
+    if (wholePass) hit = scanTitle(fs.readFileSync(path, "utf8"));
+    claudeTitleCache.set(claudeSessionId, {
+      path, size: st.size, mtimeMs: st.mtimeMs, hit,
+      scannedWhole: (cached?.scannedWhole ?? false) || wholePass,
+    });
+    return hit;
+  } catch {
+    claudeTitleCache.delete(claudeSessionId);
+    return cached?.hit ?? null;
+  }
+}
+
 function computeClaudeStatsUncached(targetMonth?: string) {
   const now = Date.now();
   const today = new Date(now).toISOString().slice(0, 10);
@@ -371,6 +485,9 @@ function computeClaudeStatsUncached(targetMonth?: string) {
   // Per-model tracking for cost estimation
   interface ModelUsage { inp: number; cacheWrite: number; cacheRead: number; out: number }
   const monthModelUsage: Record<string, ModelUsage> = {};
+
+  const knownSkills = collectKnownSkillNames();
+  const rawSkillUses: (SkillUse & { session: string })[] = [];
 
   try {
     const files = collectClaudeJsonlFiles();
@@ -434,6 +551,24 @@ function computeClaudeStatsUncached(targetMonth?: string) {
             }
           }
 
+          // Skill invocations — see the note on collectKnownSkillNames for why only one form is filtered.
+          if (entry.timestamp) {
+            const ts = new Date(entry.timestamp as string).getTime();
+            const repo = basename((entry.cwd as string) ?? "") || "—";
+            const session: string = entry.sessionId ?? file;
+            const push = (name: string) => rawSkillUses.push({ name, ts, repo, session });
+            const content = entry.message?.content;
+            if (Array.isArray(content)) {
+              for (const item of content) {
+                if (item?.type === "tool_use" && item.name === "Skill" && item.input?.skill) push(String(item.input.skill));
+              }
+            }
+            if (entry.type === "user") {
+              const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
+              for (const m of text.matchAll(COMMAND_NAME_RE)) if (knownSkills.has(m[1])) push(m[1]);
+            }
+          }
+
           // Repo tracking from cwd
           const cwd: string = entry.cwd ?? "";
           if (cwd.startsWith(githubDir + "/")) {
@@ -493,7 +628,23 @@ function computeClaudeStatsUncached(targetMonth?: string) {
     })() as number | null,
     allTimeDailyCounts,
     allTimeDailyModelTokens,
+    skillUses: dedupeSkillUses(rawSkillUses),
   };
+}
+
+// A typed `/skill` can emit both forms, so collapse a repeat of the same skill in the same session.
+function dedupeSkillUses(raw: (SkillUse & { session: string })[]): SkillUse[] {
+  raw.sort((a, b) => a.name.localeCompare(b.name) || a.session.localeCompare(b.session) || a.ts - b.ts);
+  const kept: (SkillUse & { session: string })[] = [];
+  for (const u of raw) {
+    const prev = kept[kept.length - 1];
+    if (prev && prev.name === u.name && prev.session === u.session && u.ts - prev.ts < SKILL_DEDUPE_MS) continue;
+    kept.push(u);
+  }
+  return kept
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 2000)
+    .map(({ name, ts, repo }) => ({ name, ts, repo }));
 }
 
 // Cache keyed by month on a signature of all jsonl files' mtime+size.
@@ -664,6 +815,11 @@ function untrackGitHead(sessionId: string) {
   }
 }
 
+// Sessions the renderer has never measured — their view hasn't mounted, so they still carry the
+// spawn guess. Kept so a real measurement can be lent to them; a shell stuck at the wrong COLUMNS
+// line-edits against a width it doesn't have and backspace stops erasing.
+const unmeasuredSessions = new Set<string>();
+
 function createSession(
   cols: number,
   rows: number,
@@ -678,10 +834,14 @@ function createSession(
     process.env.SHELL ||
     (process.platform === "win32" ? "cmd.exe" : "/bin/zsh");
 
+  // Callers can only pass a placeholder — the renderer can't measure a pane that hasn't mounted.
+  // Last run's real geometry is a far better guess than the constant it was called with.
+  const spawn = state.paneSize ?? { cols, rows };
+
   const ptyProcess = pty.spawn(shell, [], {
     name: "xterm-256color",
-    cols,
-    rows,
+    cols: spawn.cols,
+    rows: spawn.rows,
     cwd: os.homedir(),
     env: {
       ...process.env,
@@ -746,9 +906,11 @@ function createSession(
     histStream.end();
     send(`terminal:exit:${sessionId}`);
     sessions.delete(sessionId);
+    unmeasuredSessions.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);
+  unmeasuredSessions.add(sessionId);
   sessionPanelNumbers.set(sessionId, num);
 
   // Send initial CWD immediately so the panel title bar shows it before precmd fires
@@ -1429,7 +1591,7 @@ ipcMain.handle("terminal:get-history", (_, num: number): string => {
 
 ipcMain.on(
   "terminal:save-panels",
-  (_, panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]) => {
+  (_, panels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[]) => {
     state.lastPanels = panels;
     for (const p of panels) {
       if (p.title && p.title !== `terminal ${p.number}`) {
@@ -1461,12 +1623,22 @@ ipcMain.on("terminal:write", (_, id: string, data: string) => {
 });
 
 ipcMain.on("terminal:resize", (_, id: string, cols: number, rows: number) => {
+  unmeasuredSessions.delete(id);
   sessions.get(id)?.resize(cols, rows);
+
+  if (cols !== state.paneSize?.cols || rows !== state.paneSize?.rows) {
+    state.paneSize = { cols, rows };
+    saveState(state);
+  }
+  // Lend the measurement to panels whose view never mounted — a background or restored panel is
+  // otherwise left on the spawn guess and is already broken by the time the user first types in it.
+  for (const other of unmeasuredSessions) sessions.get(other)?.resize(cols, rows);
 });
 
 ipcMain.on("terminal:close", (_, id: string) => {
   sessions.get(id)?.kill();
   sessions.delete(id);
+  unmeasuredSessions.delete(id);
 });
 
 ipcMain.on("terminal:delete-history", (_, num: number) => {
@@ -1849,6 +2021,19 @@ ipcMain.handle("claude:get-all-panel-sessions", (): Record<number, ClaudeSession
   return state.panelClaudeSessions ?? {};
 });
 
+// The panel's newest recorded session is the one running in it — /clear and resume both re-fire the
+// SessionStart hook, appending a fresh id.
+ipcMain.handle("claude:get-titles", (): Record<number, ClaudeTitle> => {
+  const out: Record<number, ClaudeTitle> = {};
+  for (const [num, list] of Object.entries(state.panelClaudeSessions ?? {})) {
+    const latest = list[list.length - 1];
+    if (!latest) continue;
+    const hit = readClaudeTitle(latest.claudeSessionId, latest.cwd ?? "");
+    if (hit) out[Number(num)] = hit;
+  }
+  return out;
+});
+
 ipcMain.handle("claude:hook-status", (): { scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean } => {
   const settingsPath = join(os.homedir(), ".claude", "settings.json");
   let installed = false;
@@ -2150,6 +2335,7 @@ interface PRNode {
   statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
   mergeable: string;
   mergeStateStatus: string;
+  commentCount: number;
 }
 
 ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
@@ -2339,7 +2525,72 @@ ipcMain.handle("gh:my-teams", fetchMyTeams);
 // Shared by the repo fan-out and by hydration so cached and hydrated PRs are interchangeable.
 const PR_JSON_FIELDS =
   "number,title,url,headRefName,headRefOid,isDraft,createdAt,updatedAt,reviewDecision," +
-  "author,additions,deletions,reviewRequests,statusCheckRollup,mergeable,mergeStateStatus";
+  "author,additions,deletions,reviewRequests,statusCheckRollup,mergeable,mergeStateStatus,comments";
+
+// `comments` arrives as full bodies — collapse to a count before the IPC hop, or 100 PRs × N bodies
+// cross the bridge for one number on a card.
+function normalisePR(raw: Omit<PRNode, "repository" | "commentCount"> & { comments?: unknown[] }) {
+  const { comments, ...rest } = raw;
+  return { ...rest, commentCount: comments?.length ?? 0 };
+}
+
+// GraphQL, not `gh pr list --json`: the json path has no comment *count* field, so it downloads full
+// bodies — measured 746 KB / 4.9 s on one repo, 97% discarded — and can overflow exec's maxBuffer,
+// which `.catch(() => [])` turns into "repo has no PRs". One query per repo; aliased multi-repo
+// batching 502s (GitHub's ~10 s gateway limit compounds per busy repo — do not retry it).
+const PR_GQL_FIELDS = `
+  number title url headRefName headRefOid isDraft createdAt updatedAt reviewDecision
+  author { login } additions deletions mergeable mergeStateStatus
+  comments { totalCount }
+  reviewRequests(first: 20) { nodes { requestedReviewer {
+    __typename
+    ... on User { login }
+    ... on Bot { login }
+    ... on Team { name slug: combinedSlug }
+  } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 60) { nodes {
+    __typename
+    ... on CheckRun { status conclusion }
+    ... on StatusContext { state }
+  } } } } } }`;
+
+interface GqlPRNode extends Omit<PRNode, "repository" | "commentCount" | "author" | "reviewRequests" | "statusCheckRollup"> {
+  author: { login: string } | null;
+  comments: { totalCount: number };
+  reviewRequests: { nodes: { requestedReviewer: PRNode["reviewRequests"][number] | null }[] };
+  commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: PRNode["statusCheckRollup"] } } | null } }[] };
+}
+
+function mapGqlPR(node: GqlPRNode, repository: { name: string; nameWithOwner: string }): PRNode {
+  const { comments, reviewRequests, commits, author, ...rest } = node;
+  return {
+    ...rest,
+    author: { login: author?.login ?? "" }, // null for ghost users
+    commentCount: comments?.totalCount ?? 0,
+    reviewRequests: (reviewRequests?.nodes ?? [])
+      .map((n) => n?.requestedReviewer)
+      .filter((r): r is PRNode["reviewRequests"][number] => !!r),
+    statusCheckRollup: commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [],
+    repository,
+  };
+}
+
+const GH_GQL_OPTS = { env: TOOL_ENV, timeout: 20000, maxBuffer: 16 * 1024 * 1024 };
+
+// `gh api graphql` exits non-zero when the response carries an `errors` array, but partial `data`
+// still lands on stdout — salvage it rather than losing the whole call to one bad alias.
+async function ghGraphQL(query: string): Promise<Record<string, unknown>> {
+  try {
+    const { stdout } = await execFileAsync("gh", ["api", "graphql", "-f", `query=${query}`], GH_GQL_OPTS);
+    return (JSON.parse(stdout).data as Record<string, unknown>) ?? {};
+  } catch (err) {
+    const stdout = (err as { stdout?: string }).stdout;
+    if (stdout) {
+      try { return (JSON.parse(stdout).data as Record<string, unknown>) ?? {}; } catch { /* not JSON */ }
+    }
+    throw err;
+  }
+}
 
 // Qualifiers must be gh *flags*: `gh search prs -- "a:b c:d"` quotes the whole string as one term.
 const PR_VIEW_FLAGS: Record<string, string> = {
@@ -2368,49 +2619,68 @@ ipcMain.handle("prs:search-refs", async (_, view: string): Promise<{ nameWithOwn
 });
 
 // Fills refs the renderer couldn't satisfy from the fan-out cache — works for repos with no local clone.
+// One aliased query per 20 refs (single-PR aliases are cheap, unlike whole-repo ones); refs a chunk
+// couldn't resolve fall back to per-PR `gh pr view`.
 ipcMain.handle("prs:hydrate", async (_, refs: { nameWithOwner: string; number: number }[]): Promise<PRNode[]> => {
   if (!refs?.length) return [];
-  const results = await Promise.all(
-    refs.map(({ nameWithOwner, number }) =>
-      execAsync(
-        `gh pr view ${number} --repo "${nameWithOwner}" --json ${PR_JSON_FIELDS}`,
-        { env: TOOL_ENV, timeout: 20000 }
-      )
-        .then(({ stdout }) => ({
-          ...(JSON.parse(stdout) as Omit<PRNode, "repository">),
-          repository: { name: nameWithOwner.split("/").pop() ?? nameWithOwner, nameWithOwner },
-        }))
-        .catch(() => null)
+  const repoOf = (nameWithOwner: string) => ({ name: nameWithOwner.split("/").pop() ?? nameWithOwner, nameWithOwner });
+
+  const hydrateOne = ({ nameWithOwner, number }: { nameWithOwner: string; number: number }) =>
+    execAsync(
+      `gh pr view ${number} --repo "${nameWithOwner}" --json ${PR_JSON_FIELDS}`,
+      { env: TOOL_ENV, timeout: 20000, maxBuffer: 16 * 1024 * 1024 }
     )
-  );
-  return results.filter((pr): pr is PRNode => pr !== null);
+      .then(({ stdout }) => ({ ...normalisePR(JSON.parse(stdout)), repository: repoOf(nameWithOwner) }))
+      .catch(() => null);
+
+  const chunks: (typeof refs)[] = [];
+  for (let i = 0; i < refs.length; i += 20) chunks.push(refs.slice(i, i + 20));
+
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    let data: Record<string, unknown> = {};
+    try {
+      const parts = chunk.map((ref, i) => {
+        const [owner, name] = ref.nameWithOwner.split("/");
+        return `p${i}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${ref.number}) { ${PR_GQL_FIELDS} } }`;
+      });
+      data = await ghGraphQL(`query { ${parts.join(" ")} }`);
+    } catch { /* whole chunk failed — every ref takes the per-PR path below */ }
+    return Promise.all(chunk.map((ref, i) => {
+      const node = (data[`p${i}`] as { pullRequest: GqlPRNode | null } | null)?.pullRequest;
+      return node ? mapGqlPR(node, repoOf(ref.nameWithOwner)) : hydrateOne(ref);
+    }));
+  }));
+  return results.flat().filter((pr): pr is PRNode => pr !== null);
 });
 
 ipcMain.handle("prs:list", async (_, repoNames: string[]): Promise<PRNode[]> => {
   try {
     if (!repoNames || repoNames.length === 0) return [];
 
-    const repoInfos: { name: string; nameWithOwner: string }[] = [];
-    for (const name of repoNames) {
-      const repoPath = join(githubDir, name);
-      try {
-        if (!fs.existsSync(join(repoPath, ".git"))) continue;
-        const { stdout } = await execAsync("git remote get-url origin", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" }));
-        const match = stdout.trim().match(/github\.com[/:](.+?)(?:\.git)?$/);
-        if (match) repoInfos.push({ name, nameWithOwner: match[1] });
-      } catch { continue; }
-    }
+    const repoInfos = (await Promise.all(
+      repoNames.map(async (name) => {
+        const repoPath = join(githubDir, name);
+        try {
+          if (!fs.existsSync(join(repoPath, ".git"))) return null;
+          const { stdout } = await execAsync("git remote get-url origin", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" }));
+          const match = stdout.trim().match(/github\.com[/:](.+?)(?:\.git)?$/);
+          return match ? { name, nameWithOwner: match[1] } : null;
+        } catch { return null; }
+      })
+    )).filter((r): r is { name: string; nameWithOwner: string } => r !== null);
 
     const results = await Promise.all(
-      repoInfos.map(({ name, nameWithOwner }) =>
-        execAsync(
-          `gh pr list --repo "${nameWithOwner}" --state open --limit 100 --json ${PR_JSON_FIELDS}`,
-          { env: TOOL_ENV, timeout: 20000 }
-        ).then(({ stdout }) => {
-          const prs = JSON.parse(stdout) as Omit<PRNode, "repository">[];
-          return prs.map(pr => ({ ...pr, repository: { name, nameWithOwner } }));
-        }).catch(() => [] as PRNode[])
-      )
+      repoInfos.map(async ({ name, nameWithOwner }) => {
+        try {
+          const [owner, repo] = nameWithOwner.split("/");
+          // CREATED_AT DESC matches what `gh pr list` returned; unordered GraphQL is oldest-first.
+          const data = await ghGraphQL(
+            `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { pullRequests(states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ${PR_GQL_FIELDS} } } } }`
+          );
+          const nodes = (data.repository as { pullRequests: { nodes: GqlPRNode[] } } | null)?.pullRequests?.nodes ?? [];
+          return nodes.map((n) => mapGqlPR(n, { name, nameWithOwner }));
+        } catch { return [] as PRNode[]; }
+      })
     );
 
     return results.flat();
@@ -2722,6 +2992,15 @@ ipcMain.handle("git:current-branch", async (_, repoOrPath: string): Promise<stri
   }
 });
 
+// A panel can sit in a subdirectory, a linked worktree, or a repo outside ~/Documents/GitHub —
+// only git can say where the checkout it belongs to actually starts.
+ipcMain.handle("git:repo-root", async (_, cwd: string): Promise<string | null> => {
+  try {
+    const { stdout } = await execAsync("git rev-parse --show-toplevel", { cwd: resolveRoot(cwd), env: TOOL_ENV, timeout: 5_000 });
+    return stdout.trim() || null;
+  } catch { return null; }
+});
+
 ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: string }) => {
   const repoName = url.replace(/\.git$/, "").split("/").pop() ?? "repo";
   const destPath = join(githubDir, repoName);
@@ -2754,7 +3033,7 @@ ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: st
 type WTFileResult = { path: string; filename: string; dir: string; status: string; additions: number; deletions: number };
 
 ipcMain.handle("git:working-tree", async (_, repoName: string): Promise<{ staged: WTFileResult[]; unstaged: WTFileResult[] }> => {
-  const repoPath = join(githubDir, repoName);
+  const repoPath = resolveRoot(repoName);
   try {
     const [statusRes, stagedNumRes, unstagedNumRes] = await Promise.all([
       execAsync("git status --porcelain", { cwd: repoPath, env: TOOL_ENV }),
@@ -2793,7 +3072,7 @@ ipcMain.handle("git:working-tree", async (_, repoName: string): Promise<{ staged
 
 ipcMain.handle("git:change-count", async (_, repoName: string): Promise<number> => {
   try {
-    const { stdout } = await execAsync("git status --porcelain", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+    const { stdout } = await execAsync("git status --porcelain", { cwd: resolveRoot(repoName), env: TOOL_ENV });
     return stdout.trim().split("\n").filter(Boolean).length;
   } catch { return 0; }
 });
@@ -2819,39 +3098,148 @@ ipcMain.handle("git:repo-status", async (_, repoOrPath: string): Promise<{ branc
   } catch { return null; }
 });
 
-ipcMain.handle("git:file-diff", async (_, repoName: string, filePath: string, staged: boolean): Promise<string> => {
+// ── Working-tree watch ────────────────────────────────────────────────────────
+// The Changes rail shows one repo at a time, so a single recursive watch covers it.
+// Any worktree edit or index/HEAD change pushes `git:working-tree-changed`.
+let wtWatch: { repo: string; watchers: fs.FSWatcher[]; debounce?: ReturnType<typeof setTimeout> } | null = null;
+
+function stopWatchingWorkingTree() {
+  if (!wtWatch) return;
+  if (wtWatch.debounce) clearTimeout(wtWatch.debounce);
+  for (const w of wtWatch.watchers) { try { w.close(); } catch {} }
+  wtWatch = null;
+}
+
+/** Only index/HEAD/refs move `git status`; locks and packfiles are noise — and `git status`
+ *  itself rewrites the index, so an unfiltered watch would self-trigger. */
+function movesGitStatus(inner: string): boolean {
+  if (inner.endsWith(".lock")) return false;
+  return inner === "index" || inner === "HEAD" || inner === "MERGE_HEAD" || inner.startsWith(`refs${sep}`);
+}
+
+/** A linked worktree's `.git` is a file pointing at <main>/.git/worktrees/<name>, so its HEAD and
+ *  index live outside the worktree — watching only the worktree misses every checkout and stage. */
+function linkedGitDir(root: string): string | null {
   try {
-    const { stdout } = await execAsync(
-      `git diff ${staged ? "--cached" : ""} -- "${filePath}"`,
-      { cwd: join(githubDir, repoName), env: TOOL_ENV }
-    );
-    return stdout;
+    const dotGit = join(root, ".git");
+    if (fs.statSync(dotGit).isDirectory()) return null;
+    const m = fs.readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
+
+ipcMain.handle("git:watch-working-tree", (_, repoName: string) => {
+  if (wtWatch?.repo === repoName) return;
+  stopWatchingWorkingTree();
+  const bump = () => {
+    if (!wtWatch) return;
+    if (wtWatch.debounce) clearTimeout(wtWatch.debounce);
+    wtWatch.debounce = setTimeout(() => {
+      if (wtWatch) send("git:working-tree-changed", wtWatch.repo);
+    }, 400);
+  };
+  try {
+    const root = resolveRoot(repoName);
+    const watchers = [
+      fs.watch(root, { recursive: true }, (_event, filename) => {
+        if (!filename) return;
+        if (filename === ".git" || filename.startsWith(`.git${sep}`)) {
+          if (!movesGitStatus(filename.slice(5))) return;
+        }
+        bump();
+      }),
+    ];
+    const gitDir = linkedGitDir(root);
+    if (gitDir) {
+      try {
+        watchers.push(fs.watch(gitDir, { recursive: true }, (_event, filename) => {
+          if (filename && movesGitStatus(filename)) bump();
+        }));
+      } catch { /* main repo moved — the worktree watch still covers edits */ }
+    }
+    wtWatch = { repo: repoName, watchers };
+  } catch { /* repo vanished — the next watch call retries */ }
+});
+
+ipcMain.handle("git:unwatch-working-tree", () => stopWatchingWorkingTree());
+
+ipcMain.handle("git:file-diff", async (_, repoName: string, filePath: string, staged: boolean): Promise<string> => {
+  const cwd = resolveRoot(repoName);
+  const BIG = { cwd, env: TOOL_ENV, maxBuffer: 16 * 1024 * 1024 };
+  try {
+    const { stdout } = await execAsync(`git diff ${staged ? "--cached" : ""} -- "${filePath}"`, BIG);
+    if (stdout || staged) return stdout;
+    // Untracked file: plain `git diff` is empty — synthesise the add-diff against /dev/null.
+    const { stdout: st } = await execAsync(`git status --porcelain -- "${filePath}"`, { cwd, env: TOOL_ENV });
+    if (!st.startsWith("??")) return stdout;
+    // --no-index exits 1 when the files differ, so the diff arrives via the rejection.
+    return await execAsync(`git diff --no-index -- /dev/null "${filePath}"`, BIG)
+      .then((r) => r.stdout)
+      .catch((e) => (e as { stdout?: string }).stdout ?? "");
   } catch { return ""; }
 });
 
 ipcMain.handle("git:stage-file", async (_, repoName: string, filePath: string) => {
-  await execAsync(`git add -- "${filePath}"`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+  await execAsync(`git add -- "${filePath}"`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
 });
 ipcMain.handle("git:unstage-file", async (_, repoName: string, filePath: string) => {
-  await execAsync(`git restore --staged -- "${filePath}"`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+  await execAsync(`git restore --staged -- "${filePath}"`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
 });
 ipcMain.handle("git:stage-all", async (_, repoName: string) => {
-  await execAsync("git add -A", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+  await execAsync("git add -A", { cwd: resolveRoot(repoName), env: TOOL_ENV });
 });
 ipcMain.handle("git:unstage-all", async (_, repoName: string) => {
-  await execAsync("git restore --staged .", { cwd: join(githubDir, repoName), env: TOOL_ENV });
+  await execAsync("git restore --staged .", { cwd: resolveRoot(repoName), env: TOOL_ENV });
 });
 ipcMain.handle("git:discard-unstaged", async (_, repoName: string) => {
-  await execAsync("git restore .", { cwd: join(githubDir, repoName), env: TOOL_ENV }).catch(() => {});
+  await execAsync("git restore .", { cwd: resolveRoot(repoName), env: TOOL_ENV }).catch(() => {});
 });
 ipcMain.handle("git:commit", async (_, repoName: string, message: string) => {
-  await execAsync(`git commit -m ${JSON.stringify(message)}`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+  await execAsync(`git commit -m ${JSON.stringify(message)}`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+
+/** Branch the current work forked from. `origin/HEAD` is authoritative; the fallbacks cover clones
+ *  that never fetched it. Null → nothing to diff against, so the rail shows no branch view. */
+async function resolveBaseRef(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd, env: TOOL_ENV, timeout: 5_000 });
+    if (stdout.trim()) return stdout.trim();
+  } catch {}
+  for (const ref of ["origin/main", "origin/master", "origin/develop", "origin/dev", "main", "master"]) {
+    try {
+      await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, env: TOOL_ENV, timeout: 5_000 });
+      return ref;
+    } catch {}
+  }
+  return null;
+}
+
+ipcMain.handle("git:branch-diff", async (_, repoName: string): Promise<{ base: string | null; diff: string }> => {
+  const cwd = resolveRoot(repoName);
+  const base = await resolveBaseRef(cwd);
+  if (!base) return { base: null, diff: "" };
+  try {
+    // `...` diffs from the merge-base, so commits landed on the base since the fork stay out of it.
+    const { stdout } = await execFileAsync("git", ["diff", `${base}...HEAD`], { cwd, env: TOOL_ENV, timeout: 20_000, maxBuffer: 64 * 1024 * 1024 });
+    return { base, diff: stdout };
+  } catch { return { base, diff: "" }; }
+});
+
+ipcMain.handle("git:branch-pr", async (_, repoName: string, branch: string): Promise<number | null> => {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh", ["pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"],
+      { cwd: resolveRoot(repoName), env: TOOL_ENV, timeout: 15_000 },
+    );
+    const n = parseInt(stdout.trim(), 10);
+    return isNaN(n) ? null : n;
+  } catch { return null; }
 });
 
 interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; isLocal: boolean; }
 
 ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, prNumber?: number): Promise<CommitEntry[]> => {
-  const repoPath = join(githubDir, repoName);
+  const repoPath = resolveRoot(repoName);
 
   // Helper: compute numstat additions/deletions for a commit hash from local git
   const localStats = async (hash: string): Promise<{ additions: number; deletions: number }> => {
@@ -2950,7 +3338,7 @@ ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, p
 
 ipcMain.handle("git:commit-diff", async (_, repoName: string, hash: string): Promise<string> => {
   try {
-    const { stdout } = await execAsync(`git show ${hash}`, { cwd: join(githubDir, repoName), env: TOOL_ENV });
+    const { stdout } = await execAsync(`git show ${hash}`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
     return stdout;
   } catch { return ""; }
 });

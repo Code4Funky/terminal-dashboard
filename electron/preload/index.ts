@@ -17,7 +17,7 @@ type PreloadTaskSummary = {
 contextBridge.exposeInMainWorld("terminal", {
   getState: (): Promise<{
     terminalCounter: number;
-    lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[];
+    lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[];
   }> => ipcRenderer.invoke("terminal:get-state"),
 
   create: (
@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld("terminal", {
     { number: number; size: number; lastModified: number; title?: string }[]
   > => ipcRenderer.invoke("terminal:list-history"),
 
-  savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]): void =>
+  savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[]): void =>
     ipcRenderer.send("terminal:save-panels", panels),
 
   write: (id: string, data: string): void =>
@@ -153,6 +153,9 @@ contextBridge.exposeInMainWorld("terminal", {
 
   getAllPanelClaudeSessions: (): Promise<Record<number, { claudeSessionId: string; cwd: string; startedAt: number }[]>> =>
     ipcRenderer.invoke("claude:get-all-panel-sessions"),
+
+  getClaudeTitles: (): Promise<Record<number, { title: string; source: "custom" | "ai" }>> =>
+    ipcRenderer.invoke("claude:get-titles"),
 
   getClaudeHookStatus: (): Promise<{ scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean }> =>
     ipcRenderer.invoke("claude:hook-status"),
@@ -318,11 +321,24 @@ contextBridge.exposeInMainWorld("terminal", {
 
   getRepoBranch: (repoName: string): Promise<string | null> =>
     ipcRenderer.invoke("git:current-branch", repoName),
+  getRepoRoot: (cwd: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:repo-root", cwd),
 
   getWorkingTree: (repoName: string): Promise<{
     staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
     unstaged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
   }> => ipcRenderer.invoke("git:working-tree", repoName),
+
+  watchWorkingTree: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:watch-working-tree", repoName),
+
+  unwatchWorkingTree: (): Promise<void> => ipcRenderer.invoke("git:unwatch-working-tree"),
+
+  onWorkingTreeChanged: (cb: (repoName: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, repoName: string) => cb(repoName);
+    ipcRenderer.on("git:working-tree-changed", handler);
+    return () => ipcRenderer.removeListener("git:working-tree-changed", handler);
+  },
 
   getChangeCount: (repoName: string): Promise<number> =>
     ipcRenderer.invoke("git:change-count", repoName),
@@ -357,6 +373,12 @@ contextBridge.exposeInMainWorld("terminal", {
 
   getCommitDiff: (repoName: string, hash: string): Promise<string> =>
     ipcRenderer.invoke("git:commit-diff", repoName, hash),
+
+  getBranchDiff: (repoName: string): Promise<{ base: string | null; diff: string }> =>
+    ipcRenderer.invoke("git:branch-diff", repoName),
+
+  getBranchPR: (repoName: string, branch: string): Promise<number | null> =>
+    ipcRenderer.invoke("git:branch-pr", repoName, branch),
 
   cloneRepository: (url: string, requestId: string): void =>
     ipcRenderer.send("git:clone", { url, requestId }),

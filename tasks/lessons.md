@@ -1742,3 +1742,303 @@ edit carried other sessions' uncommitted hunks.
   untouched. This is not the recorded "peer commit swallows your staged hunk" case; nothing was staged and
   nothing warned. Append and commit in the same breath. Batching edits across files and committing at the
   end is the habit that loses work here.
+
+- **A driver click on a rail button can turn the panel off.** `railButton("git", …)`
+  (`Dashboard.tsx:626`) is `setGitOpen((v) => !v)` — a toggle. `gitOpen` was already true from
+  persisted state, so my "open the rail" click closed it, and the run reported empty counts and a
+  30 s locator timeout: indistinguishable from the panel never rendering. Read `aria-pressed` and
+  only click when it isn't `"true"`. Second occurrence of this trap; the first is written up in
+  `tasks/todo.md`.
+- **Never build a locator from the source string when the style transforms it.** `sectionLabel(t)`
+  sets `textTransform: "uppercase"`, so `innerText` is `STAGED`, not the `Staged` in the JSX. The
+  probe finds nothing and reads as "the section isn't rendered".
+- **An optimistic counter lies, and only a driver catches it.** `HunkNav` first did
+  `setIndex(next)` *then* scrolled, so a clamped jump left `3/5` on screen with hunk 1 at the top.
+  Type-checking proves none of this. Derive displayed state from the thing it describes — here,
+  read `scrollTop` back after scrolling.
+
+## 2026-07-30 — `GUARD_DIR` is a drift baseline, not a scratch dir (run 58)
+
+**Deterministic error (wrong path).** Patched the Linear reshape guard *in place* inside the preflight's
+`GUARD_DIR=/tmp/.lguard-$RUN_START`, so `--verify-guards` reported
+`GUARD_DRIFT linear-reshape-verify.sh: ran=f03c8c524b6c live=1d942d3567da — a peer rewrote it mid-run`
+on my own edit, with the live sha still the shared script's recorded value. `drift_rc=4`.
+
+**Why it slipped through:** `wiki/linear-mcp.md`'s run-53 block says "patch the run-private guard snapshot"
+and did not link `wiki/tool-output-fidelity.md`'s run-50 constraint ("leave `GUARD_DIR` holding only tracked
+guards"). Those are compatible only because "run-private" means a *hand-made* `/tmp/linear-run-$RUN_START/`,
+not `GUARD_DIR`. Read a section apart, they compose into one instruction. Cross-link landed: KB `261fdf1`.
+
+**Rule:** patch a copy outside `GUARD_DIR`, or accept `drift_rc=4` as known-self and name the file changed.
+Nothing was mis-verified — `invariants=PASS`, `transform_fidelity=PASS`, `witness_diff=IDENTICAL` 14/14,
+`reply_verify=PASS`.
+
+## 2026-07-30 — I read the memory *index* line and answered from it (run 55)
+
+**The knowledge was already correct and already mine.** `reference_linear_mcp_issue_shape.md:119-125`
+states the rule verbatim — "exclusion stated by state → `includeArchived: true` then filter
+`statusType`" — and records it confirmed correct ten times. `wiki/linear-mcp.md:103` has a whole
+section named "…and excluding archived silently deletes open assigned work". I still shipped
+`includeArchived: false` and dropped MOB-510/511/512: assigned, `statusType: backlog`, neither
+completed nor cancelled. Fourth recurrence of the identical defect on the identical prompt shape
+(runs 19, 31, 52, 55) and the **same three identifiers** every time.
+
+**Distinct root cause from the earlier three.** Run 31's cause was a thinner memory file in another
+cwd scope. Mine was not: correct scope, rich file, rule present. I read only the `MEMORY.md` pointer
+line — which says just "`includeArchived` defaults `true`", the shallow half of the fact — and treated
+recall as sufficient. The trap direction (`false` *deletes* open work) lives only in the file body.
+Worse, I then wrote "archived issues were excluded" as a footnote, which is precisely the failure
+mode `wiki/linear-mcp.md:129-136` names: satisfying the disclosure rule while shipping wrong rows.
+
+**Rule:** a `<system-reminder>` memory line is an *index*, not the fact. When it names a trap for the
+operation you are about to perform, open the file **before** the first tool call — recall tells you a
+hazard exists, not what it is. And prefer correct rows over a correct explanation of wrong rows.
+
+**Corollary that would have caught it:** the prior-answer diff (`witness_only`) is the cheap detector —
+ids present in an earlier witness but *absent entirely* from the new payload. Run against my own two
+answers it printed `newly_added: [MOB-510, MOB-511, MOB-512]`, `witness_only: []`, and
+`colour_all_null: 14` matched the count the wiki already recorded.
+- **Assert colour by hue relationship, never by a literal `rgb()`.** Six PR-card assertions failed
+  because I pinned the Breeze-dark hex from `theme.ts` while the app was running a different theme.
+  A test bug that reads exactly like a product bug. Use `g > r && g > b` for green, `r > g && g > b`
+  for orange, `max−min < 40` for "achromatic / not a call to action" — those hold under every theme
+  *and* test the meaning the spec asked for rather than one theme's arithmetic.
+- **A green assertion over an absent case proves nothing.** "0 comments is muted" passed while no PR
+  on screen had 0 comments — the detail line read `0 → n/a`. Print the witness value alongside the
+  verdict, and say which branches the run never exercised instead of reporting a clean sweep.
+- **Map every name in an `ls`-for-the-executable output to a plan step before writing guard code.**
+  Run 59: the prescribed `ls scripts/linear-*.sh /tmp/linear-*.sh` printed six scripts including
+  `linear-pick-witness.sh`; I used three and hand-rolled the fourth (witness selection) as an
+  `ls`/`stat` loop plus a `grep -E`/`sort` pipeline. Second recurrence of this in the same workflow
+  (run 51 did it to `linear-reply-verify.sh`), and both times I *had* run the `ls` and *had* read the
+  page. The step is discharged by reading the list, not by scanning it for the scripts already in the
+  plan — a script for a problem you have not yet recognised is invisible until you have solved it by
+  hand, worse. An unmapped name in that output is the signature.
+- **A negative test inherits its witness's drift.** The title-swap fixture died as required, but the
+  fatal list named the injected record *and* `MOB-467`, whose rename predates the run — so the death
+  was only partly the fixture's, and a fixture that would have died anyway proves nothing about
+  itself. Select a negative test's witness exactly as for the real run, or require an unmodified
+  control to come back clean first.
+
+- **`find` on a symlinked start point prints nothing and exits 0 — and it is the fix this file already
+  prescribes.** Line 1697 above prescribes `find <dir> -maxdepth 1 -type d -name …` as the count that
+  beats the empty-glob trap. Run 61 measured it fail-open on a *symlinked* dir, which `/tmp` is on macOS
+  (`lrwxr-xr-x /tmp -> private/tmp`): `find /tmp -maxdepth 1 -type f -name 'linear-*.json' | wc -l` → `0`
+  with rc=0, while `/tmp/`, `-H /tmp` and `/private/tmp` each → `349`. `find` defaults to `-P` and will
+  not descend a symlinked starting point. The whole witness corpus lives there, so the strongest check
+  available reads as "the corpus was cleared by a reboot" — an explanation these notes supply in advance.
+- **Third recurrence of hand-rolling a script the run had already listed, and now the mechanism of harm is
+  measured.** The first command printed all six `linear-*.sh` including `linear-pick-witness.sh`; I used
+  four and wrote witness selection myself out of `find`/`stat`/`sort` — which is where the trap above
+  fired. The script globs under a bash shebang (`linear-pick-witness.sh:28`) and never calls `find`, so
+  the trap cannot occur on the prescribed path; invoked afterwards it returned the *same* witness plus a
+  mid-write skip and a `jq -e .` parseability gate my loop lacked. So: the hand-rolled substitute is where
+  the unrecorded plumbing bug lives, because the script has already absorbed the recorded ones. Rank a
+  listed-but-unused script above a fresh pipeline *especially* when the pipeline looks too small to be
+  wrong.
+- **`MM` in `git status` does not imply a peer's worktree-only work.** Both shared KB pages showed `MM`
+  and I treated it as "peers hold uncommitted hunks". `git diff --numstat --cached <base>` returned
+  `0 68` / `0 42`: the index was HEAD *minus* those lines — staged before someone committed them — while
+  the worktree was byte-identical to HEAD. Rebuilding from HEAD-blob + my section reverted nothing, but
+  by luck: against a real unstaged delta that write is unrecoverable (unstaged content never enters the
+  object store). Read the index↔HEAD direction before rebuilding a shared file from HEAD.
+
+- **`innerText` returns logical order, so a text assertion cannot see rtl reordering.** Phase 6's
+  status bar rendered `cowork ⟳` instead of `⟳ cowork`, because `CLIP_LEFT` in `src/chrome.ts` is
+  `direction: rtl` (that's how it clips the *left* end and keeps a long path's tail) and a leading
+  neutral glyph moves to the far end under rtl. `innerText` reported `⟳ cowork` — the DOM order — so
+  every string assertion passed green while the render was wrong. Only reading the screenshot caught
+  it. **Rule:** for any assertion about *order* or *position*, compare `getBoundingClientRect().x`,
+  not text. And keep glyphs out of a `CLIP_LEFT` span — give them their own sibling.
+- **A repo-derived readout can't be tested on a restored session — the PTY respawns in `~`.** The
+  sidebar rows displayed `terminal-dashboard` and `mobile-edge-service`, so clicking them looked like
+  it should focus a repo; the *title* is a repo name while `cwd` is still home, and `focusedRepo`
+  reads `cwd`. Three assertions went green over `No repo`, testing nothing. Fix: the driver types a
+  real `cd ~/Documents/GitHub/<repo>` and lets the shell's OSC 9999 hook drive
+  `cwd → focusedRepo → getRepoStatus`. Fourth instance of "a green assertion over an absent case
+  proves nothing" — this time the absent case was disguised by a label that named the thing it lacked.
+- **Locate a panel by a known full-width child, not by guessing its own box.** `SIDEBAR_W = 264` but
+  the column sits at x=56 behind a nav rail, and `closest("div[style*='264px']")` matched nothing
+  (React's inline styles don't produce the substring reliably), so the fallback returned the 1700px
+  root and the geometry assertion failed on a correct product. The `Pull requests` cross-link is
+  `width: 100%` of that column — assert against *its* rect.
+- **Re-run a lone red check before touching the subject — it is usually the plumbing.** `prio_number`
+  was the only FAIL in an otherwise green invariant set; the cause was `jq '…|tostring'` without `-r`,
+  so the shell captured `"[\"number\"]"` and compared it against `["number"]`. The data was correct all
+  along. Use `-r` for any `jq` value crossing into a shell comparison. Failure polarity here is the safe
+  one, which is exactly the danger: a red line you learn to wave through is how a real red gets waved
+  through. Same class as `$PIPESTATUS` vs `$pipestatus` and `env "A=1 B=2"` in zsh.
+- **Before adopting a recorded limitation, check whether it is still true — this one had blocked six
+  runs.** `wiki/linear-mcp.md` stated the inline guard set covers everything *except* the cross-run
+  witness diff, so every run since kept driving the scripts and kept paying for guard infrastructure
+  (`GUARD_DIR` drift, which patched copy binds, a poisoned canonical `$SRC`). The witness diff is ~15
+  inline lines: both halves are already on disk. Running it inline came back `IDENTICAL` 14/14 and made
+  transform fidelity *stronger*, because dropping the staging hop means diffing against the session's
+  own immutable spill. A limitation recorded once propagates as fact — spend one attempt disproving it
+  before building around it.
+- **Assert the transformation's size in the unit your verifier reports.** The private-index commit
+  guard compared `len(splitlines())` deltas against `git diff --numstat`; a one-line edit *inside* a
+  giant table row is `+0` net lines but `+1 -1` numstat, so a correct commit printed FAIL. Both the
+  earlier byte-length assert and this one caught real arithmetic slips of mine — keep them, but state
+  the expectation in numstat terms for in-place edits and in line terms only for pure appends.
+
+## 2026-07-31 — Run 62: eleven green invariants, and the renderer shipped invalid JSON
+
+Every guard passed on `$OUT` — `out_count=14`, `url_contains_id=14`, `transform_fidelity=true`, exact key
+order, descending-order check — and the text I emitted was still broken. The renderer was hand-rolled:
+
+```bash
+jq -r '"[", (to_entries|map(if .key < (length-1) then (.value|tojson)+"," else (.value|tojson) end)|.[]), "]"'
+```
+
+Inside `map`, `.` is the entry object, so `length` is `2` and `.key < 1` is true exactly once: one comma,
+thirteen missing. Exit 0, no stderr, and 14 well-formed bracketed objects that are not valid JSON.
+
+- **Fourth position of the `.`-rebinding trap, and the first that does not error.** The three already
+  recorded (`select(...contains(.id))`, `sname[.statusType]|index(...)`, `all(GEN;COND)`) all announce
+  themselves. This one is deliverable-shaped.
+- **The invariant set does not extend across the rendering step.** The guards verify a *file*; the reply is
+  produced by a transformation of that file which nothing checked. Render without index arithmetic —
+  `jq -r '[.[]|tojson] | "[\n"+join(",\n")+"\n]"'` — and assert the rendered bytes reparse equal to the
+  source: `jq -n --slurpfile a "$OUT" --slurpfile b "$PRINT" '$a[0]==$b[0]'`. That assert is what caught it.
+- **A reply guard pointed at `$PRINT` would have passed** — two copies of the same broken bytes. Compare the
+  sent text back to `$OUT`, not to the thing that rendered it.
+
+Also, `witness_diff=UNAVAILABLE` was my own bug, not a fact: `find /tmp -maxdepth 1` returned 0 of **353**
+witnesses (`/tmp` is a symlink; `find` defaults to `-P`), and I narrated it as "a reboot cleared /tmp" —
+an explanation my own notes supply in advance. Already documented (`wiki/tool-output-fidelity.md:2412`,
+same day) along with the root cause: `scripts/linear-pick-witness.sh` was listed and I hand-rolled anyway.
+Re-run resolved: 14 peer artefacts byte-identical to `2914f95c5bd7`, witness diff `IDENTICAL 14/14`.
+
+## 2026-07-31 (run 63) — `ls … | tail -N` cuts on an axis the command never sorted by
+
+Opened the witness survey with `ls -1lT /private/tmp/linear-*.json 2>/dev/null | tail -20`, meaning "the 20
+newest". `ls` sorts by **name** unless given `-t`; `-lT` only *prints* the timestamp. So the cut took the
+alphabetic tail (`linear-run59-*`, `linear-s32287-*`) and hid every `linear-open-assigned-2026-07-31-*`
+file — the canonical dated-sibling names the witness diff needs — out of 353 present. The 20 survivors were
+real witnesses with real shas and plausible dates, so nothing flagged.
+
+- **Fourth polarity of the truncation family**, and distinct from the third (`sort -n | head`): there the
+  sort key was right and the wrong *end* was cut; here the truncation axis is orthogonal to the question.
+  No flag in the command mentions time, yet the model that wrote `tail` was "newest last".
+- **Rule: never truncate a listing whose sort key you did not set explicitly.** Project the key yourself and
+  print every row: `for f in …; do printf '%s\t%s\n' "$(stat -f %m "$f")" "$f"; done | sort -n`.
+- Near-miss, not an escape — re-listed in full the same turn, and the two siblings it surfaced then returned
+  `field_diff=IDENTICAL` 14/14. Logged because this family is tracked by instance
+  (`wiki/tool-output-fidelity.md`, run-63 section).
+
+Also worth keeping from this run: **transform fidelity is only evidence if the two sides have different
+provenance.** Rather than projecting the shaped output back through its own staged source, the array was
+rebuilt a second time straight from the spill, skipping the src entirely — `cmp` byte-equal (`d26269af09ff`
+both ways) makes the two `jq` programs independent witnesses instead of one artefact agreeing with itself.
+
+## 2026-07-31 (run 63) — `xargs -0 -I{}` drops 84% of the corpus, rc=1, and the survivors look complete
+
+Fixing the *producer* moved the truncation to the *consumer*. Run 62 recorded that `find /tmp -maxdepth 1`
+returns nothing because `/tmp` is a symlink; this run used `find /tmp/` correctly — 361 matches — and then
+piped it into `xargs -0 -I{} sh -c 'printf … $(stat …) $(shasum …)'`, which printed **58** lines and exited
+`1` with one line on stderr: `xargs: command line cannot be assembled, too long`.
+
+- **The 58 survivors were sorted, plausible, and spanned three days**, so the listing read as the whole
+  corpus. The stderr line sits *above* the output and looks like a complaint about one file, not "303 files
+  are missing". Fourth `producer | consumer` truncation polarity after `sort -n | head` (wrong end),
+  `producer | head` (killed side effect) and the empty-glob `ls` count.
+- **Consequence, measured:** 8 siblings *fresher* than the witness I chose were absent from my listing —
+  including one at a different sha. I witnessed against a 914 s-stale file while a 38 s-stale one existed.
+- **Fix:** `while IFS= read -r -d '' f; do …; done` — 361 of 361. Never `-I{}` with a multi-substitution
+  `sh -c` program; `-I` implies one command per line and the assembled line must still fit, so it fails
+  *partway* rather than at all.
+- **Root cause is the recurrence, not the flag: `scripts/linear-pick-witness.sh` was in this run's first
+  command output and I hand-rolled a substitute anyway — fourth time** (runs 51, 59, 62, 63). Run as
+  prescribed it enumerated 66 candidates via a plain `for f in $GLOB` (no `find`, no `xargs`), skipped a
+  live peer's mid-write file (`+174s after RUN_START`), and picked the 38 s-stale witness. Every plumbing
+  bug of the last three runs has been in the substitute, never in the script.
+- **The delivery was still correct** — `field_diff=[]` 14/14 against the picker's own witness as well as the
+  two stale ones, and `out_sha=d532c612d636` byte-identical to a concurrent peer's artefact. So this is a
+  process defect with no output defect: the claim "these are the freshest siblings" was simply unfounded
+  when I made it. Verify the *enumeration* before trusting the *selection*.
+
+## 2026-07-31 (run 64) — a green pipeline behind a red guard, and `read -r path` unsets `PATH` in zsh
+
+Delivery was clean (14 open issues, `field_diff=IDENTICAL` 14/14 against three witnesses, zero `get_issue`
+calls, `includeArchived: true` correct a 13th time). Both defects were in the *verification* plumbing.
+
+- **`scripts/linear-reply-verify.sh` cannot see a pretty-printed reply.** Extractor is
+  `grep -o "^\[{\"id\":\"$first_id\".*\]$"` — single-line, both ends anchored. The array was emitted
+  `jq .` pretty (raw, un-fenced, exactly as asked), so it died `FAIL: no emitted array …` and prescribed
+  "re-run as a separate tool call" — already satisfied. *Formatting the JSON* is absent from its list of
+  causes. Parse instead: assistant `text` blocks → `strip()` → `startswith("[")`/`endswith("]")` →
+  `json.loads`. That gave `reply_vs_verified=IDENTICAL` 14/14. **Do not read this guard's red as "the reply
+  never landed".**
+- **Fifth zsh trap: `while IFS=$'\t' read -r path …` wipes `PATH`** (zsh ties the array `path` to it), so
+  `git`/`awk`/`tee`/`wc` became "command not found" mid-loop. `set -e` did not abort — the call was inside
+  `b=$(…)` — and the loop's counter still printed `paths_staged_private=4 (want 4)` because it counted
+  *iterations, not effects*. That is the "assert the count of staged paths" rule defeated by an assert
+  shaped like it. Rename the variable; count the artefact
+  (`git diff --cached --numstat <base> | wc -l` → 0, fails closed). Nothing was committed.
+- **Fifth consecutive run to hand-roll witness enumeration instead of `scripts/linear-pick-witness.sh`**
+  (51, 59, 62, 63, 64) — reproduced run 63's `xargs -0 -I{} sh -c … too long` at 361 candidates verbatim.
+  Run 63 wrote that lesson *7 seconds* before this run started and it did not transfer, because
+  `grep -c 'pick-witness'` on the memory file this prompt routes to returned **0**. Fixed there, not here:
+  a rule is only as reachable as the file the query opens.
+- **A logged sha needs its serialisation form** — the same 14 shaped records are `d26269af09ff` (`jq -c`)
+  and `2914f95c5bd7` (`jq .`); run 62 logged the pretty one. A peer recorded the neighbouring cause (jq key
+  order) the same hour; the CAS-abort on a moved HEAD is what forced the de-dup before writing.
+- **Committing beside live peers:** the shared index held nine foreign staged deletions, so
+  `git add <mine> && git commit` would have carried them. Private `GIT_INDEX_FILE` off a pinned base →
+  `commit-tree` → CAS `update-ref`, per-path `+n/-0` asserted. The pin caught HEAD moving two commits
+  mid-compose; blobs built off the stale base would have reverted both peers' hunks.
+
+## 2026-07-31 — "Backspace does nothing" was a pty size bug, not a key bug
+
+No user correction this session — the user reported the symptom once and it was fixed on the first
+diagnosis. These are the deterministic errors and the search-order lesson.
+
+- **Search order was nearly wrong.** "Can't delete text in the terminal" invites a hunt through keydown
+  handlers, xterm key bindings and the ZLE keymap. The cause was that the pty and the renderer disagreed
+  about width: zsh patches a line with cursor-relative moves computed from its own `COLUMNS`, so at 220
+  assumed against a 114-column grid `ESC[A`/`ESC[K` cleared a row the user wasn't looking at and the
+  glyph stayed painted. **Check that the two sizes agree before touching input handling.**
+- **A de-dup guard seeded from current state suppresses the first update.** `let lastCols = term.cols`
+  *after* a renderer-only `fitAddon.fit()` made the `ResizeObserver`'s first callback compare the fitted
+  grid against itself, so the initial resize never reached the pty. Seed with a value the real state
+  cannot equal (`0`). Every line was individually defensible; the bug was in their composition.
+- **A symptom that correlates with focus means a second writer.** Focused panels self-repaired because
+  `focus()` pushes the size unconditionally, which made a systematic bug look intermittent. When
+  breakage tracks something as incidental as focus, look for the other code path writing that state.
+- **`new window.WebglAddon()` throws — the UMD bundle exports a namespace** (`window.WebglAddon.WebglAddon`).
+  Wrapped in a `try`, so all three renderer configurations silently collapsed to DOM and all three passed:
+  a uniform green that reads exactly like "theory disproved" from a run that never loaded WebGL. Every arm
+  of a comparison must print whether its instrumentation engaged. Calling it inconclusive instead of
+  believing it is the only reason the real cause was still being looked for.
+- **`electron .` needs a `package.json` with `"main"`** in that directory — exits 1 with nothing useful
+  on stderr. A throwaway Electron page beats a driver for library-level renderer questions, and it never
+  touches `~/.terminal-dashboard/state.json`, which a second live instance would overwrite.
+- **After a CAS commit into the knowledge-base, `git add` your own paths.** The shared index is snapshotted
+  from an older tree, so the instant `update-ref` lands, both new files showed as `D ` staged deletes
+  (plus `??`) — the next peer commit would have deleted them. This is the mechanism behind the 12 phantom
+  staged deletes already sitting in that index; it is not enough to keep peer state out of *your* commit.
+- `timeout` is not on this machine (no coreutils); `gtimeout` or rely on the tool timeout.
+- **The same size-desync bug recurred through a second door: lazy mounting.** The `lastCols = 0` seed
+  fixed the *guard*, but `SessionMirror` is the only view of a pty and `CentrePane` mounts a group
+  only once it has been the active terminal tab, so a restored panel is never measured at all. Its pty
+  keeps the `create(220, 50, …)` spawn constant until the user first activates that group — and text
+  reaches it before then (typing straight after a switch, an injected `/cd`), which is the reported
+  "backspace does nothing". **Fixing the reconciler does not help state that is never reconciled:** ask
+  who measures, not just whether the update is sent.
+- **A value equal to the spawn constant to the digit is "never sized", not "sized wrongly".** Three
+  live panels read exactly 220 while their siblings read 137 — that precision is the whole diagnosis,
+  same signature as the stale-build screenshot. `stty -f /dev/ttysNNN size` reads the kernel's belief;
+  the `PROMPT_SP` padding run in the raw log reads *zsh's*. Check both — they can disagree, and only
+  the second explains the glyph.
+- **Spawn size belongs to the app, not to the call site.** Six `create(220, 50, …)` callers each passed
+  a placeholder they had no way to compute. Recording the newest real pane geometry in main (persisted,
+  and lent to every session the renderer has never measured) makes an un-viewed panel correct by
+  construction and deletes the magic constant's authority without touching a single caller.
+- **Don't find this app's ptys by process tree.** `node-pty` shells hang off an Electron *helper*, so
+  `pgrep -P <electron-pid>` and `ps -o ppid= -ax | awk '$1==launchpid'` return nothing and print
+  `stty: /dev/??: No such file or directory` — which reads as "the app has no terminals" rather than as
+  a broken filter. Snapshot `/dev/ttys*` before launching and diff after. And to prove a value the pty
+  was *born* with, poll from t=0 (`| awk '!seen[$0]++'`): the ptys don't exist for ~4.5 s, so one late
+  sample can't distinguish born-correct from born-wrong-and-repaired. `stty -f <tty> size` prints
+  **rows then cols**.

@@ -28,6 +28,8 @@ export type GhPRNode = {
   statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
   mergeable: string;
   mergeStateStatus: string;
+  /** Optional: PRs cached before this field existed replay without it. */
+  commentCount?: number;
 };
 
 declare global {
@@ -35,7 +37,7 @@ declare global {
     terminal: {
       getState: () => Promise<{
         terminalCounter: number;
-        lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[];
+        lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[];
       }>;
       create: (
         cols: number,
@@ -47,7 +49,7 @@ declare global {
       /** Panel number → epoch ms of its last PTY output. */
       getActivity: () => Promise<Record<number, number>>;
       listHistory: () => Promise<{ number: number; size: number; lastModified: number; title?: string }[]>;
-      savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; pinned?: boolean }[]) => void;
+      savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[]) => void;
       write: (id: string, data: string) => void;
       resize: (id: string, cols: number, rows: number) => void;
       close: (id: string) => void;
@@ -80,6 +82,7 @@ declare global {
           modelBreakdown: { model: string; cost: number; costContent: number; costCache: number; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }[];
           dailyCounts: { date: string; count: number }[];
           dailyTokens: { date: string; tokens: number }[];
+          skillUses: { name: string; ts: number; repo: string }[];
         };
         repos: { name: string; visits: number; lastSeen: number }[];
       }>;
@@ -92,6 +95,7 @@ declare global {
       onClaudeConfigChanged: (cb: () => void) => () => void;
       getPanelClaudeSessions: (panelNumber: number) => Promise<{ claudeSessionId: string; cwd: string; startedAt: number }[]>;
       getAllPanelClaudeSessions: () => Promise<Record<number, { claudeSessionId: string; cwd: string; startedAt: number }[]>>;
+      getClaudeTitles: () => Promise<Record<number, { title: string; source: "custom" | "ai" }>>;
       getClaudeHookStatus: () => Promise<{ scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean }>;
       installClaudeHook: () => Promise<{ ok: boolean; error?: string }>;
       getAllClaudeTasks: () => Promise<TaskSummary[]>;
@@ -139,10 +143,14 @@ declare global {
       openInEditor: (repoOrPath: string, filePath: string, editor: string) => Promise<void>;
       showInFinder: (repoOrPath: string, filePath: string) => Promise<void>;
       getRepoBranch: (repoName: string) => Promise<string | null>;
+      getRepoRoot: (cwd: string) => Promise<string | null>;
       getWorkingTree: (repoName: string) => Promise<{
         staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
         unstaged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
       }>;
+      watchWorkingTree: (repoName: string) => Promise<void>;
+      unwatchWorkingTree: () => Promise<void>;
+      onWorkingTreeChanged: (cb: (repoName: string) => void) => () => void;
       getChangeCount: (repoName: string) => Promise<number>;
       getRepoStatus: (repoOrPath: string) => Promise<RepoStatus | null>;
       getFileDiff: (repoName: string, filePath: string, staged: boolean) => Promise<string>;
@@ -154,6 +162,8 @@ declare global {
       gitCommit: (repoName: string, message: string) => Promise<void>;
       getCommits: (repoName: string, headRefName: string, prNumber?: number) => Promise<{ hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number }[]>;
       getCommitDiff: (repoName: string, hash: string) => Promise<string>;
+      getBranchDiff: (repoName: string) => Promise<{ base: string | null; diff: string }>;
+      getBranchPR: (repoName: string, branch: string) => Promise<number | null>;
       cloneRepository: (url: string, requestId: string) => void;
       onCloneProgress: (requestId: string, cb: (text: string) => void) => () => void;
       onCloneDone: (requestId: string, cb: (repoName: string) => void) => () => void;
@@ -387,7 +397,10 @@ export function useTerminal(
     // rAF-coalesced: a window drag fires the observer many times/sec; do one
     // fit per frame and only round-trip to the PTY when dimensions actually change.
     let resizeRaf = 0;
-    let lastCols = term.cols, lastRows = term.rows;
+    // Seeded to 0, not the fitted size: the PTY spawns at a fixed 220×50 guess and the initial fit
+    // above is renderer-only, so seeding from term.cols makes the first callback a no-op and leaves
+    // the shell wrapping/erasing against 220 columns forever.
+    let lastCols = 0, lastRows = 0;
     const resizeObserver = new ResizeObserver(() => {
       if (resizeRaf) return;
       resizeRaf = requestAnimationFrame(() => {

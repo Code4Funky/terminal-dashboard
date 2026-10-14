@@ -18,6 +18,8 @@ import { SessionSwitcher } from "./SessionSwitcher";
 import { CommandPalette } from "./CommandPalette";
 import type { Command } from "./CommandPalette";
 import { SettingsModal } from "./SettingsModal";
+import { StatusStrip } from "./StatusStrip";
+import type { PRStatus } from "./StatusStrip";
 import { useTheme } from "../ThemeContext";
 import { SYS_FONT, MONO_FONT, TABULAR } from "../theme";
 import { rowState, chip, dot, CLIP, CLIP_LEFT, RADIUS, RADIUS_SM, TRANSITION } from "../chrome";
@@ -37,8 +39,9 @@ interface PanelState {
   groupId: string;
   /** Split axis for the whole group — the most recent split direction wins. */
   groupDir: SplitDir;
-  /** Title was chosen deliberately (rename, worktree, repo), so the cwd must not overwrite it. */
-  pinned?: boolean;
+  /** Title carries something the cwd cannot express (a rename, a claude session), so `cd` must not
+   *  overwrite it. A repo or directory name is only a cwd snapshot and goes stale — never named. */
+  named?: boolean;
 }
 
 type SplitDir = "row" | "column";
@@ -78,20 +81,29 @@ function safeDirName(s: string): string {
 
 function savePanels(panels: PanelState[]) {
   window.terminal.savePanels(
-    panels.map((p) => ({ number: p.number, title: p.title, group: p.groupId, dir: p.groupDir, pinned: p.pinned }))
+    panels.map((p) => ({ number: p.number, title: p.title, group: p.groupId, dir: p.groupDir, named: p.named }))
   );
+}
+
+const WORKTREES = "-worktrees";
+
+/** Display name for a checkout root — a worktree reads as the repo it belongs to. */
+function repoLabel(root: string | null): string | null {
+  if (!root) return null;
+  const [, underGithub] = root.match(/\/Documents\/GitHub\/([^/]+)/) ?? [];
+  const name = underGithub ?? root.split("/").pop() ?? null;
+  return name?.endsWith(WORKTREES) ? name.slice(0, -WORKTREES.length) : name;
 }
 
 /** Tab name for a cwd: the repo when inside a checkout, otherwise the directory itself. */
 function cwdTitle(cwd: string): string {
-  const repo = cwd.match(/\/Documents\/GitHub\/([^/]+)/)?.[1];
-  if (repo) return repo;
+  const [, first, second] = cwd.match(/\/Documents\/GitHub\/([^/]+)(?:\/([^/]+))?/) ?? [];
+  // A worktree sits at <repo>-worktrees/<branch dir>; name it for the repo it belongs to
+  if (first?.endsWith(WORKTREES) && second) return `${first.slice(0, -WORKTREES.length)}:${second}`;
+  if (first) return first;
   if (/^\/Users\/[^/]+$/.test(cwd)) return "~";
   return cwd.replace(/\/+$/, "").split("/").pop() || "/";
 }
-
-/** A generic placeholder name — the panel is free to take its title from the cwd. */
-const isPlaceholderTitle = (title: string) => /^terminal \d+$/.test(title);
 
 export function Dashboard() {
   const { theme, toggleTheme } = useTheme();
@@ -152,12 +164,24 @@ export function Dashboard() {
   // new-terminal / file-tree pickers take their repo list from the same sweep of local clones.
   const prInbox = usePRInbox();
   const modalRepos = useMemo(() => prInbox.repos.map((r) => ({ name: r.name })), [prInbox.repos]);
-  const needYouCount = useMemo(
-    () => (prInbox.loading
-      ? null
-      : bucketPRs(prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin).needsYourReview?.length ?? 0),
-    [prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin, prInbox.loading],
-  );
+  // Bucket once for both readouts. `open` is the bucket sum, not `prs.length`, so the status strip
+  // and the PRs panel header can never quote different totals.
+  const prCounts = useMemo(() => {
+    if (prInbox.loading) return null;
+    const b = bucketPRs(prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin);
+    return {
+      open: Object.values(b).reduce((n, x) => n + (x?.length ?? 0), 0),
+      needYou: b.needsYourReview?.length ?? 0,
+    };
+  }, [prInbox.prs, prInbox.ghLogin, prInbox.myTeams, prInbox.updatedWithin, prInbox.loading]);
+  const needYouCount = prCounts?.needYou ?? null;
+  const prStatus: PRStatus = {
+    open: prCounts?.open ?? 0,
+    needYou: prCounts?.needYou ?? 0,
+    lastRefreshed: prInbox.lastRefreshed,
+    loading: prInbox.loading,
+    error: prInbox.error,
+  };
   const [localBranches, setLocalBranches] = useState<{ repo: string; branch: string }[]>([]);
   useEffect(() => {
     window.terminal.listLocalBranches().then(setLocalBranches).catch(() => {});
@@ -200,7 +224,7 @@ export function Dashboard() {
         for (const saved of toRestore) {
           const { sessionId } = await window.terminal.create(220, 50, saved.number);
           // Pre-split state files have no group — each panel becomes its own
-          restored.push({ id: sessionId, sessionId, number: saved.number, title: saved.title, groupId: saved.group || sessionId, groupDir: saved.dir || "row", pinned: saved.pinned });
+          restored.push({ id: sessionId, sessionId, number: saved.number, title: saved.title, groupId: saved.group || sessionId, groupDir: saved.dir || "row", named: saved.named });
         }
         setPanels(restored);
         const last = restored.at(-1);
@@ -231,8 +255,8 @@ export function Dashboard() {
         const next = prev.map((p) => {
           if (p.sessionId !== sessionId) return p;
           const nextBranch = gitBranch || undefined;
-          // An unpinned tab names itself after wherever the shell is now
-          const title = p.pinned ? p.title : cwdTitle(cwd);
+          // Anything not deliberately named follows the shell wherever it goes
+          const title = p.named ? p.title : cwdTitle(cwd);
           if (p.cwd === cwd && p.gitBranch === nextBranch && p.title === title) return p;
           changed = true;
           return { ...p, cwd, gitBranch: nextBranch, title };
@@ -244,9 +268,21 @@ export function Dashboard() {
   }, []);
 
   const focusedPanel = panels.find((p) => p.id === focusedId);
-  const focusedRepo = focusedPanel?.cwd?.match(/\/Documents\/GitHub\/([^/]+)/)?.[1] ?? null;
+
+  // Ask git where the checkout starts. A path segment can't: it reads a linked worktree as
+  // `<repo>-worktrees` — a plain directory — so every git call the rail makes lands outside a repo.
+  const [focusedRepoRoot, setFocusedRepoRoot] = useState<string | null>(null);
+  useEffect(() => {
+    const cwd = focusedPanel?.cwd;
+    if (!cwd) { setFocusedRepoRoot(null); return; }
+    let live = true;
+    window.terminal.getRepoRoot(cwd).then((root) => { if (live) setFocusedRepoRoot(root); }).catch(() => {});
+    return () => { live = false; };
+  }, [focusedPanel?.cwd]);
+
+  const focusedRepo = repoLabel(focusedRepoRoot);
   // The file tree browses any path; the git panels can't — so a non-repo cwd only feeds the tree
-  const focusedRoot = focusedRepo ?? focusedPanel?.cwd ?? null;
+  const focusedRoot = focusedRepoRoot ?? focusedPanel?.cwd ?? null;
 
   const focusedGroupSize = sessionGroup?.panes.length ?? 0;
   const visibleGroupDir = sessionGroup?.dir ?? "row";
@@ -271,13 +307,13 @@ export function Dashboard() {
   useEffect(() => {
     let live = true;
     const poll = () => {
-      if (!focusedRepo) { setRepoStatus(null); return; }
-      window.terminal.getRepoStatus(focusedRepo).then((s) => { if (live) setRepoStatus(s); }).catch(() => {});
+      if (!focusedRepoRoot) { setRepoStatus(null); return; }
+      window.terminal.getRepoStatus(focusedRepoRoot).then((s) => { if (live) setRepoStatus(s); }).catch(() => {});
     };
     poll();
     const id = setInterval(() => { poll(); setStatusTick((v) => v + 1); }, 30_000);
     return () => { live = false; clearInterval(id); };
-  }, [focusedRepo, focusedPanel?.gitBranch]);
+  }, [focusedRepoRoot, focusedPanel?.gitBranch]);
 
   // A root switch parks the old file and restores the new root's; closing the tree leaves the viewer up
   const prevBrowseRepo = useRef(fileBrowseRepo);
@@ -304,8 +340,9 @@ export function Dashboard() {
     return cleanup;
   }, []);
 
-  const addPanel = (sessionId: string, number: number, title: string, groupId?: string) => {
-    const panel: PanelState = { id: sessionId, sessionId, number, title, groupId: groupId ?? sessionId, groupDir: "row", pinned: !isPlaceholderTitle(title) };
+  // `title` is only the opening label; unless `named`, the first shell prompt renames it from the cwd
+  const addPanel = (sessionId: string, number: number, title: string, groupId?: string, named?: boolean) => {
+    const panel: PanelState = { id: sessionId, sessionId, number, title, groupId: groupId ?? sessionId, groupDir: "row", named };
     setPanels((prev) => { const next = [...prev, panel]; savePanels(next); return next; });
     setFocusedId(sessionId);
     window.terminal.setFocused(sessionId);
@@ -313,7 +350,7 @@ export function Dashboard() {
 
   const handleRename = useCallback((panelId: string, newTitle: string) => {
     setPanels((prev) => {
-      const next = prev.map((p) => p.id === panelId ? { ...p, title: newTitle, pinned: true } : p);
+      const next = prev.map((p) => p.id === panelId ? { ...p, title: newTitle, named: true } : p);
       savePanels(next);
       return next;
     });
@@ -336,7 +373,7 @@ export function Dashboard() {
     if (!source) return;
     if (panelsRef.current.filter((p) => p.groupId === source.groupId).length >= MAX_PANES) return;
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, source.cwd ? `cd ${shellQuote(source.cwd)}` : undefined);
-    const panel: PanelState = { id: sessionId, sessionId, number, title: source.title, cwd: source.cwd, gitBranch: source.gitBranch, groupId: source.groupId, groupDir: dir, pinned: source.pinned };
+    const panel: PanelState = { id: sessionId, sessionId, number, title: source.title, cwd: source.cwd, gitBranch: source.gitBranch, groupId: source.groupId, groupDir: dir, named: source.named };
     setPanels((prev) => {
       // Insert beside the source so pane order matches visual order
       const at = prev.findIndex((p) => p.id === panelId);
@@ -458,7 +495,7 @@ export function Dashboard() {
     const cdPart = cwd ? `cd ${shellQuote(cwd)} && ` : "";
     const cmd = `${cdPart}claude --resume ${shellQuote(claudeSessionId)}`;
     const { sessionId, number } = await window.terminal.create(220, 50, undefined, cmd);
-    addPanel(sessionId, number, `claude ${claudeSessionId.slice(0, 8)}`);
+    addPanel(sessionId, number, `claude ${claudeSessionId.slice(0, 8)}`, undefined, true);
   };
 
   const handleClose = useCallback((panelId: string) => {
@@ -592,6 +629,8 @@ export function Dashboard() {
     </button>
   );
 
+  const railDivider = <div style={{ height: 1, alignSelf: "stretch", background: t.borderSubtle, margin: "3px 10px", flexShrink: 0 }} />;
+
   const RAIL_ICON = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
   // Rail items switch the sidebar panel; clicking the active one collapses the sidebar.
@@ -613,7 +652,10 @@ export function Dashboard() {
       background: t.surface1,
       borderRight: `1px solid ${t.border}`,
       display: "flex", flexDirection: "column", alignItems: "stretch",
-      padding: "6px 0", gap: 1, overflow: "hidden",
+      padding: "6px 0", gap: 1,
+      // Ten buttons need ~545px. Below that the spacer is already collapsed, so scroll rather than
+      // clip the avatar and KB off the bottom.
+      overflowX: "hidden", overflowY: "auto",
     }}>
       {railButton("sessions", "Sessions", "Sessions (⌘B)",
         <svg {...RAIL_ICON}><circle cx="12" cy="12" r="9"/><path d="M12 5a7 7 0 0 1 7 7"/></svg>,
@@ -632,6 +674,25 @@ export function Dashboard() {
         sidebarVisible && sidebarPanel === "tasks", () => openSidebarPanel("tasks"))}
 
       <div style={{ flex: 1 }} />
+
+      {/* Overlay drawers, not navigation — they open over the centre pane rather than swapping the
+          sidebar column. Ordered by their ⌘⇧N shortcut so the rail and the numbering agree. */}
+      {railDivider}
+      {railButton("stats", "Stats", "Stats  ⌘⇧1",
+        <svg {...RAIL_ICON}><path d="M3 20h18"/><path d="M6 20v-7M12 20V5M18 20v-9"/></svg>,
+        activePanel === "stats", () => handlePanelToggle("stats"))}
+      {railButton("history", "History", "History  ⌘⇧2",
+        <svg {...RAIL_ICON}><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>,
+        activePanel === "history", () => handlePanelToggle("history"))}
+      {railButton("notes", "Notes", "Notes  ⌘⇧3",
+        <svg {...RAIL_ICON}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>,
+        activePanel === "notes", () => handlePanelToggle("notes"))}
+      {railButton("claude-agents", "Claude", "Claude agents  ⌘⇧4",
+        <svg {...RAIL_ICON}><path d="M12 2l2 8 8 2-8 2-2 8-2-8-8-2 8-2z"/></svg>,
+        activePanel === "claude-agents", () => handlePanelToggle("claude-agents"))}
+      {railButton("kb-chat", "KB", "KB chat  ⌘⇧5",
+        <svg {...RAIL_ICON}><path d="M5 4h14v16H7a2 2 0 0 1-2-2z"/><path d="M5 18a2 2 0 0 1 2-2h12"/></svg>,
+        activePanel === "kb-chat", () => handlePanelToggle("kb-chat"))}
 
       <div title="You" style={{
         width: 26, height: 26, borderRadius: "50%", margin: "6px auto 4px", flexShrink: 0,
@@ -897,7 +958,7 @@ export function Dashboard() {
         {!zenMode && navRail}
         {!zenMode && sidebarVisible && sidebarPanel === "sessions" && (
           <RepoSidebar
-            tabs={panels.map((p): TerminalTab => ({ id: p.id, number: p.number, title: p.title, cwd: p.cwd, gitBranch: p.gitBranch }))}
+            tabs={panels.map((p): TerminalTab => ({ id: p.id, number: p.number, title: p.title, cwd: p.cwd, gitBranch: p.gitBranch, named: p.named }))}
             focusedId={focusedId}
             onFocusTab={(id) => { setFocusedId(id); const p = panels.find((x) => x.id === id); if (p) window.terminal.setFocused(p.sessionId); }}
             onCloseTab={handleClose}
@@ -905,6 +966,8 @@ export function Dashboard() {
             prs={prInbox.prs}
             needYouCount={needYouCount}
             onOpenPRs={() => openSidebarPanel("prs")}
+            repoStatus={repoStatus}
+            prStatus={prStatus}
           />
         )}
         {!zenMode && sidebarVisible && sidebarPanel === "files" && (
@@ -954,6 +1017,7 @@ export function Dashboard() {
         }}>
           <CentrePane
             repoName={focusedRepo}
+            repoRoot={focusedRepoRoot}
             sessionGroups={sessionGroups}
             activeGroupId={activeGroupId}
             viewerTab={viewerOpen ? { path: fileView!.path, body: fileViewer, onClose: () => openFile(null) } : undefined}
@@ -1054,35 +1118,7 @@ export function Dashboard() {
       </div>
 
       {/* Status bar */}
-      {!zenMode && (
-        <div style={{
-          height: 26, flexShrink: 0, display: "flex", alignItems: "center", gap: 10,
-          padding: "0 10px", background: t.surface1, borderTop: `1px solid ${t.border}`,
-          fontSize: 11, color: t.label3, ...MONO_FONT, ...TABULAR,
-          WebkitAppRegion: "no-drag",
-        } as React.CSSProperties}>
-          {repoStatus ? (
-            <>
-              <span style={{ flex: "0 1 auto", color: t.label2, maxWidth: 260, ...CLIP_LEFT }} title={repoStatus.branch}>
-                ⎇ {repoStatus.branch}
-              </span>
-              {(repoStatus.ahead > 0 || repoStatus.behind > 0) && (
-                <span style={{ flex: "none" }}>
-                  {repoStatus.ahead > 0 && <span style={{ color: t.green }}>↑{repoStatus.ahead}</span>}
-                  {repoStatus.ahead > 0 && repoStatus.behind > 0 && " "}
-                  {repoStatus.behind > 0 && <span style={{ color: t.orange }}>↓{repoStatus.behind}</span>}
-                </span>
-              )}
-              <span style={{ flex: "none", color: repoStatus.changed > 0 ? t.label2 : t.label4 }}>
-                {repoStatus.changed} changed
-              </span>
-            </>
-          ) : (
-            <span style={{ flex: "0 1 auto", color: t.label4, ...CLIP }}>No repo</span>
-          )}
-
-        </div>
-      )}
+      {!zenMode && <StatusStrip repo={repoStatus} prs={prStatus} layout="bar" />}
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>

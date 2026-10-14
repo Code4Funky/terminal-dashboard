@@ -3,9 +3,10 @@ import { useTheme } from "../ThemeContext";
 import { MONO_FONT, SYS_FONT, TABULAR } from "../theme";
 import { RADIUS, RADIUS_SM, CLIP, panel, panelHeader, panelTitle, rowState, sectionLabel } from "../chrome";
 import {
-  WTFile, DiffFile, CommitEntry, parseDiff, DiffChunks, StatBlocks, DiffFileRow,
+  WTFile, DiffFile, CommitEntry, parseDiff, DiffChunks, StatBlocks, DiffFileRow, HunkNav,
   RepoGlyph, CopyGlyph, CheckGlyph, OpenGlyph, RefreshGlyph, paneTabStyle, SessionMirror,
 } from "./DiffKit";
+import { loadRoot, saveRoot } from "../rootMemory";
 
 /** Fixed width of the CHANGES rail; the tabbed pane takes whatever is left. */
 const RAIL_W = 240;
@@ -22,8 +23,10 @@ export interface SessionGroup {
 }
 
 interface Props {
-  /** Repo whose working tree the CHANGES rail shows. Null → placeholder rail. */
+  /** Repo whose working tree the CHANGES rail shows, for display and PR lookup. Null → placeholder rail. */
   repoName: string | null;
+  /** Checkout root behind `repoName` — every git command runs here, so worktrees resolve correctly. */
+  repoRoot: string | null;
   /** Every shell group. Only `activeGroupId` is on screen, but each group opened so far stays
    *  mounted and hidden — re-mounting an xterm replays its log and reprints the restore banner. */
   sessionGroups: SessionGroup[];
@@ -130,9 +133,11 @@ function BranchPicker({
   );
 }
 
+type WTSelection = { path: string; staged: boolean } | null;
+
 /** The permanent centre pane: one tab strip (session · open file · diff), with the CHANGES rail
  *  docked on its right. Replaces both the terminal dock and the working-tree DiffDrawer. */
-export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, showRail, localBranches, onCheckoutBranch, prReview }: Props) {
+export function CentrePane({ repoName, repoRoot, sessionGroups, activeGroupId, viewerTab, showRail, localBranches, onCheckoutBranch, prReview }: Props) {
   const { theme: t } = useTheme();
 
   // ── Tabs ────────────────────────────────────────────────────────────────────
@@ -172,7 +177,12 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
   const [wtUnstaged, setWtUnstaged] = useState<WTFile[]>([]);
   const [wtLoading, setWtLoading] = useState(false);
   const [wtHovered, setWtHovered] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<{ path: string; staged: boolean } | null>(null);
+  const [selectedFile, setSelectedFile] = useState<WTSelection>(() => (repoRoot ? loadRoot(repoRoot).diff : null));
+  /** Sole write path for the selection — parks it against the checkout so a session switch can restore it. */
+  const selectFile = (f: WTSelection) => {
+    setSelectedFile(f);
+    if (repoRoot) saveRoot(repoRoot, { diff: f });
+  };
   const [parsedFileDiff, setParsedFileDiff] = useState<DiffFile[]>([]);
   const [fileDiffLoading, setFileDiffLoading] = useState(false);
   const [commitMsg, setCommitMsg] = useState("");
@@ -183,11 +193,11 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   useEffect(() => {
     setCurrentBranch(null);
-    if (repoName) window.terminal.getRepoBranch(repoName).then(setCurrentBranch).catch(() => {});
-  }, [repoName]);
+    if (repoRoot) window.terminal.getRepoBranch(repoRoot).then(setCurrentBranch).catch(() => {});
+  }, [repoRoot]);
 
-  // ── Rail view: working tree ⇄ commits ⇄ PR files ────────────────────────────
-  const [railView, setRailView] = useState<"working-tree" | "commits" | "pr-files">("working-tree");
+  // ── Rail view: working tree ⇄ branch ⇄ commits ⇄ PR files ───────────────────
+  const [railView, setRailView] = useState<"working-tree" | "branch" | "commits" | "pr-files">("working-tree");
   const [commits, setCommits] = useState<CommitEntry[]>([]);
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
@@ -196,39 +206,84 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
   const [hoveredCommitHash, setHoveredCommitHash] = useState<string | null>(null);
   const commitsLoadedFor = useRef<string | null>(null);
 
+  // ── Branch diff ─────────────────────────────────────────────────────────────
+  // Everything the branch changed since it forked, committed or not yet pushed. Local git only —
+  // the working-tree view answers "what have I not committed", this answers "what is in the PR".
+  const [branchFiles, setBranchFiles] = useState<DiffFile[]>([]);
+  const [branchBase, setBranchBase] = useState<string | null>(null);
+  const [branchLoading, setBranchLoading] = useState(false);
+  // Keyed by path, not index — a refetch after a commit reorders the list under the selection.
+  const [selectedBranchPath, setSelectedBranchPath] = useState<string | null>(null);
+  const [branchPrNumber, setBranchPrNumber] = useState<number | null>(null);
+  const branchKeyRef = useRef<string | null>(null);
+  // Refetching the same branch is a React no-op, so the rail's refresh needs its own trigger.
+  const [branchTick, setBranchTick] = useState(0);
+
   // ── PR under review ─────────────────────────────────────────────────────────
   // A PR can live in a repo other than the focused terminal's, so everything PR-side reads `prRepo`.
-  const prRepo = prReview?.repoName ?? repoName;
+  const prRepo = prReview?.repoName ?? repoRoot;
   const [prFiles, setPrFiles] = useState<DiffFile[]>([]);
   const [prFilesLoading, setPrFilesLoading] = useState(false);
   const [selectedPrFileIdx, setSelectedPrFileIdx] = useState<number | null>(null);
   // Refetching the same PR is a React no-op, so the rail's refresh needs its own trigger.
   const [prFilesTick, setPrFilesTick] = useState(0);
 
-  const loadWorkingTree = () => {
-    if (!repoName) { setWtStaged([]); setWtUnstaged([]); return; }
-    setWtLoading(true);
-    window.terminal.getWorkingTree(repoName).then((status) => {
+  /** Scroll container of whichever diff body is on screen — the three are mutually exclusive, so
+   *  one ref serves all of them. `HunkNav` only reads it after commit, never during render. */
+  const diffScrollRef = useRef<HTMLDivElement>(null);
+
+  // `quiet` swaps the data in place — a watcher-triggered refresh must not flash "Loading…"
+  const loadWorkingTree = (quiet = false) => {
+    if (!repoRoot) { setWtStaged([]); setWtUnstaged([]); return; }
+    if (!quiet) setWtLoading(true);
+    window.terminal.getWorkingTree(repoRoot).then((status) => {
       setWtStaged(status.staged);
       setWtUnstaged(status.unstaged);
       setWtLoading(false);
+      // A parked selection can outlive its change — drop it rather than render an empty diff
+      setSelectedFile((cur) => {
+        if (!cur) return cur;
+        const live = (cur.staged ? status.staged : status.unstaged).some((f) => f.path === cur.path);
+        if (!live) saveRoot(repoRoot, { diff: null });
+        return live ? cur : null;
+      });
     }).catch(() => setWtLoading(false));
   };
 
-  useEffect(loadWorkingTree, [repoName]);
+  useEffect(loadWorkingTree, [repoRoot]);
+
+  /** Bumped on every push from the worktree watcher — re-fetches the open diff in place. */
+  const [wtTick, setWtTick] = useState(0);
+
+  // Live refresh: any edit, stage or checkout in the rail repo re-fetches rail + branch unprompted.
+  useEffect(() => {
+    if (!repoRoot) return;
+    window.terminal.watchWorkingTree(repoRoot);
+    const off = window.terminal.onWorkingTreeChanged((repo) => {
+      if (repo !== repoRoot) return;
+      loadWorkingTree(true);
+      setWtTick((n) => n + 1);
+      window.terminal.getRepoBranch(repoRoot).then(setCurrentBranch).catch(() => {});
+    });
+    return () => { off(); window.terminal.unwatchWorkingTree(); };
+  }, [repoRoot]);
 
   // A repo switch invalidates the diff tabs but not the session tab — that follows the focused
   // session, so staying on it is right. `openedGroups` is untouched, so no live mirror detaches.
   // A PR under review survives it: an unrelated `cd` must not close a diff the user is reading.
   useEffect(() => {
     if (prReview) return;
-    setPaneTab((cur) => (cur === "terminal" ? cur : homeTab));
-    setSelectedFile(null);
+    const parked = repoRoot ? loadRoot(repoRoot).diff : null;
+    setPaneTab((cur) => (cur === "terminal" || (cur === "file" && parked) ? cur : homeTab));
+    setSelectedFile(parked);
     setSelectedCommitHash(null);
     setRailView("working-tree");
     setCommits([]);
+    setBranchFiles([]);
+    setSelectedBranchPath(null);
     commitsLoadedFor.current = null;
-  }, [repoName]);
+    branchKeyRef.current = null;
+  }, [repoRoot]);
 
   // Opening a PR takes over the diff tab and the rail; closing it hands both back to the working tree.
   useEffect(() => {
@@ -244,6 +299,7 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
       setPrFiles([]);
       setRailView("working-tree");
     }
+    setSelectedBranchPath(null);
   }, [prReview?.repoName, prReview?.prNumber]);
 
   useEffect(() => {
@@ -256,15 +312,52 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
     }).catch(() => setPrFilesLoading(false));
   }, [prReview?.repoName, prReview?.prNumber, prFilesTick]);
 
+  // `wtTick` covers commits too — the watcher fires on `refs/`, so committing repaints the branch diff.
   useEffect(() => {
-    if (!selectedFile || !repoName) return;
-    setFileDiffLoading(true);
-    setParsedFileDiff([]);
-    window.terminal.getFileDiff(repoName, selectedFile.path, selectedFile.staged).then((raw) => {
+    if (railView !== "branch" || !repoRoot) return;
+    const key = `${repoRoot}:${currentBranch}`;
+    if (branchKeyRef.current !== key) {
+      branchKeyRef.current = key;
+      setBranchLoading(true);
+      setBranchFiles([]);
+    }
+    window.terminal.getBranchDiff(repoRoot).then(({ base, diff }) => {
+      if (branchKeyRef.current !== key) return;
+      setBranchBase(base);
+      setBranchFiles(parseDiff(diff));
+      setBranchLoading(false);
+    }).catch(() => { if (branchKeyRef.current === key) setBranchLoading(false); });
+  }, [railView, repoRoot, currentBranch, wtTick, branchTick]);
+
+  // Decorative only — the segment label. Deliberately off the diff's critical path, since this is
+  // the one part of the branch view that needs `gh` and the network.
+  useEffect(() => {
+    setBranchPrNumber(null);
+    if (!repoRoot || !currentBranch) return;
+    let live = true;
+    window.terminal.getBranchPR(repoRoot, currentBranch)
+      .then((n) => { if (live) setBranchPrNumber(n); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [repoRoot, currentBranch]);
+
+  // A selection change repaints with a loading state; a watcher tick swaps the diff in place.
+  // The key guard also drops a stale response that resolves after the selection moved on.
+  const diffKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedFile || !repoRoot) return;
+    const key = `${repoRoot}:${selectedFile.path}:${selectedFile.staged}`;
+    if (diffKeyRef.current !== key) {
+      diffKeyRef.current = key;
+      setFileDiffLoading(true);
+      setParsedFileDiff([]);
+    }
+    window.terminal.getFileDiff(repoRoot, selectedFile.path, selectedFile.staged).then((raw) => {
+      if (diffKeyRef.current !== key) return;
       setParsedFileDiff(parseDiff(raw));
       setFileDiffLoading(false);
-    }).catch(() => setFileDiffLoading(false));
-  }, [selectedFile?.path, selectedFile?.staged]);
+    }).catch(() => { if (diffKeyRef.current === key) setFileDiffLoading(false); });
+  }, [repoRoot, selectedFile?.path, selectedFile?.staged, wtTick]);
 
   // One commits rail, two sources: a PR's commits come off its head ref, otherwise the local branch.
   const commitsBranch = prReview ? prReview.headRefName : currentBranch;
@@ -296,42 +389,42 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
   const wtDeletions = [...wtStaged, ...wtUnstaged].reduce((s, f) => s + f.deletions, 0);
 
   const handleStageFile = async (path: string) => {
-    if (!repoName) return;
-    await window.terminal.stageFile(repoName, path).catch(() => {});
+    if (!repoRoot) return;
+    await window.terminal.stageFile(repoRoot, path).catch(() => {});
     loadWorkingTree();
-    if (selectedFile?.path === path) setSelectedFile({ path, staged: true });
+    if (selectedFile?.path === path) selectFile({ path, staged: true });
   };
   const handleUnstageFile = async (path: string) => {
-    if (!repoName) return;
-    await window.terminal.unstageFile(repoName, path).catch(() => {});
+    if (!repoRoot) return;
+    await window.terminal.unstageFile(repoRoot, path).catch(() => {});
     loadWorkingTree();
-    if (selectedFile?.path === path) setSelectedFile({ path, staged: false });
+    if (selectedFile?.path === path) selectFile({ path, staged: false });
   };
   const handleStageAll = async () => {
-    if (!repoName) return;
-    await window.terminal.stageAll(repoName).catch(() => {});
+    if (!repoRoot) return;
+    await window.terminal.stageAll(repoRoot).catch(() => {});
     loadWorkingTree();
     // The open diff would otherwise point at an unstaged copy that no longer exists
-    if (selectedFile && !selectedFile.staged) setSelectedFile({ path: selectedFile.path, staged: true });
+    if (selectedFile && !selectedFile.staged) selectFile({ path: selectedFile.path, staged: true });
   };
   const handleUnstageAll = async () => {
-    if (!repoName) return;
-    await window.terminal.unstageAll(repoName).catch(() => {});
+    if (!repoRoot) return;
+    await window.terminal.unstageAll(repoRoot).catch(() => {});
     loadWorkingTree();
-    if (selectedFile?.staged) setSelectedFile({ path: selectedFile.path, staged: false });
+    if (selectedFile?.staged) selectFile({ path: selectedFile.path, staged: false });
   };
   const executeDiscardUnstaged = async () => {
     setDiscardConfirm(false);
-    if (!repoName) return;
-    await window.terminal.discardUnstaged(repoName).catch(() => {});
+    if (!repoRoot) return;
+    await window.terminal.discardUnstaged(repoRoot).catch(() => {});
     loadWorkingTree();
-    if (selectedFile && !selectedFile.staged) setSelectedFile(null);
+    if (selectedFile && !selectedFile.staged) selectFile(null);
   };
   const handleCommit = async () => {
-    if (!repoName || !commitMsg.trim() || committing) return;
+    if (!repoRoot || !commitMsg.trim() || committing) return;
     setCommitting(true);
     try {
-      await window.terminal.gitCommit(repoName, commitMsg.trim());
+      await window.terminal.gitCommit(repoRoot, commitMsg.trim());
       setCommitMsg("");
       loadWorkingTree();
     } catch {}
@@ -356,7 +449,7 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
       <div
         key={rowKey}
         // Picking a changed file means "show me its diff" — never the editor or the shell
-        onClick={() => { setSelectedFile({ path: file.path, staged: isStaged }); setRailView("working-tree"); setPaneTab("file"); }}
+        onClick={() => { selectFile({ path: file.path, staged: isStaged }); setRailView("working-tree"); setPaneTab("file"); }}
         onMouseEnter={() => setWtHovered(rowKey)}
         onMouseLeave={() => setWtHovered(null)}
         style={{
@@ -431,6 +524,18 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
     );
   };
 
+  /** Rail view switcher segment. Same 2px-bottom-accent exception as `paneTabStyle` — a tab strip
+   *  has no row for `rowState` to fill. */
+  const railTabStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1, minWidth: 0, height: "100%", padding: "0 4px",
+    background: "none", border: "none", cursor: "pointer",
+    borderBottom: `2px solid ${active ? t.blue : "transparent"}`,
+    borderRight: `1px solid ${t.borderSubtle}`,
+    color: active ? t.label1 : t.label3,
+    fontSize: 11, fontWeight: active ? 600 : 400,
+    ...SYS_FONT, ...CLIP,
+  });
+
   const renderSectionHeader = (label: string, count: number, actionLabel: string, onAction: () => void, disabled?: boolean) => (
     <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "14px 12px 5px" }}>
       <span style={{ ...sectionLabel(t), padding: 0, flex: 1 }}>{label}</span>
@@ -455,18 +560,26 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
   const commitMode = railView === "commits" && !!selectedCommit;
   const selectedPrFile = selectedPrFileIdx == null ? null : prFiles[selectedPrFileIdx] ?? null;
   const prMode = railView === "pr-files" && !!selectedPrFile;
+  const selectedBranchFile = selectedBranchPath ? branchFiles.find((f) => f.path === selectedBranchPath) ?? null : null;
+  const branchMode = railView === "branch" && !!selectedBranchFile;
+  /** PR files and branch files are both "a file picked out of a parsed diff" — one pane renders either. */
+  const listMode = prMode || branchMode;
+  const listFile = prMode ? selectedPrFile : selectedBranchFile;
+  const listRepo = prMode ? prRepo : repoRoot;
   const selMeta = selectedFile
     ? [...wtStaged, ...wtUnstaged].find((f) => f.path === selectedFile.path && (selectedFile.staged ? wtStaged.includes(f) : wtUnstaged.includes(f)))
       ?? [...wtStaged, ...wtUnstaged].find((f) => f.path === selectedFile.path)
     : null;
   const crumbs = selectedFile && repoName ? [repoName, ...selectedFile.path.split("/")] : [];
-  const prCrumbs = selectedPrFile && prRepo ? [prRepo, ...selectedPrFile.path.split("/").slice(0, -1)] : [];
+  const listCrumbs = listFile && listRepo ? [listRepo, ...listFile.path.split("/").slice(0, -1)] : [];
   const prAdditions = prFiles.reduce((s, f) => s + f.additions, 0);
   const prDeletions = prFiles.reduce((s, f) => s + f.deletions, 0);
+  const branchAdditions = branchFiles.reduce((s, f) => s + f.additions, 0);
+  const branchDeletions = branchFiles.reduce((s, f) => s + f.deletions, 0);
   /** What the pane header's copy/open buttons act on. Null hides them — a commit diff spans files. */
   const paneActionFile = paneTab !== "file" ? null
-    : prMode ? { repo: prRepo, path: selectedPrFile!.path }
-    : selectedFile && !commitMode ? { repo: repoName, path: selectedFile.path }
+    : listMode ? { repo: listRepo, path: listFile!.path }
+    : selectedFile && !commitMode ? { repo: repoRoot, path: selectedFile.path }
     : null;
 
   return (
@@ -585,6 +698,14 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
             <button onClick={() => setPaneTab("file")} style={paneTabStyle(t, paneTab === "file")}>
               <span style={{ color: t.label4, fontSize: 10, flexShrink: 0, ...MONO_FONT }}>{selectedCommit!.hash.slice(0, 7)}</span>
               <span style={{ ...SYS_FONT, ...CLIP, maxWidth: 220 }}>{selectedCommit!.subject}</span>
+            </button>
+          ) : branchMode ? (
+            <button onClick={() => setPaneTab("file")} style={paneTabStyle(t, paneTab === "file")} title={selectedBranchFile!.path}>
+              <span style={{ ...MONO_FONT, ...CLIP, maxWidth: 220 }}>{selectedBranchFile!.path.split("/").pop()}</span>
+              <span style={{ display: "flex", gap: 5, flexShrink: 0, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                {selectedBranchFile!.additions > 0 && <span style={{ color: t.diffAddFg }}>+{selectedBranchFile!.additions}</span>}
+                {selectedBranchFile!.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selectedBranchFile!.deletions}</span>}
+              </span>
             </button>
           ) : selectedFile && (
             <button onClick={() => setPaneTab("file")} style={paneTabStyle(t, paneTab === "file")}>
@@ -705,11 +826,16 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
           );
         })}
 
-        {paneTab === "file" && !commitMode && !prMode && !selectedFile && (
+        {paneTab === "file" && !commitMode && !listMode && !selectedFile && (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <span style={{ color: t.label4, fontSize: 12, ...SYS_FONT }}>
               {railView === "pr-files"
                 ? (prFilesLoading ? "Fetching diff…" : "Select a file to view its diff.")
+                : railView === "branch"
+                ? (branchLoading ? "Fetching diff…"
+                  : !branchBase ? "No base branch to compare against."
+                  : branchFiles.length === 0 ? `No changes since ${branchBase}.`
+                  : "Select a file to view its diff.")
                 : !repoName ? "No repository in focus."
                 : totalWtChanges === 0 ? "Working tree is clean."
                 : "Select a file to view its diff."}
@@ -717,10 +843,10 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
           </div>
         )}
 
-        {/* PR file diff — same breadcrumb + body as the working tree, sourced from `gh pr diff` */}
-        {paneTab === "file" && prMode && (<>
+        {/* Diff of a file picked from a list — the PR's files or the branch's, same shape either way */}
+        {paneTab === "file" && listMode && (<>
           <div
-            title={`${prRepo}/${selectedPrFile!.path}`}
+            title={`${listRepo}/${listFile!.path}`}
             style={{
               height: 28, flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
               padding: "0 12px 0 14px", borderBottom: `1px solid ${t.borderSubtle}`,
@@ -729,7 +855,7 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
           >
             <RepoGlyph color={t.label4} />
             <div style={{ flex: 1, fontSize: 11, color: t.label3, ...MONO_FONT, ...CLIP }}>
-              {prCrumbs.map((seg, i) => (
+              {listCrumbs.map((seg, i) => (
                 <span key={i}>
                   {i > 0 && <span style={{ color: t.label4, padding: "0 4px" }}>/</span>}
                   {seg}
@@ -737,19 +863,20 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
               ))}
             </div>
             <span style={{ display: "flex", gap: 6, flexShrink: 0, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
-              {selectedPrFile!.additions > 0 && <span style={{ color: t.diffAddFg }}>+{selectedPrFile!.additions}</span>}
-              {selectedPrFile!.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selectedPrFile!.deletions}</span>}
+              {listFile!.additions > 0 && <span style={{ color: t.diffAddFg }}>+{listFile!.additions}</span>}
+              {listFile!.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{listFile!.deletions}</span>}
             </span>
+            <HunkNav scrollRef={diffScrollRef} resetKey={`${railView}:${listFile!.path}:${listFile!.chunks.length}`} t={t} />
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+          <div ref={diffScrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
             <div style={{ minWidth: "max-content" }}>
-              <DiffChunks files={[selectedPrFile!]} t={t} />
+              <DiffChunks files={[listFile!]} t={t} />
             </div>
           </div>
         </>)}
 
         {/* Working-tree file diff */}
-        {paneTab === "file" && !commitMode && !prMode && selectedFile && (<>
+        {paneTab === "file" && !commitMode && !listMode && selectedFile && (<>
           {/* Breadcrumb path */}
           <div
             title={`${repoName}/${selectedFile.path}`}
@@ -774,10 +901,11 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
                 {selMeta.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selMeta.deletions}</span>}
               </span>
             )}
+            <HunkNav scrollRef={diffScrollRef} resetKey={`wt:${selectedFile.path}:${selectedFile.staged}:${parsedFileDiff.length}`} t={t} />
           </div>
 
           {/* Diff body */}
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+          <div ref={diffScrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
             <div style={{ minWidth: "max-content" }}>
               {fileDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
               {!fileDiffLoading && parsedFileDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 12, ...SYS_FONT }}>No diff available.</div>}
@@ -803,8 +931,9 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
               {selectedCommit!.additions > 0 && <span style={{ color: t.diffAddFg }}>+{selectedCommit!.additions}</span>}
               {selectedCommit!.deletions > 0 && <span style={{ color: t.diffDelFg }}>−{selectedCommit!.deletions}</span>}
             </span>
+            <HunkNav scrollRef={diffScrollRef} resetKey={`c:${selectedCommitHash}:${commitDiff.length}`} t={t} />
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
+          <div ref={diffScrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "auto" }}>
             <div style={{ minWidth: "max-content" }}>
               {commitDiffLoading && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
               {!commitDiffLoading && commitDiff.length === 0 && <div style={{ padding: "12px 14px", color: t.label4, fontSize: 12, ...SYS_FONT }}>No diff available.</div>}
@@ -840,7 +969,9 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
               }}>{prReview ? prReview.headRefName : currentBranch}</span>
             )}
             <button
-              onClick={() => (prReview ? setPrFilesTick((n) => n + 1) : loadWorkingTree())}
+              onClick={() => (prReview ? setPrFilesTick((n) => n + 1)
+                : railView === "branch" ? setBranchTick((n) => n + 1)
+                : loadWorkingTree())}
               title="Refresh"
               style={{ background: "none", border: "none", cursor: "pointer", color: t.label3, padding: "0 2px", lineHeight: 0 }}
               onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
@@ -861,7 +992,30 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
             <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>
               No repository in focus.
             </div>
-          ) : railView === "pr-files" ? (
+          ) : (<>
+
+          {/* View switcher — the three rail views are peers. PR review keeps its own two-view chain. */}
+          {!prReview && (
+            <div style={{
+              flexShrink: 0, display: "flex", height: 30,
+              borderBottom: `1px solid ${t.borderSubtle}`,
+            }}>
+              {([
+                ["working-tree", "Working tree"],
+                ["branch", branchPrNumber ? `PR #${branchPrNumber}` : "Branch"],
+                ["commits", "Commits"],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => { setRailView(key); if (key !== "commits") setSelectedCommitHash(null); }}
+                  title={label}
+                  style={railTabStyle(railView === key)}
+                >{label}</button>
+              ))}
+            </div>
+          )}
+
+          {railView === "pr-files" ? (
             <>
               {/* PR files summary row — across to the PR's commits */}
               <div style={{
@@ -902,19 +1056,65 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
                 ))}
               </div>
             </>
-          ) : railView === "commits" ? (
+          ) : railView === "branch" ? (
             <>
-              {/* Commits summary row — back to whichever view owns this rail */}
+              {/* Branch summary row */}
               <div style={{
                 flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
                 padding: "0 12px", height: 30, borderBottom: `1px solid ${t.borderSubtle}`,
               }}>
-                <button
-                  onClick={() => { setRailView(prReview ? "pr-files" : "working-tree"); if (selectedCommitHash) { setSelectedCommitHash(null); } }}
-                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: t.label3, fontSize: 11, ...SYS_FONT }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
-                >← {prReview ? "Branch diff" : "Working tree"}</button>
+                <span style={{ color: t.label3, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                  {branchLoading ? "…" : `${branchFiles.length} file${branchFiles.length === 1 ? "" : "s"}`}
+                </span>
+                <span style={{ display: "flex", gap: 5, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                  {branchAdditions > 0 && <span style={{ color: t.diffAddFg }}>+{branchAdditions}</span>}
+                  {branchDeletions > 0 && <span style={{ color: t.diffDelFg }}>−{branchDeletions}</span>}
+                </span>
+                <div style={{ flex: 1 }} />
+                {branchBase && (
+                  <span title={`Compared against ${branchBase}`} style={{ color: t.label4, fontSize: 10, ...MONO_FONT, ...CLIP, maxWidth: 90 }}>
+                    vs {branchBase.replace(/^origin\//, "")}
+                  </span>
+                )}
+              </div>
+              <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+                {branchLoading && <div style={{ padding: "14px 12px", color: t.label4, fontSize: 11, ...MONO_FONT }}>Loading diff…</div>}
+                {!branchLoading && !branchBase && (
+                  <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>
+                    No base branch to compare against.
+                  </div>
+                )}
+                {!branchLoading && branchBase && branchFiles.length === 0 && (
+                  <div style={{ padding: "14px 12px", color: t.label4, fontSize: 12, ...SYS_FONT }}>
+                    No changes since <span style={{ color: t.teal, ...MONO_FONT }}>{branchBase}</span>.
+                  </div>
+                )}
+                {!branchLoading && branchFiles.map((f) => (
+                  <DiffFileRow
+                    key={`branch:${f.path}`}
+                    file={f}
+                    selected={f.path === selectedBranchPath}
+                    onSelect={() => { setSelectedBranchPath(f.path); setPaneTab("file"); }}
+                    t={t}
+                  />
+                ))}
+              </div>
+            </>
+          ) : railView === "commits" ? (
+            <>
+              {/* Commits summary row — the PR rail has no switcher, so it keeps its back link */}
+              <div style={{
+                flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
+                padding: "0 12px", height: 30, borderBottom: `1px solid ${t.borderSubtle}`,
+              }}>
+                {prReview && (
+                  <button
+                    onClick={() => { setRailView("pr-files"); if (selectedCommitHash) { setSelectedCommitHash(null); } }}
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: t.label3, fontSize: 11, ...SYS_FONT }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = t.label1)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = t.label3)}
+                  >← Branch diff</button>
+                )}
                 <div style={{ flex: 1 }} />
                 <span style={{ color: t.label3, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
                   {commitsLoading ? "…" : `${commits.length} commits`}
@@ -969,20 +1169,14 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
                 flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
                 padding: "0 12px", height: 30, borderBottom: `1px solid ${t.borderSubtle}`,
               }}>
-                <span style={{ color: t.label2, fontSize: 12, ...SYS_FONT }}>Working tree</span>
+                <span style={{ color: t.label3, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
+                  {totalWtChanges} file{totalWtChanges === 1 ? "" : "s"}
+                </span>
                 <span style={{ display: "flex", gap: 5, fontSize: 11, ...MONO_FONT, ...TABULAR }}>
                   {wtAdditions > 0 && <span style={{ color: t.diffAddFg }}>+{wtAdditions}</span>}
                   {wtDeletions > 0 && <span style={{ color: t.diffDelFg }}>−{wtDeletions}</span>}
                 </span>
                 <div style={{ flex: 1 }} />
-                {currentBranch && (
-                  <button
-                    onClick={() => setRailView("commits")}
-                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: t.blue, fontSize: 11, ...SYS_FONT, ...TABULAR }}
-                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-                  >Commits</button>
-                )}
               </div>
 
               {wtLoading ? (
@@ -1060,6 +1254,8 @@ export function CentrePane({ repoName, sessionGroups, activeGroupId, viewerTab, 
               )}
             </>
           )}
+
+          </>)}
         </div>
       )}
     </div>

@@ -7,7 +7,9 @@ import {
 } from "../chrome";
 import type { DotState } from "../chrome";
 import type { TaskSummary } from "../types/tasks";
-import type { GhPRNode } from "../hooks/useTerminal";
+import type { GhPRNode, RepoStatus } from "../hooks/useTerminal";
+import { StatusStrip, shortAgo } from "./StatusStrip";
+import type { PRStatus } from "./StatusStrip";
 
 // ── Terminal tabs ─────────────────────────────────────────────────────────────
 
@@ -17,6 +19,8 @@ export interface TerminalTab {
   title: string;
   cwd?: string;
   gitBranch?: string;
+  /** Hand-renamed — outranks the name Claude gives its own session. */
+  named?: boolean;
 }
 
 interface Props {
@@ -29,21 +33,15 @@ interface Props {
   prs: GhPRNode[];
   needYouCount: number | null;
   onOpenPRs: () => void;
+  /** Footer mirror of the window status bar — same component, stacked for 264px. */
+  repoStatus: RepoStatus | null;
+  prStatus: PRStatus;
 }
 
 // An agent that has stopped printing but still has work open is waiting on you. The task gate is what
 // keeps this off every idle shell, and 10s is above Claude's longest gap between spinner frames.
 const SILENT_MS = 10_000;
 const LIVE_MS = 3_000;
-
-/** Compact elapsed time for the session rows — "now", "4m", "2h", "3d". */
-function shortAgo(epochMs: number): string {
-  const secs = Math.max(0, Math.floor((Date.now() - epochMs) / 1000));
-  if (secs < 60) return "now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
-  return `${Math.floor(secs / 86400)}d`;
-}
 
 function isBranchTab(title: string): boolean {
   return !title.startsWith("terminal ");
@@ -54,6 +52,7 @@ export const SIDEBAR_W = 264;
 
 export function RepoSidebar({
   tabs, focusedId, onFocusTab, onCloseTab, onAddTab, prs, needYouCount, onOpenPRs,
+  repoStatus, prStatus,
 }: Props) {
   const { theme: t } = useTheme();
 
@@ -113,6 +112,17 @@ export function RepoSidebar({
     return () => clearInterval(id);
   }, [hasAgents]);
 
+  // Claude names its own sessions and re-emits the name as work goes on, so this has to be polled to
+  // catch a rename. Same agent gate as the activity poll — a window of plain shells costs nothing.
+  const [claudeTitles, setClaudeTitles] = useState<Record<number, { title: string; source: "custom" | "ai" }>>({});
+  useEffect(() => {
+    if (!hasAgents) return;
+    const poll = () => window.terminal.getClaudeTitles().then(setClaudeTitles).catch(() => {});
+    poll();
+    const id = setInterval(poll, 5_000);
+    return () => clearInterval(id);
+  }, [hasAgents]);
+
   // Per-repo working tree line stats (adds + dels) for tab cards
   const [repoTabStats, setRepoTabStats] = useState<Record<string, { adds: number; dels: number }>>({});
 
@@ -166,7 +176,7 @@ export function RepoSidebar({
           >+</button>
         </div>
 
-        {/* Cross-link to the PRs panel. Not the footer — Phase 6 reserves that for the status mirror. */}
+        {/* Cross-link to the PRs panel — the footer below carries the status mirror. */}
         <button
           onClick={onOpenPRs}
           onMouseEnter={() => setPrRowHovered(true)}
@@ -211,7 +221,12 @@ export function RepoSidebar({
               const gitRepoName = repoOf(tab) || null;
               const summary = panelTasks[tab.number];
 
+              // Claude's own name for the session, unless the panel was renamed by hand — that wins.
+              const sessionTitle = kind === "agent" && !tab.named ? claudeTitles[tab.number] : undefined;
+
               const displayName = (() => {
+                if (tab.named && tab.title) return tab.title;
+                if (sessionTitle) return sessionTitle.title;
                 if (!tab.title.startsWith("terminal ")) return tab.title;
                 if (gitRepoName) return gitRepoName;
                 if (!tab.cwd) return "idle";
@@ -219,6 +234,10 @@ export function RepoSidebar({
                 if (home === "~") return "idle";
                 return tab.cwd.split("/").filter(Boolean).pop() ?? "idle";
               })();
+              // An ai-title is Claude's guess, not your name for the session — one step down the ramp.
+              const nameColor = sessionTitle?.source === "ai"
+                ? (isActive ? t.label2 : t.label3)
+                : (isActive ? t.label1 : t.label2);
 
               const tabPR = tab.gitBranch
                 ? prs.find((pr) =>
@@ -251,11 +270,18 @@ export function RepoSidebar({
                     : `${summary.completed}/${summary.total}`)
                   : null;
 
-              const secondLine = tab.gitBranch
-                ? { icon: kind === "agent" ? "⎇" : "⟳", text: tab.gitBranch }
-                : tab.cwd
-                  ? { icon: "", text: tab.cwd.replace(/^\/Users\/[^/]+/, "~") }
-                  : null;
+              // The session name takes line 1, so the repo drops to line 2 and the branch to the tooltip.
+              const cwdShort = tab.cwd ? tab.cwd.replace(/^\/Users\/[^/]+/, "~") : "";
+              const secondLine = sessionTitle && gitRepoName
+                ? {
+                    icon: "", text: gitRepoName, clip: CLIP,
+                    hint: [cwdShort, tab.gitBranch && `⎇ ${tab.gitBranch}`].filter(Boolean).join("  "),
+                  }
+                : tab.gitBranch
+                  ? { icon: kind === "agent" ? "⎇" : "⟳", text: tab.gitBranch, clip: CLIP_LEFT, hint: tab.gitBranch }
+                  : cwdShort
+                    ? { icon: "", text: cwdShort, clip: CLIP_LEFT, hint: cwdShort }
+                    : null;
 
               return (
                 <div
@@ -271,9 +297,9 @@ export function RepoSidebar({
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={dot(t, state)} />
-                    <span style={{
+                    <span title={displayName} style={{
                       flex: "0 1 auto",
-                      color: isActive ? t.label1 : t.label2,
+                      color: nameColor,
                       fontSize: 13, lineHeight: "18px", fontWeight: isActive ? 600 : 400,
                       ...SYS_FONT, ...CLIP,
                     }}>{displayName}</span>
@@ -307,11 +333,11 @@ export function RepoSidebar({
                     <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 2, paddingLeft: 14 }}>
                       {secondLine.icon && <span style={{ color: t.label4, fontSize: 10, flex: "none" }}>{secondLine.icon}</span>}
                       <span
-                        title={secondLine.text}
+                        title={secondLine.hint}
                         style={{
                           flex: "0 1 auto", fontSize: 11, lineHeight: "15px",
                           color: isActive ? t.label2 : t.label3,
-                          ...MONO_FONT, ...CLIP_LEFT,
+                          ...MONO_FONT, ...secondLine.clip,
                         }}
                       >{secondLine.text}</span>
                       <span style={{ flex: 1, minWidth: 0 }} />
@@ -346,6 +372,8 @@ export function RepoSidebar({
           })()}
         </div>
       </div>
+
+      <StatusStrip repo={repoStatus} prs={prStatus} layout="footer" />
     </div>
   );
 }

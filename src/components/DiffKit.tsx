@@ -59,7 +59,10 @@ export function parseDiff(raw: string): DiffFile[] {
     }
     if (currentChunk) chunks.push(currentChunk);
     if (chunks.length > 0) {
-      const status: "A" | "D" | "M" = additions === 0 ? "D" : deletions === 0 ? "A" : "M";
+      // The header is authoritative — by line counts alone an append-only edit reads as an add.
+      const status: "A" | "D" | "M" = /^new file mode /m.test(section) ? "A"
+        : /^deleted file mode /m.test(section) ? "D"
+        : "M";
       files.push({ path, additions, deletions, chunks, status });
     }
   }
@@ -78,7 +81,7 @@ export function DiffChunks({ files, t }: { files: DiffFile[]; t: Theme }) {
             let oldLine = oldStart, newLine = newStart;
             return (
               <div key={ci}>
-                <div style={{
+                <div data-hunk="" style={{
                   padding: "2px 8px",
                   background: t.isDark ? "rgba(56,139,253,0.08)" : "rgba(0,100,200,0.06)",
                   color: t.blue, fontSize: 12, ...MONO_FONT,
@@ -129,6 +132,90 @@ export function DiffChunks({ files, t }: { files: DiffFile[]; t: Theme }) {
         </div>
       ))}
     </>
+  );
+}
+
+// ── Hunk navigation ───────────────────────────────────────────────────────────
+
+/** `⌃ n/N ⌄` walk over the hunk headers inside `scrollRef`, for a diff pane's header row.
+ *  The index is derived from scroll position, so hand-scrolling keeps the counter honest. */
+export function HunkNav({ scrollRef, resetKey, t }: {
+  scrollRef: React.RefObject<HTMLDivElement>;
+  /** Any change to the rendered diff — triggers a remeasure. */
+  resetKey: string;
+  t: Theme;
+}) {
+  const [nav, setNav] = useState({ index: 0, total: 0, scrollable: false });
+  const offsets = useRef<number[]>([]);
+
+  /** Always reads the live scroll position, so a clamped or impossible jump can't leave the
+   *  counter claiming a hunk you aren't on. */
+  const sync = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const scrollable = el.scrollHeight > el.clientHeight + 1;
+    let index = 0;
+    for (let k = 0; k < offsets.current.length; k++) if (offsets.current[k] <= el.scrollTop + 1) index = k;
+    // A trailing hunk shorter than the viewport can never reach the top edge, so pin at the bottom
+    if (scrollable && el.scrollTop + el.clientHeight >= el.scrollHeight - 1) index = offsets.current.length - 1;
+    setNav({ index, total: offsets.current.length, scrollable });
+  };
+
+  // The diff paints after its fetch resolves, so measure on the next frame rather than this tick
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      const top = el?.getBoundingClientRect().top ?? 0;
+      offsets.current = Array.from(el?.querySelectorAll<HTMLElement>("[data-hunk]") ?? [])
+        .map((h) => Math.round(h.getBoundingClientRect().top - top + el!.scrollTop));
+      sync();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [resetKey]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || nav.total === 0) return;
+    el.addEventListener("scroll", sync, { passive: true });
+    // Resizing the window or a panel changes whether the diff overflows at all. Offsets survive it —
+    // diff lines are `white-space: pre`, so they never rewrap.
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => { el.removeEventListener("scroll", sync); ro.disconnect(); };
+  }, [nav.total]);
+
+  // Nothing to walk when the whole diff already fits — a dead pair of chevrons reads as broken
+  if (nav.total === 0 || !nav.scrollable) return null;
+  const { index, total } = nav;
+
+  const go = (delta: number) => {
+    const next = Math.min(total - 1, Math.max(0, index + delta));
+    scrollRef.current?.scrollTo({ top: offsets.current[next] ?? 0 });
+    sync();
+  };
+
+  // Disabled rather than hidden at each end, so the group's width doesn't shift as you walk
+  const step = (glyph: string, delta: number, disabled: boolean) => (
+    <button
+      onClick={() => go(delta)}
+      disabled={disabled}
+      title={delta < 0 ? "Previous hunk" : "Next hunk"}
+      style={{
+        background: "none", border: "none", padding: "0 3px", lineHeight: 1,
+        color: disabled ? t.label4 : t.label3,
+        cursor: disabled ? "default" : "pointer", fontSize: 12, ...MONO_FONT,
+      }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.color = t.label1; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = disabled ? t.label4 : t.label3; }}
+    >{glyph}</button>
+  );
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+      {step("⌃", -1, index === 0)}
+      <span style={{ color: t.label4, fontSize: 10, ...MONO_FONT, ...TABULAR }}>{index + 1}/{total}</span>
+      {step("⌄", 1, index === total - 1)}
+    </div>
   );
 }
 

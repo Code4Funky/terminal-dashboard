@@ -1,5 +1,271 @@
 # Todo
 
+## Recently used skills in the Stats drawer (2026-08-12)
+
+**Source** (measured over the whole transcript corpus, not assumed). Two forms, 176 raw events
+all-time across 11 distinct skills:
+
+| form | shape | count |
+|---|---|---|
+| `Skill` tool call | assistant `content[].tool_use`, `name:"Skill"`, `input.skill` | 66 |
+| slash command | user text `<command-name>/name</command-name>` | 222, but most are CLI built-ins |
+
+**Filter, and why it is asymmetric.** A `Skill` tool_use is by construction a skill invocation, so it
+is counted unconditionally. The `<command-name>` stream is *not* — it carries `/exit` (50), `/model`
+(16), `/clear`, `/mcp`, `/resume`, `/context`, `/rename` — so it alone is resolved against skills on
+disk: any `SKILL.md` directory or `commands/*.md` basename under `~/.claude` (personal + every plugin
+cache and marketplace).
+
+> Applying the disk filter to *both* forms — the literal reading of the agreed rule — was measured and
+> rejected: `simplify` (42 runs, the most-used skill) no longer exists on disk, and neither do
+> `update-config`, `run` or the three `create-*-class` skills. Resolving everything against disk
+> silently erases every skill that was later deleted or renamed, i.e. exactly the history a stats
+> panel exists to show. Built-ins never appear as `Skill` tool calls, so the filter is only needed
+> where the false positives actually are.
+
+De-dup: same `(sessionId, skill)` inside 120 s collapses to one, since a typed `/skill` can produce
+both forms. Measured effect: 176 → 175, so the two forms are near-disjoint in practice.
+
+**Agreed layout** — new section on the Overview tab, below GitHub Repos, mirroring its shape
+(two summary cards over a card-wrapped list). Respects the drawer's existing All / 30d / 7d filter.
+
+```
+◇ Skills · 30d
+
+┌────────────────────┐┌────────────────────┐
+│ Top skill          ││ Skills used        │
+│ simplify           ││ 11                 │
+│ 14 runs            ││ 33 runs total      │
+└────────────────────┘└────────────────────┘
+┌──────────────────────────────────────────┐
+│ ordered by last use                      │
+│ simplify          14×  mobile-edge    2h │
+│ action-coderabbit  9×  mobile-edge    5h │
+│ create-pr          3×  terminal-dash  1d │
+└──────────────────────────────────────────┘
+```
+
+- [x] Main: known-skill name set from disk; tally both forms inside the existing
+      `computeClaudeStatsUncached` pass; return a flat `skillUses[]` (name, ts, repo)
+- [x] StatsDrawer: aggregate within the active filter window, order by last use, render the section
+- [x] Verify: tsc both projects, then drive the built app and read the section
+
+### Review
+
+Built as specced. Notes on the two places the implementation departed from the sketch:
+
+- **The list is one CSS grid, not a row of flex rows.** With per-row flex the columns only line up
+  when every repo name is the same length — `goto-repo · tungtran` pushed its `1×` out of the column.
+  `gridTemplateColumns: minmax(0,1fr) auto auto auto` over the whole list sizes each column to its
+  widest cell with no hand-tuned widths. Cost: the name column now yields to the repo column, so
+  `create-controller-endpoint` ellipses to `create-controller-endpoi…` (full name in the `title`).
+- **The window boundary is the existing `overviewCutoff` date string**, not a new numeric cutoff — a
+  timestamp is sliced to `YYYY-MM-DD` and string-compared, so the Skills section and the counters at
+  the top of the tab can never disagree about where "30d" starts.
+- `skillUses` was added to the `getStats` return type in `useTerminal.ts`. That declaration was
+  already stale (missing `activeDays`, `allTimeDailyCounts`, …) and is the reason for the
+  pre-existing `as ClaudeStats` cast error; I declared my own field and left the rest alone.
+
+**Verified** — `npx tsc --noEmit -p tsconfig.node.json` clean; `-p tsconfig.web.json` 15 errors, the
+unchanged baseline. Then `npm run build` and drove the built bundle under a fake `HOME` with `.claude`
+symlinked in (safe here — unlike the rename driver, this run only reads). Numbers cross-checked
+against a re-derivation written from scratch against the corpus rather than by importing the app's
+own helper:
+
+| window | independent scan | UI |
+|---|---|---|
+| all | 11 skills · 175 runs · top `action-coderabbit` 105 | 11 · 175 · `action-coderabbit` 105 runs |
+| 30d | 11 skills · 175 runs | 11 · 175 |
+| 7d | 5 skills · 42 runs · top `action-coderabbit` 27 | 5 · 42 · `action-coderabbit` 27 runs |
+
+Row order matched exactly in all three windows. 716 transcripts, 346 skill names resolved on disk,
+175 raw events → 175 after de-dup (the two forms did not overlap once in this corpus).
+
+Cold-start cost measured, since the regex now runs over every user message: **461 ms** of extraction
+across 116 029 entries in 720 transcripts, on top of a pass that already reads and parses all of them.
+No extra file reads, and it sits behind the existing `claudeFilesSignature` memo, so a warm drawer
+open pays nothing.
+
+**Not verified:** behaviour when a skill name contains characters outside `[a-z0-9][\w-]{0,48}` — the
+`<command-name>` regex would skip it. No such name exists in the corpus or on disk today.
+
+## Claude session name in the Sessions rail (2026-08-12)
+
+Three agent rows on the same repo, branch and PR are indistinguishable in the 264px rail. Claude
+already names its sessions — capture that name and make it the row's identity.
+
+**Source** (measured, not assumed). Claude appends title lines to its transcript at
+`~/.claude/projects/<slug>/<claudeSessionId>.jsonl`:
+`{"type":"custom-title","customTitle":"…"}` on a rename, `{"type":"ai-title","aiTitle":"…"}` for its
+own guess. A rename **stops** the ai-title stream, and both are re-emitted as the conversation grows,
+so the newest sits within ~25 KB of EOF (worst of 3 sampled; transcripts reach 35 MB — never read
+whole on a poll). `state.panelClaudeSessions[panelNumber]` already maps panel → session id + cwd.
+
+**Agreed layout** — title takes line 1, repo drops to line 2, branch moves into the tooltip:
+
+```
+  before                              after
+  ● mobile-edge-service  needs input  ● Geofence block message  needs input
+    ⎇ …3/geofence-block-msg   #1456     mobile-edge-service          #1456
+  ● mobile-edge-service               ● Retry backoff spike
+    ⎇ …3/geofence-block-msg   #1456     mobile-edge-service          #1456
+```
+
+Precedence: hand rename (double-click, `named`) → custom-title → ai-title → repo name (today's
+two-line shape, unchanged). ai-title renders one step down the label ramp — it's Claude's guess.
+
+- [x] Main: `claude:get-titles` → `Record<panelNumber, {title, source}>`; tail-read 256 KB, stat-cached,
+      one whole-file pass per session as backstop, 30 s negative cache on an unresolved transcript
+- [x] Preload + `useTerminal` type decl
+- [x] `TerminalTab.named` plumbed from Dashboard — a hand rename must outrank Claude's name
+- [x] RepoSidebar: poll while agents are open (5 s, gated on `hasAgents`), render the agreed layout
+- [x] Verify: tsc node clean, web at the 15-error baseline (same messages, unchanged files); driven
+      through Playwright against the built bundle
+
+**Verified** on a throwaway instance (temp `HOME`, the user's real `state.json`, transcripts copied
+rather than symlinked so the run could append a rename without touching real Claude data):
+
+| | rail row |
+|---|---|
+| custom-title | `debug skill` / `mobile-edge-service` |
+| custom-title | `kiok push` / `skills` |
+| ai-title | `Capture and display session name changes` — `rgb(154,162,178)` vs `rgb(228,231,237)` on an active row |
+| no title | `mobile-edge-service` / `⎇ tungtran/MOB-523/…` — old shape, untouched |
+| rename mid-run | append a `custom-title` line → row's line 1 flips **1521 ms** later |
+
+Not re-observed in the harness: the `#PR` badge beside the repo on line 2. A throwaway `HOME` has no
+persisted repo-root config, so `listPRs(["mobile-edge-service"])` returns `[]` in **0 ms** — no fetch
+is attempted and no row can carry a badge. The badge JSX is unchanged by this work and the repo name
+is shorter than the branch it replaces, so it has strictly more room than before.
+
+## Live refresh, PR fetch speed, untracked-file diff (2026-07-31)
+
+Three reported defects, root causes confirmed before touching anything:
+
+1. **Changes rail never refreshes on its own** — `loadWorkingTree` runs only on repo switch, manual ↺
+   and stage/unstage clicks. An edit made by the shell, Claude or an editor leaves the rail *and the
+   open diff* stale until a manual poke.
+2. **PR fetch too long** — the fan-out runs `gh pr list --json …comments…` per repo; `comments` is
+   full bodies. Measured on one repo: **4.9 s / 746 KB, 97% of it comment bodies** that `normalisePR`
+   throws away keeping only the count — and it brushes exec's 1 MB default `maxBuffer`, where overflow
+   is swallowed by `.catch(() => [])` and reads as "repo has no PRs". Nothing paints until the slowest
+   of ~40 repos returns.
+3. **New (untracked) file shows "No diff available"** — `git:file-diff` runs plain `git diff`, which
+   outputs nothing for a file git isn't tracking (status `??`).
+
+Measured dead ends, so a redo doesn't retry them: batching repos into one aliased GraphQL query 502s
+at even 4 repos (GitHub's ~10 s gateway limit compounds per busy repo — elasticserver alone costs
+~4.4 s server-side); PR-level `additions`/`deletions` cost ~1.6 s per busy repo but **are consumed**
+(RepoSidebar tab badges), so they stay.
+
+- [x] Main: single-slot recursive worktree watcher (`git:watch-working-tree` / `git:unwatch-working-tree`),
+      `.git` churn filtered to index/HEAD/refs, 400 ms debounce → `git:working-tree-changed` push
+      → verified: external write shows in the rail **509 ms** later, no ↺ click; delete drops the row in 509 ms
+- [x] CentrePane: subscribe per repo; quiet rail reload (no Loading flash), silent in-place re-fetch of
+      the open diff, branch chip refresh → verified: open diff gained the appended line **773 ms** after
+      an external append, in place
+- [x] Main: `prs:list` → per-repo `gh api graphql` (comment **count**, no bodies) mapped to the exact
+      `GhPRNode` shape; remote-url discovery parallelised → verified live through IPC: mobile-edge in
+      **2.7 s** (was 4.9 s), full field-shape assertion incl. `commentCount=7`, 6 rollup contexts
+- [x] Main: `prs:hydrate` → one aliased GraphQL query per 20 refs, per-PR `gh pr view` fallback,
+      partial-`data` salvage when one alias errors → verified: hydrated PR `===` fan-out PR by oid
+- [x] usePRInbox: localStorage cache seeds first paint; PRsDrawer full spinner only when nothing cached
+      → verified: cache written (348 PRs / 39 repos); a fresh renderer boot paints the count line in
+      **2 ms** with no spinner while the fan-out re-runs behind it
+- [x] Main: `git:file-diff` falls back to `git diff --no-index -- /dev/null <file>` for `??` files
+      (exit 1 carries the diff on stdout; header parses with the existing `parseDiff`)
+      → verified: untracked file renders add-hunks, "No diff available." absent
+- [x] tsc: node clean, web at the 15-error baseline (all 15 in untouched files); `npm run build`;
+      driver **11/11**
+
+### Review
+
+Six files: `electron/main/index.ts` (watcher + `git:file-diff` fallback + `PR_GQL_FIELDS`/`mapGqlPR`/
+`ghGraphQL` + both PR handlers rewritten), `electron/preload/index.ts` + `src/hooks/useTerminal.ts`
+(three watch APIs), `src/components/CentrePane.tsx` (subscribe effect, `quiet` reload, `wtTick` +
+`diffKeyRef` stale-response guard), `src/hooks/usePRInbox.ts` (cache), `src/components/PRsDrawer.tsx`
+(busy gate only).
+
+Kept deliberately: PR-level `additions`/`deletions` (RepoSidebar tab badges consume them — do not
+"optimise" them away, ~1.6 s/busy repo is their real cost); `PR_JSON_FIELDS` + `normalisePR` (the
+hydrate fallback still speaks `gh pr view --json`); `.git` self-trigger loop is convergent because
+`git status` only rewrites the index while stat cache is stale — the filter plus 400 ms debounce
+absorbs the one echo.
+
+Driver traps new to this session, both worth their line:
+- **gh under a fake `HOME` is unauthenticated** — the token lives in the macOS keychain, not
+  `hosts.yml`, and the keychain read fails with a redirected `HOME` ("token in default is invalid").
+  Pass `GH_TOKEN=$(gh auth token)` into the launch env.
+- **If the packaged app is running, a driven dev instance shares its userData** (`app.name` both
+  "Flight Deck") **and the live app holds the localStorage leveldb lock** — the driven renderer gets
+  in-memory storage that dies with the window, so "cache survives relaunch" silently reads as a cache
+  bug. `page.reload()` re-runs the renderer's boot initialisers against the surviving storage and is
+  the honest same-process equivalent. (State.json was safe — main-process paths follow `$HOME`;
+  Chromium's userData does not.)
+- Third occurrence of the rail-toggle trap: `tdash:sidebar-panel` persists, so after reload the PRs
+  drawer restores **open** and a blind `railButton` click closes it. Probe before clicking.
+
+## PR card — CI, comments, reviewer, draft (agreed spec 2026-07-30)
+
+Three signals on the branch/sha row, plus the draft case. Layout supplied as a mockup; the prose is
+the spec.
+
+### Agreed layout
+
+```
+┌ ⑃ [DRAFT] Migrate ApiTokenCache to Caffeine mem cache          ● Draft ┐
+│   Skedulo/mobile-edge-service#1448 · tungtranskedulo · Updated 3h ago  │
+│  ┌ ⎇ feature/mob-515-migrate-apitok… ⎘ ┐ ┌ ◉ 83e288a ⎘ ┐   ✓  ▭3  (VB) │
+└────────────────────────────────────────────────────────────────────────┘
+                                                       CI  comments  reviewer
+```
+
+### Pinned rules
+
+1. **CI reads first** — it decides whether the PR is reviewable at all. One icon carrying colour *and*
+   shape: green ring-check passing, red ring-cross failing, amber clock running. Hover gives the count
+   (`1 check failing`). Shape as well as colour, so it survives a colour-blind reader.
+2. **Failing outranks running outranks passing.** `CheckRun` reports `conclusion` + `status`,
+   `StatusContext` reports `state` — read `conclusion ?? state` and both collapse to the same verdict.
+3. **No checks gets a dashed muted ring**, not an absent icon — the row must not reflow between cards.
+4. Comment count is muted at 0 (`label4`) and brighter above (`label2`), so an active discussion is what
+   the eye lands on and empty ones recede.
+5. Reviewer is an initials circle: bot `purple`, person/team `teal`, all names on hover. **Unassigned is
+   a dashed empty ring** — "nobody's on this" is itself a signal, not blank space.
+6. `reviewerName` is `login ?? name ?? slug`. A Team's `slug` is org-qualified (`Skedulo/v3-backend-core`)
+   and would initialise as `SB`; its `name` is the plain one.
+7. **A draft never wears the orange call to action.** `DRAFT` tag beside the title, and the pill flips to
+   a quiet grey `Draft`. Orange means *waiting on you*; a draft isn't.
+8. `commentCount` is collapsed **in the main process**. `gh --json comments` returns full bodies — a
+   single Linear linkback comment measured ~1.5 KB, so 100 PRs × N bodies would cross IPC for one number.
+9. `commentCount` is optional on `GhPRNode`: PRs cached before the field existed replay without it.
+
+**Done 2026-07-30.** Three files: `electron/main/index.ts` (`comments` in `PR_JSON_FIELDS`, shared
+`normalisePR` collapsing it to a count on both the fan-out and hydration paths), `src/hooks/useTerminal.ts`
+(`commentCount?`), `src/components/PRsDrawer.tsx` (`ciRollup` + `CIStatus`/`CommentCount`/`ReviewerAvatar`,
+`ReviewPill` gains `isDraft`, pill moves to the title row).
+
+Verified in two passes — **9/9** on the rollup logic across states the live data can't show, and
+**18/18** under Playwright `_electron` against real PRs:
+
+| Check | Result |
+|---|---|
+| Rollup, 9 cases | real #1448 (6 mixed CheckRun/StatusContext) → `6 checks passing`; real #1447 (one `FAILURE`) → `1 check failing`; queued/pending → running; failing outranks running; cancelled and timed-out count as failing; skipped and neutral count as passing |
+| CI on screen | 6/6 cards; green check on passing, red cross on failing, different glyph *and* colour |
+| Comment count | 6/6; number always matches the tooltip |
+| Reviewer | 6/6; `VB` + `+1` for two reviewers with both names on hover; dashed empty ring on the unassigned draft |
+| Draft | #1445 → `DRAFT` tag + achromatic `Draft` pill; every non-draft keeps orange `Review pending` |
+| Type-check | `tsconfig.node.json` clean; `tsconfig.web.json` at the 15-error baseline, none in a touched file |
+
+Not covered by the live run: **no PR on screen had 0 comments**, so the muted-at-0 branch of rule 4 is
+untested against a real card. Likewise no `running` or `no checks` PR appeared — both are covered by the
+rollup cases but not by a render.
+
+Driver gotcha: **assert colour by hue relationship, never by literal `rgb()`.** Six assertions failed
+on hardcoded Breeze-dark hex while the app was running a different theme — a pure test bug that reads
+exactly like a product bug. `g > r && g > b` for green, `r > g && g > b` for orange, `max−min < 40` for
+"achromatic, not a call to action"; those hold under every theme and test the meaning the spec asks for.
+
 ## Phase 2 — Sessions panel: agent/shell rows + PR cross-link (agreed spec 2026-07-30)
 
 Approved: **lift PR state into Dashboard** for the `N need you` count, and a **PTY-idle heuristic** for
@@ -196,6 +462,162 @@ Driver gotchas, both costing a run:
   on width+height latches onto the inner list, whose children are the 26px tree rows — the probe then
   reports "no header" for a header that is on screen. Match the ~35px band globally by geometry instead
   (34px `height` + 1px border = 35 in `getBoundingClientRect`, so a `=== 34` test never fires).
+
+## Phase 6 — status bar + sidebar footer mirror (agreed spec 2026-07-30)
+
+### Gap vs the Phase 6 line
+
+A status bar already existed; it carried half the spec and used the wrong branch glyph.
+
+| Spec item | Before |
+|---|---|
+| `⟳ branch` | present but drawn with `⎇` — Phase 2 pinned `⎇` to *agent* branches |
+| `N changed` | already shipped |
+| `↑N ↓N` ahead/behind | already shipped — not in the spec, kept |
+| `N open PRs` | **missing** |
+| `N need you` | **missing** from the bar (the Sessions cross-link had it) |
+| `● synced Xm` | **missing** — `lastRefreshed` existed in `usePRInbox`, was never rendered |
+| sidebar footer mirrors it | **missing entirely** — `RepoSidebar` had no footer |
+
+Every input was already in `Dashboard`, including the 30s `setStatusTick` whose own comment said it
+existed to keep a sync-freshness label current. Phase 6 is what that tick was written for.
+
+### Agreed layout
+
+```
+bar     ⟳ cowork · 12 changed ················· 6 open PRs · 1 need you · ● synced now   26px
+footer  ⟳ cowork · 12 changed                                                            two rows,
+        6 open PRs · 1 need you · ● synced now                                           43px total
+```
+
+Bar pushes the two groups apart with a flex spacer; the footer stacks them because 264px cannot hold
+the line honestly (~310px at 11px mono). Same segments, same order, same colours either way.
+
+### Pinned rules
+
+1. **One component, two mount points.** `StatusStrip` with `layout="bar" | "footer"`. "Mirrors" is
+   then structural — there is no second copy of the strings to drift.
+2. `⟳` is a working tree's branch, `⎇` is an agent's branch. Phase 2's rule; the bar was violating it.
+3. **The glyph must sit outside the `CLIP_LEFT` span.** `CLIP_LEFT` is `direction: rtl`, which
+   reorders a leading neutral glyph to the far end — nested, the branch renders `cowork ⟳`.
+4. `open` is the **bucket sum**, not `prs.length`, so the strip and the PRs panel header can never
+   quote different totals. One `bucketPRs` call feeds both readouts.
+5. `0 need you` is hidden, matching the Sessions cross-link's existing rule.
+6. Counts are suppressed entirely while `loading` — the dot carries the state until they're honest.
+7. The sync dot is state, not decoration: green settled, amber syncing, red failed; `title` names the
+   exact refresh time.
+
+**Done** — `src/components/StatusStrip.tsx` (new, 119 lines); `Dashboard.tsx` replaced its 28-line
+inline bar with `<StatusStrip layout="bar">` and swapped `needYouCount` for a single `prCounts` memo;
+`RepoSidebar.tsx` mounts `<StatusStrip layout="footer">` and now imports `shortAgo` from it rather
+than keeping a second copy.
+
+### Verification
+
+`npx tsc --noEmit` on both projects; web stayed at its 15-error baseline (measured by stashing the two
+edits and re-counting — 15 before, 15 after). `drive-p6.mjs`, 24/24:
+
+| Group | Assertions |
+|---|---|
+| Both strips exist, footer spans the sidebar column exactly | 3 |
+| Footer text `===` bar text (no-repo state **and** repo-focused state) | 2 |
+| Bar is one 26px row, footer stacks two | 1 |
+| `⟳` used, `⎇` absent, glyph renders left of the branch | 2 |
+| `N changed` / `N open PRs` / `synced Xm` / `·` separators / plural agreement | 5 |
+| Sync dot green when settled, same colour in both strips, exact time on hover | 3 |
+| `need you` matches the Sessions cross-link; `0` hidden | 2 |
+| `open PRs` equals the PRs panel's own header total | 1 |
+| Bar survives a sidebar panel switch; branch full name on hover; `No repo` gives way | 3 |
+| A session exists to focus; repo + PR groups both present | 2 |
+
+### Driver gotchas
+
+- **`innerText` returns logical order, so it cannot see rtl reordering.** The `cowork ⟳` bug passed
+  every text assertion; only the screenshot caught it. The regression check compares the glyph span's
+  `getBoundingClientRect().x` against the branch span's.
+- **The sidebar starts at x=56, not 0** — there's a nav rail to its left. Locating the 264px column by
+  width was brittle; the `Pull requests` cross-link is `width: 100%` of the same column and makes a
+  reliable width witness.
+- **Restored PTYs respawn in `~`**, so no amount of clicking session rows produces a focused repo —
+  the rows show a repo *title* while their `cwd` is still home. The driver types a real `cd` and lets
+  the OSC 9999 hook drive `cwd → focusedRepo → getRepoStatus`. Without it, three assertions were green
+  over an absent case.
+- `sips -c` mangled the crop; use Playwright's `screenshot({ clip })`.
+
+## Phase 5 — ChangesRail v2 + diff polish (agreed spec 2026-07-30)
+
+### Gap vs the Phase 5 line
+
+Four of the five spec items had already landed in earlier phases. Only the hunk nav was genuinely
+missing — the same shape as Phases 2 and 3.
+
+| Spec | Before |
+|---|---|
+| `Working tree +a −d · Commits` switcher row | already shipped (`CentrePane.tsx:398`) |
+| Two-line file rows: status square, path subtitle, ± + 5-box stat | already shipped (`DiffFileRow` in `DiffKit.tsx`) |
+| Sticky Stage all / Discard footer | already shipped |
+| Blue hunk-header band | already shipped (`DiffChunks`) |
+| Breadcrumb `+a −d ⌃ ⌄` hunk nav | **missing entirely** |
+
+### Agreed layout
+
+```
+┌ …/src/components/CentrePane.tsx      +11 −4   ⌃ 3/5 ⌄ ┐  28px header, nav flex-end
+├───────────────────────────────────────────────────────┤
+│ @@ -712,6 +712,9 @@                                   │  blue band = a [data-hunk] anchor
+│ + …                                                   │
+```
+
+### Pinned rules
+
+1. **One `HunkNav`, three call sites.** Working tree, PR file and commit diffs already share the shape
+   "28px header row above an `overflowY: auto` container", so one component serves all three rather
+   than the working tree alone.
+2. **One shared `diffScrollRef`.** The three bodies are mutually exclusive, and `HunkNav` only reads the
+   ref inside `requestAnimationFrame` or an event handler — never during render.
+3. **The counter is derived from scroll position, never set optimistically.** `go()` scrolls, then
+   `sync()` re-reads `scrollTop`. A clamped or impossible jump must not leave the counter claiming a
+   hunk you aren't on.
+4. Counter sits *between* the chevrons (`⌃ 3/5 ⌄`), so the group reads as one control.
+5. Chevrons are **disabled, not hidden**, at each end — hiding shifts the group's width as you walk.
+6. **The whole group hides when the diff doesn't overflow.** A dead pair of chevrons reads as broken.
+7. Hunk offsets come from DOM measurement (`[data-hunk]`), not from counting parsed chunks — line
+   heights vary with wrapping and the band's own borders.
+
+**Done 2026-07-30.** Two files: `src/components/DiffKit.tsx` (`data-hunk` marker on the hunk header;
+new `HunkNav`) and `src/components/CentrePane.tsx` (shared `diffScrollRef` + `<HunkNav>` in all three
+diff headers).
+
+Two things beyond the spec, both real defects the driver caught:
+- **Optimistic counter.** The first cut called `setIndex(next)` before scrolling, so the counter read
+  `3/5` with hunk 1 still at the top. Rule 3 exists because of this.
+- **No remeasure on resize.** `scrollable` was only computed on `resetKey` change, so resizing a panel
+  could leave the chevrons visible with nothing to walk. A `ResizeObserver` on the scroll container
+  fixes it; offsets survive the resize untouched because diff lines are `white-space: pre` and never
+  rewrap.
+
+Verified under Playwright `_electron` at 1700×640 — **20 assertions, 0 failures**:
+
+| Check | Result |
+|---|---|
+| Rail counts vs `git status --porcelain` | 3 unstaged / 0 staged, `Working tree +93 −6 · Commits` — matches |
+| Counter N vs `git diff \| grep -c '^@@'` | `1/5` for CentrePane, `1/2` for DiffKit — both match |
+| Chevrons walk | `0 → 139 → 308`, prev returns to `139` exactly |
+| Hand-scroll to bottom | pins `5/5`, next disabled |
+| Both ends | prev disabled at `1/N`, next disabled at `N/N` |
+| Resize (rule 6) | 508 client / 845 scroll → nav shown; grown to 1068/1068 → nav gone |
+| Type-check | `tsconfig.node.json` clean; `tsconfig.web.json` at the 15-error baseline, none in a touched file |
+
+Driver gotchas, both costing a run:
+- **`railButton("git", …)` is a toggle, not a switch** (`Dashboard.tsx:626` is `setGitOpen((v) => !v)`).
+  Clicking it when `gitOpen` is already true from persisted state turns the rail *off*, and the run
+  then reports the panel as missing. Read `aria-pressed` first and only click when it isn't `"true"`.
+- **`sectionLabel(t)` sets `textTransform: "uppercase"`**, so `innerText` reads `STAGED`, not `Staged`.
+  A locator built from the source string finds nothing.
+- Walking up for the scroll container by `el.scrollHeight <= el.clientHeight` never terminates —
+  `documentElement.parentElement` is null and the loop falls out with `el === null`. Walk by
+  `getComputedStyle(el).overflowY !== "auto"` instead.
+- At a 1000px-tall viewport nothing overflows, so the walk is untestable. Shrink to 640.
 
 ## PR diff docks in the centre pane, not a fourth column (agreed spec 2026-07-30)
 
@@ -528,12 +950,15 @@ entirely**; terminal dock/stacked/even-split layouts fully replaced.
   - [x] `npx tsc --noEmit -p tsconfig.web.json` / `tsconfig.node.json`; `npm run build && node
         drive.mjs` (update PR-panel checks for the new section headers) → verify: baseline held, driver
         passes
-- [ ] Phase 5 — ChangesRail v2 + diff polish: `Working tree +a −d · Commits` switcher row; two-line
+- [x] Phase 5 — ChangesRail v2 + diff polish: `Working tree +a −d · Commits` switcher row; two-line
       file rows (status square, path subtitle, ± + 5-box stat); sticky Stage all / Discard; centre
       breadcrumb `+a −d ^ v` hunk nav + blue hunk-header band → verify: counts match `git status`,
-      chevrons walk hunks
-- [ ] Phase 6 — status bar `⟳ branch · N changed` / `N open PRs · N need you · ● synced Xm`; sidebar
-      footer mirrors it → verify: strings match the mock
+      chevrons walk hunks — **done, 20/20 driver assertions; see the Phase 5 section above.** Four of
+      the five items were already shipped; only the hunk nav was new
+- [x] Phase 6 — status bar `⟳ branch · N changed` / `N open PRs · N need you · ● synced Xm`; sidebar
+      footer mirrors it → verify: strings match the mock — **done, 24/24 driver assertions; see the
+      Phase 6 section below.** Both strips are one component, so "mirrors" is structural, not a
+      convention someone has to remember
 - [ ] Phase 7 — sweep: remove code orphaned by the move (old drawer shells, dock plumbing), tsc both
       projects, `npm run build && node drive.mjs` across all three mock states + read screenshots
       → verify: 3 screenshots structurally match the mocks
@@ -753,3 +1178,233 @@ entirely**; terminal dock/stacked/even-split layouts fully replaced.
 - **Clear completed todos**: per-file "Clear done" button on each todo.md card in the Tasks drawer, behind a confirm modal. New IPC `claude:clear-completed-todo-file-items` strips all `- [x]` lines in one rewrite. Touched: electron/main/index.ts, electron/preload/index.ts, src/hooks/useTerminal.ts, src/components/TasksDrawer.tsx.
 - **Taller change-directory bar**: bumped the terminal panel's bottom status bar padding 2px → 7px (src/components/TerminalPanel.tsx). Verified live via `npm run dev`.
 - **Fix: mobile-edge todos vanished after clearing another repo**: root cause was `findTodoFiles` skipping *all* dot-dirs, so `.claude/local/tasks/todo.md` (mobile-edge's real todo file) was undiscoverable by scan/rescan — once its in-memory session was lost on a boot/HMR restart, no rescan could restore it. Fixed by descending into `.claude` while still skipping other dot-dirs (electron/main/index.ts `findTodoFiles`). Verified: after restart the scan re-registers the 73-task file.
+
+## Session/terminal label ignores the live cwd + diff selection lost on session switch (2026-07-31)
+
+Reported: the session row and the centre tab both read `terminal-dashboard` while the shell sits in
+`mobile-edge-service`; and the open diff file is forgotten when switching sessions.
+
+- [x] **Bug 1 — the title is pinned at creation.** `addPanel` sets `pinned: !isPlaceholderTitle(title)`,
+  so every session created from a repo / branch / directory pins a title that is *itself* just a cwd
+  snapshot. `cwdTitle` then never runs (`p.pinned ? p.title : cwdTitle(cwd)`), and both readouts prefer
+  the stored title — `activeGroup.title` in CentrePane, `displayName` in RepoSidebar.
+  - [x] Pin only what the cwd cannot express: an explicit rename, and `claude <id>`. Rename the flag
+        `pinned` → `named` so persisted state written under the old semantics is ignored by construction
+        (otherwise existing sessions stay stuck until recreated — a fix that can't reach live state).
+  - [x] Teach `cwdTitle` worktree paths (`<repo>-worktrees/<dir>` → `<repo>:<dir>`), else unpinning the
+        `repo:branch` sessions degrades them to `<repo>-worktrees`.
+- [x] **Bug 2 — the diff selection is dropped, not parked.** The repo-switch effect in CentrePane does
+  `setSelectedFile(null)`; `repoName` is derived from the focused panel's cwd, so every session switch
+  wipes it. Park it per repo in the existing `rootMemory` store (already does this for the file tree).
+  - [x] Restore on the way back in, and keep the file tab if the incoming repo has one remembered.
+  - [x] Add `repoName` to the `getFileDiff` effect deps — with restore in play, two repos sharing a
+        path (`README.md`) would otherwise render the previous repo's diff.
+  - [x] Drop a remembered selection whose file no longer has changes.
+- [x] Verify: type-check both projects; drive the real app for the label and the round-trip.
+
+### Review
+
+**Bug 1 — stale session/terminal label.** Root cause was an asymmetry in `sessionGroups`: it exposed
+`title` (frozen at creation) beside `repo` (recomputed from the live cwd). `addPanel` inferred
+`pinned` from the title, and *every* creation title except `claude <id>` is cwd-derived, so the
+inference pinned exactly the titles that go stale. Fix: `named` is now opt-in — `handleRename` and
+`handleResumeClaude` set it, nothing else does, and unnamed panels retitle from `cwdTitle(cwd)` on
+every prompt. `cwdTitle` learned worktree paths first, so unpinning a `repo:branch` session keeps its
+shape instead of collapsing to `<repo>-worktrees`. The `pinned` → `named` rename is the migration:
+`~/.terminal-dashboard/state.json` held `pinned: true` on all three of the reported panels, and
+reading a differently-named key means that persisted flag is ignored rather than needing a clear.
+Touched `Dashboard.tsx` plus the `named` field in `electron/main/index.ts`, `preload/index.ts` and
+`useTerminal.ts` (both the `savePanels` write type *and* the `getState().lastPanels` read type).
+
+**Bug 2 — diff selection lost on session switch.** Parked per repo in the existing `rootMemory`
+store. Deliberately a synchronous `selectFile` wrapper rather than a save-`useEffect`: on a repo
+change the reset effect runs first, so a save effect declared after it would write the *old*
+selection under the *new* repo key. The PR-takeover `setSelectedFile(null)` stays raw on purpose —
+reviewing a PR should park the working-tree selection, not forget it.
+
+Verified: `tsc` clean on `tsconfig.node.json`; `tsconfig.web.json` holds at the 15-error pre-existing
+baseline with nothing in `CentrePane.tsx`/`rootMemory.ts` and nothing referencing the new code. 19
+assertions in `scratchpad/verify.mjs` over the *real* source — `cwdTitle` sliced out of Dashboard.tsx
+and evaluated (plain repo, subdir, worktree, worktree subdir, bare `-worktrees` root, `~`, non-GitHub
+path, trailing slash, `/`), and `rootMemory` type-stripped with a `localStorage` stub (park/restore
+per repo, cross-repo isolation, `diff` and `expanded` patches not clobbering each other, and a legacy
+root written before the slot existed reading `null` rather than crashing).
+
+Flagged, not fixed (pre-existing, out of scope): `loadRoot` returns a shared `EMPTY` singleton, so an
+in-place mutation of an unknown root's `.expanded` would poison every later unknown root. Latent —
+all three callers copy (`new Set(...)`, `.map`) and the new code only reads `.diff`.
+
+## Backspace does nothing in a restored terminal (recurrence) — done
+
+- [x] Confirm the earlier `lastCols = 0` fix is in the running build (it is — so this is a second hole, not a regression)
+- [x] Root-cause: restored panels are never measured, so the pty keeps the `create(220, 50, …)` spawn guess
+- [x] Fix in main: persist the newest measured pane geometry and lend it to every never-measured session
+- [x] Verify on a throwaway instance (temp `HOME`) that no pty is left at 220×50
+- [x] `tsc` node clean / web at baseline
+
+**Root cause.** `SessionMirror` is now the only view of a pty, and `CentrePane` mounts a group only
+once it has been the active terminal tab (`openedGroups`). A restored panel therefore has no
+measurement at all — its pty sits at the `create(220, 50, …)` placeholder until the user first
+activates that group. Anything that reaches that shell before then (typing right after a switch, an
+injected `cd` via `POST /cd`) is line-edited by zsh against 220 columns on a ~114-column grid, so
+`ESC[A`/`ESC[K` clear a row the user isn't looking at and the character stays painted. Measured on
+the user's live app: `ttys005` at exactly `220×50` with their own keystrokes in `terminal-338.log`,
+while its siblings read 137.
+
+**Fix** (`electron/main/index.ts`, main only). `state.paneSize` records the newest geometry the
+renderer has actually measured and is persisted; `createSession` spawns with it in preference to the
+caller's placeholder; `unmeasuredSessions` tracks sessions the renderer has never sized, and
+`terminal:resize` lends each new measurement to all of them. Un-viewed panels are now correct by
+construction, and the six `create(220, 50, …)` call sites are left untouched — their argument is
+simply no longer load-bearing.
+
+**Verified** on a throwaway instance (temp `HOME`, the user's real `state.json`, `paneSize` stripped
+to force the cold path):
+
+| | before | after |
+|---|---|---|
+| cold boot, 4 restored panels | `220x50 220x50 220x50 114x50` | `114x50 ×4` |
+| after 3 group switches | `114x50 ×4` (one repaired per switch) | n/a — already correct at boot |
+| new panel via `POST /new-terminal` | `114x50` | `114x50` |
+| warm boot (paneSize persisted) | — | `114x50` from spawn; polled every 250 ms, never 220 |
+
+Independent check from zsh's own belief — the `PROMPT_SP` padding readout over every log of the run:
+`last=114 history=114×3` on all five panels, i.e. not one prompt was ever computed against 220.
+`tsc -p tsconfig.node.json` clean; `-p tsconfig.web.json` holds at the 15-error pre-existing baseline
+(no renderer file touched).
+
+Note: live panels already running keep their wrong size — this can only fix sessions created after
+the build lands, so the app needs a restart.
+
+---
+
+## Changes rail: wrong branch and missing files in a worktree
+
+**Report:** "working tree does not reflect with active branch, does not show all changed files".
+
+**Root cause.** The rail identified a repo by a *path segment*, not by its checkout root:
+
+```ts
+const focusedRepo = focusedPanel?.cwd?.match(/\/Documents\/GitHub\/([^/]+)/)?.[1] ?? null;
+```
+
+For a linked worktree — `~/Documents/GitHub/mobile-edge-service-worktrees/tungtran/ENG-64481/…`,
+which the app creates itself — that captures `mobile-edge-service-worktrees`, a plain directory with
+no `.git`. Every git call in the rail then ran outside a repo. Measured against the user's real
+worktree:
+
+| | old value (`mobile-edge-service-worktrees`) | new value (git-resolved root) |
+|---|---|---|
+| `getRepoBranch` | `null` | `tungtran/ENG-64481/fix-high-memory-prod` |
+| `getRepoStatus` | `null` | `{branch, ahead 0, behind 0, changed 0}` |
+| `getWorkingTree` | `0` files | correct list |
+
+`git:working-tree` swallows the failure (`catch { return {staged: [], unstaged: []} }`), so this
+surfaced as a silently empty rail rather than an error. `cwdTitle` already understood worktrees, so
+the *tab* read `mobile-edge-service:…` while the rail beside it was blank.
+
+Two smaller faults of the same family, both fixed here:
+- `git:working-tree`, `git:change-count`, the watcher and every stage/commit handler used
+  `join(githubDir, repoName)` while `git:current-branch`/`git:repo-status` used `resolveRoot`, so no
+  path-shaped argument could work even once the renderer sent one.
+- A linked worktree's `HEAD`/`index` live in `<main>/.git/worktrees/<name>`, outside the watched
+  directory — a checkout or stage there never refreshed the rail.
+
+**Fix**
+- [x] `git:repo-root` (main) — `git rev-parse --show-toplevel`; git decides where the checkout starts
+- [x] Rail handlers switched from `join(githubDir, …)` to `resolveRoot` (a strict superset: bare
+      names still resolve under `~/Documents/GitHub`, absolute paths now work too) — 12 sites
+- [x] Watcher takes a second watch on the linked gitdir when `.git` is a file
+- [x] `focusedRepoRoot` in `Dashboard` resolves the focused panel's cwd through git; `repoLabel()`
+      derives the display name, so a worktree reads as its owning repo not `<repo>-worktrees`
+- [x] `CentrePane` takes `repoRoot` alongside `repoName` — git commands and the diff/selection keys
+      use the root, labels and PR lookup keep the name
+
+**Verified** on a throwaway instance against a linked worktree with known contents
+(`M README.md`, `A alpha.txt`, `M src/theme.ts`, `?? beta.txt`), deliberately placed *outside*
+`~/Documents/GitHub` so it exercised the path case too:
+
+| step | rail |
+|---|---|
+| initial | STAGED 1 `alpha.txt` · UNSTAGED 3 `README.md` `src/theme.ts` `beta.txt` — matches `git status --porcelain` |
+| `git add beta.txt` (index is in the main repo's `.git/worktrees/`) | beta moves to STAGED unprompted — second watcher works |
+| new `gamma.txt` | appears in UNSTAGED — original watcher intact |
+
+Regression check on a normal checkout: branch `cowork`, 17 rows (16 real + a `.claude/` entry that is
+a driver artefact — the throwaway `HOME` can't see `~/.config/git/ignore`).
+
+`tsc -p tsconfig.node.json` clean. `-p tsconfig.web.json` compared against a `git worktree` of
+unmodified `HEAD`: identical error set, no new errors.
+
+Not covered: the PR-side handlers (`prs:*`, `github:*`) still key off `join(githubDir, repo)` — out
+of scope here, but a PR reviewed against a worktree checkout would hit the same class of bug.
+
+---
+
+## Changes rail: branch diff view ("does not show all files changed in the PR")
+
+**Report** — on a feature branch whose work is all committed, the rail shows `STAGED 0 / UNSTAGED 0`
+even though the PR has files in it.
+
+**Root cause** — not a bug in the working-tree view; that is correctly empty. The rail simply has no
+view for *what the branch changed*. `railView` is `working-tree | commits | pr-files`, and `pr-files`
+is reachable only when `prReview` is set, i.e. after opening a PR from the PRs drawer. Sitting in the
+branch's own terminal there is no path to its diff.
+
+**Agreed design** (mockup approved 2026-08-12) — segmented switcher, local branch diff.
+
+```
+┌──────────────────────────────────┐
+│ CHANGES      tungtran/MO…     ⟳  │  panelHeader 34px
+├──────────────────────────────────┤
+│  Working tree │ Branch │ Commits │  switcher 30px, 2px bottom accent (paneTabStyle idiom)
+├──────────────────────────────────┤
+│ 14 files      +382 −77    vs main│  summary 30px
+├──────────────────────────────────┤
+│▎src/main/kotlin/Sync.kt   +40 −2 │  DiffFileRow, same as pr-files
+│ src/test/SyncSpec.kt      +18 −0 │
+└──────────────────────────────────┘
+```
+
+- Segment reads `PR #1234` when `gh` finds one for the branch, `Branch` otherwise — decorative only,
+  resolved in the background so it never gates the diff.
+- Source is `git diff <base>...HEAD`, base from `origin/HEAD` with fallbacks. Instant, offline,
+  worktree-safe, works before a PR exists. Trade-off accepted: drifts if the remote head has commits
+  that have not been pulled.
+- Switcher replaces the `Commits →` / `← Working tree` link chain for the non-PR rail. PR review mode
+  keeps its existing two-view chain.
+
+**Fix**
+- [x] `git:branch-diff` (main) — base resolution + `git diff <base>...HEAD`
+- [x] `git:branch-pr` (main) — decorative PR number for the segment label
+- [x] preload + `Window.terminal` decls
+- [x] `CentrePane`: `railView` gains `branch`; switcher; branch summary row; file list
+- [x] centre pane renders a selected branch file (share the pr-files diff body)
+- [x] refresh off the existing worktree watcher — `movesGitStatus` already covers `refs/`
+
+**Review**
+
+Also fixed en route: `parseDiff` inferred file status from line counts, so an append-only edit read
+as `A`. It now reads `new file mode` / `deleted file mode` off the `diff --git` header. This was
+already wrong in the pr-files view, which shares the parser.
+
+Verified by driving the built app with Playwright `_electron` against two repos and comparing to
+`git diff <base>...HEAD --numstat`:
+
+| Repo | Ground truth | Rail |
+|---|---|---|
+| Fixture (no remote → `main` fallback) | `1 0 README.md`, `2 0 alpha.txt`, `1 0 deep/nest/thing.md` | `3 files +4  vs main`, rows `M README.md +1`, `A alpha.txt +2`, `A thing.md +1` |
+| `mobile-edge-service-worktrees/…/ENG-64481` (linked worktree, `origin/HEAD`) | `4 1 Dockerfile`, `1 1 …/application.yml` | `2 files +5 −2  vs main`, segment `PR #1373` |
+
+Clicking a row opens its diff in the centre pane; Working tree → Branch → Commits → Working tree all
+round-trip. Type checks: `tsconfig.node.json` clean, `tsconfig.web.json` identical to the recorded
+baseline.
+
+Not covered: the base drifts if `origin/main` is stale locally (accepted trade-off above), and the
+segment falls back to `Branch` whenever `gh` is unauthenticated — which is how the label behaved in
+the first driver run, before a token was in the environment.
+
+**Flagged, not changed** — the pre-existing `git:commits` handler interpolates a branch name into a
+shell string (`gh pr list --head "${headRefName}"`). Ref names admit `` ` ``, `;`, `&`, `|`, so that
+is a local shell-injection surface. The two new handlers use `execFile` with an argv array and are
+not affected.

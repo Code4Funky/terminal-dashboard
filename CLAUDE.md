@@ -11,10 +11,50 @@ npm run package    # build + package as macOS .dmg
 npm postinstall    # rebuild node-pty for current Electron ABI (run after npm install)
 ```
 
-There are no tests. TypeScript type-checking is the only static validation:
+There are no tests. TypeScript type-checking is the only static validation. The root `tsconfig.json`
+is a project-references stub (`"files": []`), so bare `npx tsc --noEmit` checks **nothing** — always
+name the project:
 ```bash
-npx tsc --noEmit
+npx tsc --noEmit -p tsconfig.web.json   # renderer — 28 pre-existing errors, treat as the baseline
+npx tsc --noEmit -p tsconfig.node.json  # main + preload — clean
 ```
+
+## Verifying UI changes
+
+Type-checking proves a layout change compiles, not that it renders. Drive the app with Playwright's
+`_electron` and read the screenshot. Two things that cost a debugging cycle each:
+
+- **`electron .` boots the built `out/` bundle, not the dev server** — source edits are invisible until
+  you rebuild, and the driver then screenshots the *old* UI, which reads as "my fix didn't work".
+  Always chain: `npm run build >/dev/null 2>&1 && node drive.mjs`. (Under `npm run dev` the renderer
+  does hot-reload; that rule does not apply here.)
+- **`electron.launch()` needs an explicit `executablePath`** when Playwright is installed outside the
+  project: `<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`.
+
+Selectors are fragile because the UI is inline-styled with no test ids: caps come from
+`textTransform` (so match `Repositories`, not `REPOSITORIES`), placeholders use `…` (U+2026), and a
+repo name can match three nodes across unrelated panes. Print every candidate's `boundingBox()` once
+and select on geometry rather than guessing `.first()` / `.last()`.
+
+Fuller write-up: `knowledge-base/wiki/electron-app-automation.md`. Worth capturing properly as a
+project skill via `/run-skill-generator`.
+
+## Design system
+
+The UI follows the Skedulo Breeze dark ramp. Shared primitives live in `src/chrome.ts` and the token
+ramp in `src/theme.ts` (`breezeTheme`) — use them rather than re-deriving styles inline:
+
+- Radii `RADIUS` (3) / `RADIUS_SM` (2) only; `"50%"` for dots and avatars. No pills, no 8px+ corners.
+- 1px borders carry all separation. No shadows, gradients or blur on inline panels; `t.backdropFilter`
+  is `"none"` under Breeze so drawers inherit that automatically.
+- Selection is *only* `rowState(t, selected, hovered)` — fill plus an inset left accent bar. Never a
+  coloured border around a panel. Hover is a darker fill, never opacity.
+- Type comes from `SYS_FONT` / `MONO_FONT` / `TABULAR` in `src/theme.ts`; one emphasis weight (600).
+- Inline panels use `panelHeader` + `panelTitle` (34px, 10px caps); overlay drawers use
+  `drawerHeader` + `drawerTitle` (38px, 13px sentence case).
+- Panel docking convention: narrow nav on the left, wide content to its right, one maximised drawer
+  on the far right.
+- Sentence case everywhere. No emoji.
 
 ## Architecture
 

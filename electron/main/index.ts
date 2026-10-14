@@ -1,18 +1,19 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
-import { join, basename } from "path";
+import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import { createServer } from "http";
 import { AddressInfo } from "net";
-import { execSync, exec, spawn, type ChildProcess } from "child_process";
+import { execSync, exec, execFile, spawn, type ChildProcess } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 import * as fs from "fs";
 
 const TOOL_ENV = { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/local/bin:/opt/homebrew/bin` };
 import * as pty from "node-pty";
 import os from "os";
 
-app.name = "Terminal Dashboard";
+app.name = "Flight Deck"; 
 
 // ── Resolve ccusage binary + a PATH that includes its node runtime ────────────
 function resolveCcusageEnv(): { bin: string; env: NodeJS.ProcessEnv } {
@@ -77,8 +78,66 @@ const claudeAgentsDir = join(os.homedir(), ".claude", "agents");
 const claudeCommandsDir = join(os.homedir(), ".claude", "commands");
 const claudeSkillsDir = join(os.homedir(), ".claude", "skills");
 const notesFile = join(dataDir, "notes.json");
+const linearIssuesFile = join(dataDir, "linear-issues.json");
+const claudeHookScript = join(dataDir, "claude-sessionstart-hook.sh");
+const claudeTaskHookScript = join(dataDir, "claude-posttooluse-hook.sh");
+// Task-tool events + file writes (todo.md capture). One const so install + status agree on the matcher.
+const TASK_HOOK_MATCHER = "TodoWrite|TaskCreate|TaskUpdate|TaskList|Write|Edit|MultiEdit";
 
 fs.mkdirSync(historyDir, { recursive: true });
+
+function ensureClaudeHookScript() {
+  const content = `#!/bin/bash
+# Claude SessionStart hook — reports session ID to Flight Deck terminal-dashboard.
+# Reads hook input JSON on stdin, extracts session_id, posts to the local
+# dashboard server with the surrounding TERMINAL_SESSION_ID so the panel can
+# remember which Claude session ran in it.
+input=$(cat)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' | head -1)
+if [ -n "$session_id" ] && [ -n "$TERMINAL_SESSION_ID" ] && [ -n "$TERMINAL_DASHBOARD_PORT" ]; then
+  payload=$(printf '{"terminalSessionId":"%s","claudeSessionId":"%s","cwd":"%s"}' \\
+    "$TERMINAL_SESSION_ID" "$session_id" "$PWD")
+  curl -s -m 2 -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/claude-session" \\
+    -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1 &
+fi
+exit 0
+`;
+  try {
+    if (!fs.existsSync(claudeHookScript) || fs.readFileSync(claudeHookScript, "utf8") !== content) {
+      fs.writeFileSync(claudeHookScript, content);
+    }
+    fs.chmodSync(claudeHookScript, 0o755);
+  } catch (e) {
+    console.error("[claude-hook] failed to write script:", e);
+  }
+}
+
+function ensureClaudeTaskHookScript() {
+  const content = `#!/bin/bash
+# Claude PostToolUse hook — forwards the raw task payload to Flight Deck.
+# Buffers stdin first, then backgrounds curl so it can't race the pipe close.
+input=$(cat)
+# File tools fire on every edit — only forward *todo.md writes; task-tool payloads carry no file_path.
+if printf '%s' "$input" | grep -q '"file_path"'; then
+  printf '%s' "$input" | grep -q 'todo\\.md' || exit 0
+fi
+if [ -n "$TERMINAL_SESSION_ID" ] && [ -n "$TERMINAL_DASHBOARD_PORT" ]; then
+  curl -s -m 2 -X POST "http://127.0.0.1:$TERMINAL_DASHBOARD_PORT/claude-tasks" \\
+    -H "Content-Type: application/json" \\
+    -H "X-Terminal-Session-Id: $TERMINAL_SESSION_ID" \\
+    --data-binary "$input" >/dev/null 2>&1 &
+fi
+exit 0
+`;
+  try {
+    if (!fs.existsSync(claudeTaskHookScript) || fs.readFileSync(claudeTaskHookScript, "utf8") !== content) {
+      fs.writeFileSync(claudeTaskHookScript, content);
+    }
+    fs.chmodSync(claudeTaskHookScript, 0o755);
+  } catch (e) {
+    console.error("[claude-task-hook] failed to write script:", e);
+  }
+}
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 interface NoteCard { id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string; }
@@ -96,24 +155,82 @@ function saveNotes(notes: NoteCard[]) {
 interface SavedPanel {
   number: number;
   title: string;
+  group?: string; // panels sharing a group render as one split; absent on pre-split state files
+  dir?: "row" | "column"; // split axis of that group
+  named?: boolean; // title carries what the cwd can't (rename, claude session), so `cd` must not overwrite it
+}
+interface ClaudeSessionEntry {
+  claudeSessionId: string;
+  cwd: string;
+  startedAt: number;
+}
+type TaskStatus = "pending" | "in_progress" | "completed";
+type TodoPriority = "high" | "medium" | "low";
+interface Task {
+  id: string;
+  subject: string;
+  status: TaskStatus;
+  activeForm?: string;
+  updatedAt: number;
+  priority?: TodoPriority; // todo-file only
+  due?: string; // todo-file only — free text, e.g. "today 9am"
+  blocked?: boolean; // todo-file only
+}
+// Keyed by claudeSessionId (the true owner of a task list); panelNumber lives per record
+// because a panel hosts many Claude sessions over its life.
+interface ClaudeTaskSession {
+  claudeSessionId: string;
+  panelNumber: number | null;
+  cwd: string;
+  source: "task-tools" | "todowrite" | "todo-file" | "manual";
+  repoRoot?: string; // todo-file only — the file's repo, so it groups by repo not terminal
+  tasks: Record<string, Task>;
+  order: string[];
+  startedAt: number;
+  updatedAt: number;
+}
+// Per-session delta pushed to the renderer — never the whole store.
+interface TaskSummary {
+  claudeSessionId: string;
+  panelNumber: number | null;
+  cwd: string;
+  source: "task-tools" | "todowrite" | "todo-file" | "manual";
+  repoRoot?: string;
+  updatedAt: number;
+  tasks: Task[];
+  total: number;
+  completed: number;
+  inProgress: number;
 }
 interface AppState {
   terminalCounter: number;
+  paneSize?: { cols: number; rows: number }; // newest measured terminal-pane geometry, see createSession
   lastPanels: SavedPanel[];
   panelTitles: Record<number, string>;
+  panelClaudeSessions: Record<number, ClaudeSessionEntry[]>;
+  claudeTaskSessions: Record<string, ClaudeTaskSession>;
 }
 
 function loadState(): AppState {
   try {
     const s = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-    return { panelTitles: {}, ...s };
+    return { panelTitles: {}, panelClaudeSessions: {}, claudeTaskSessions: {}, ...s };
   } catch {
-    return { terminalCounter: 0, lastPanels: [], panelTitles: {} };
+    return { terminalCounter: 0, lastPanels: [], panelTitles: {}, panelClaudeSessions: {}, claudeTaskSessions: {} };
   }
 }
 
-function saveState(state: AppState) {
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+let saveStateTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Debounced: callers fire on nearly every panel event; coalesce to one write.
+function saveState(_state: AppState) {
+  if (saveStateTimer) clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(flushState, 250);
+}
+
+function flushState() {
+  if (saveStateTimer) { clearTimeout(saveStateTimer); saveStateTimer = null; }
+  try { fs.writeFileSync(stateFile, JSON.stringify(state, null, 2)); } catch {}
 }
 
 // ── Repo Stats ───────────────────────────────────────────────────────────────
@@ -133,6 +250,8 @@ function loadRepoStats(): RepoStats {
 const githubDir = join(os.homedir(), "Documents", "GitHub");
 // Track last seen repo per session to avoid counting the same dir repeatedly
 const sessionLastRepo = new Map<string, string>();
+// Latest full CWD per live terminal — used as extra roots for todo.md discovery.
+const sessionCwd = new Map<string, string>();
 
 function recordRepoVisit(sessionId: string, cwd: string) {
   if (!cwd.startsWith(githubDir + "/")) return;
@@ -211,7 +330,119 @@ function collectClaudeJsonlFiles(): { file: string; projectDir: string }[] {
   return results;
 }
 
-function computeClaudeStats(targetMonth?: string) {
+// ── Skill usage ───────────────────────────────────────────────────────────────
+// Two forms in the transcript: a `Skill` tool_use (always a real skill) and a typed
+// `<command-name>/x</command-name>` (which also carries CLI built-ins like /exit and /model). Only
+// the second needs filtering, and only against disk — resolving both would erase skills that have
+// since been deleted, which is history the panel exists to show.
+const SKILL_DEDUPE_MS = 120_000;
+const COMMAND_NAME_RE = /<command-name>\/([a-z0-9][\w-]{0,48})<\/command-name>/g;
+
+interface SkillUse { name: string; ts: number; repo: string }
+
+function collectKnownSkillNames(): Set<string> {
+  const names = new Set<string>();
+  const walk = (dir: string, depth: number) => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p, depth + 1); continue; }
+      if (e.name === "SKILL.md") names.add(basename(dir));
+      else if (e.name.endsWith(".md") && basename(dir) === "commands") names.add(e.name.slice(0, -3));
+    }
+  };
+  walk(claudeSkillsDir, 0);
+  walk(claudeCommandsDir, 0);
+  walk(join(os.homedir(), ".claude", "plugins"), 0);
+  return names;
+}
+
+// ── Claude session titles ─────────────────────────────────────────────────────
+// Claude names its own sessions in the transcript: `custom-title` when you rename one, `ai-title`
+// for its guess (a rename stops the ai stream). Both are re-emitted as the conversation grows, so
+// the newest lands within a few KB of EOF — worth relying on, because transcripts reach 35 MB and
+// this is polled.
+const TITLE_TAIL_BYTES = 256 * 1024;
+const TITLE_MISS_RETRY_MS = 30_000;
+
+interface ClaudeTitle { title: string; source: "custom" | "ai" }
+interface TitleRead { path: string; size: number; mtimeMs: number; hit: ClaudeTitle | null; scannedWhole: boolean }
+
+const claudeTitleCache = new Map<string, TitleRead>();  // claudeSessionId → last read
+const claudeTitleMiss = new Map<string, number>();      // claudeSessionId → epoch ms before re-resolving
+
+function resolveTranscript(claudeSessionId: string, cwd: string): string | null {
+  const slug = cwd.replace(/[/.]/g, "-");
+  if (slug) {
+    const guess = join(claudeProjectsDir, slug, `${claudeSessionId}.jsonl`);
+    if (fs.existsSync(guess)) return guess;
+  }
+  // Claude rewrites some path segments, so the slug isn't recoverable from every cwd — scan instead.
+  try {
+    for (const proj of fs.readdirSync(claudeProjectsDir)) {
+      const p = join(claudeProjectsDir, proj, `${claudeSessionId}.jsonl`);
+      if (fs.existsSync(p)) return p;
+    }
+  } catch {}
+  return null;
+}
+
+// Newest wins, except that a custom title outranks an ai one sharing the same window.
+function scanTitle(text: string): ClaudeTitle | null {
+  const lines = text.split("\n");
+  let ai: ClaudeTitle | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('-title"')) continue;
+    try {
+      const e = JSON.parse(lines[i]);
+      if (e.type === "custom-title" && e.customTitle) return { title: String(e.customTitle), source: "custom" };
+      if (e.type === "ai-title" && e.aiTitle && !ai) ai = { title: String(e.aiTitle), source: "ai" };
+    } catch { /* the first line of a tail read is usually truncated */ }
+  }
+  return ai;
+}
+
+function readTail(path: string, size: number): string {
+  const start = Math.max(0, size - TITLE_TAIL_BYTES);
+  const fd = fs.openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+
+function readClaudeTitle(claudeSessionId: string, cwd: string): ClaudeTitle | null {
+  const cached = claudeTitleCache.get(claudeSessionId);
+  let path = cached?.path;
+  if (!path) {
+    if (Date.now() < (claudeTitleMiss.get(claudeSessionId) ?? 0)) return null;
+    path = resolveTranscript(claudeSessionId, cwd) ?? undefined;
+    if (!path) { claudeTitleMiss.set(claudeSessionId, Date.now() + TITLE_MISS_RETRY_MS); return null; }
+    claudeTitleMiss.delete(claudeSessionId);
+  }
+
+  try {
+    const st = fs.statSync(path);
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) return cached.hit;
+    let hit = scanTitle(readTail(path, st.size));
+    // Backstop for a title set once and never re-emitted; one whole-file pass per session, then never again.
+    const wholePass = !hit && !cached?.scannedWhole && st.size > TITLE_TAIL_BYTES;
+    if (wholePass) hit = scanTitle(fs.readFileSync(path, "utf8"));
+    claudeTitleCache.set(claudeSessionId, {
+      path, size: st.size, mtimeMs: st.mtimeMs, hit,
+      scannedWhole: (cached?.scannedWhole ?? false) || wholePass,
+    });
+    return hit;
+  } catch {
+    claudeTitleCache.delete(claudeSessionId);
+    return cached?.hit ?? null;
+  }
+}
+
+function computeClaudeStatsUncached(targetMonth?: string) {
   const now = Date.now();
   const today = new Date(now).toISOString().slice(0, 10);
   const currentMonth = today.slice(0, 7); // "YYYY-MM"
@@ -254,6 +485,9 @@ function computeClaudeStats(targetMonth?: string) {
   // Per-model tracking for cost estimation
   interface ModelUsage { inp: number; cacheWrite: number; cacheRead: number; out: number }
   const monthModelUsage: Record<string, ModelUsage> = {};
+
+  const knownSkills = collectKnownSkillNames();
+  const rawSkillUses: (SkillUse & { session: string })[] = [];
 
   try {
     const files = collectClaudeJsonlFiles();
@@ -317,6 +551,24 @@ function computeClaudeStats(targetMonth?: string) {
             }
           }
 
+          // Skill invocations — see the note on collectKnownSkillNames for why only one form is filtered.
+          if (entry.timestamp) {
+            const ts = new Date(entry.timestamp as string).getTime();
+            const repo = basename((entry.cwd as string) ?? "") || "—";
+            const session: string = entry.sessionId ?? file;
+            const push = (name: string) => rawSkillUses.push({ name, ts, repo, session });
+            const content = entry.message?.content;
+            if (Array.isArray(content)) {
+              for (const item of content) {
+                if (item?.type === "tool_use" && item.name === "Skill" && item.input?.skill) push(String(item.input.skill));
+              }
+            }
+            if (entry.type === "user") {
+              const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
+              for (const m of text.matchAll(COMMAND_NAME_RE)) if (knownSkills.has(m[1])) push(m[1]);
+            }
+          }
+
           // Repo tracking from cwd
           const cwd: string = entry.cwd ?? "";
           if (cwd.startsWith(githubDir + "/")) {
@@ -376,7 +628,48 @@ function computeClaudeStats(targetMonth?: string) {
     })() as number | null,
     allTimeDailyCounts,
     allTimeDailyModelTokens,
+    skillUses: dedupeSkillUses(rawSkillUses),
   };
+}
+
+// A typed `/skill` can emit both forms, so collapse a repeat of the same skill in the same session.
+function dedupeSkillUses(raw: (SkillUse & { session: string })[]): SkillUse[] {
+  raw.sort((a, b) => a.name.localeCompare(b.name) || a.session.localeCompare(b.session) || a.ts - b.ts);
+  const kept: (SkillUse & { session: string })[] = [];
+  for (const u of raw) {
+    const prev = kept[kept.length - 1];
+    if (prev && prev.name === u.name && prev.session === u.session && u.ts - prev.ts < SKILL_DEDUPE_MS) continue;
+    kept.push(u);
+  }
+  return kept
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 2000)
+    .map(({ name, ts, repo }) => ({ name, ts, repo }));
+}
+
+// Cache keyed by month on a signature of all jsonl files' mtime+size.
+// Reading + JSON.parsing every history file blocked the main process for
+// seconds on each Stats open; recompute only when Claude activity actually changes.
+const statsCache = new Map<string, { sig: string; data: ReturnType<typeof computeClaudeStatsUncached> }>();
+
+function claudeFilesSignature(): string {
+  return collectClaudeJsonlFiles()
+    .map(({ file }) => {
+      try { const s = fs.statSync(file); return `${file}:${s.mtimeMs}:${s.size}`; }
+      catch { return file; }
+    })
+    .sort()
+    .join("|");
+}
+
+function computeClaudeStats(targetMonth?: string) {
+  const key = targetMonth ?? new Date(Date.now()).toISOString().slice(0, 7);
+  const sig = claudeFilesSignature();
+  const hit = statsCache.get(key);
+  if (hit && hit.sig === sig) return hit.data;
+  const data = computeClaudeStatsUncached(targetMonth);
+  statsCache.set(key, { sig, data });
+  return data;
 }
 
 function pruneHistory() {
@@ -391,6 +684,7 @@ function pruneHistory() {
 
 // ── Runtime ──────────────────────────────────────────────────────────────────
 const sessions = new Map<string, pty.IPty>();
+const sessionPanelNumbers = new Map<string, number>();
 const oscBuffers = new Map<string, string>();
 let mainWindow: BrowserWindow | null = null;
 let dashboardPort = 0;
@@ -410,6 +704,122 @@ function historyPath(num: number) {
   return join(historyDir, `terminal-${num}.log`);
 }
 
+// ── PTY output batching ────────────────────────────────────────────────────────
+// Coalesce PTY chunks into ~8ms batches: one IPC message + one xterm write per
+// batch instead of per raw chunk (heavy build/stream output was the hot path).
+const pendingOutput = new Map<string, string>();
+const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const OUTPUT_FLUSH_MS = 8;
+const OUTPUT_FLUSH_BYTES = 64 * 1024;
+
+// Last time each session produced output — the sidebar reads silence as "the agent is waiting on you".
+const sessionLastData = new Map<string, number>();
+
+function flushOutput(sessionId: string) {
+  const timer = outputFlushTimers.get(sessionId);
+  if (timer) { clearTimeout(timer); outputFlushTimers.delete(sessionId); }
+  const data = pendingOutput.get(sessionId);
+  if (data) { pendingOutput.delete(sessionId); send(`terminal:output:${sessionId}`, data); }
+}
+
+function queueOutput(sessionId: string, data: string) {
+  sessionLastData.set(sessionId, Date.now());
+  const merged = (pendingOutput.get(sessionId) ?? "") + data;
+  pendingOutput.set(sessionId, merged);
+  if (merged.length >= OUTPUT_FLUSH_BYTES) { flushOutput(sessionId); return; } // bound latency/memory on big bursts
+  if (!outputFlushTimers.has(sessionId)) {
+    outputFlushTimers.set(sessionId, setTimeout(() => flushOutput(sessionId), OUTPUT_FLUSH_MS));
+  }
+}
+
+// ── Git HEAD watching ─────────────────────────────────────────────────────────
+// The shell's precmd hook only reports the branch between prompts, so a checkout
+// made by a foreground program (Claude, vim) or another panel leaves the title
+// bar stale. Watching HEAD keeps every panel in the repo correct in real time.
+interface GitHeadWatch { watcher: fs.FSWatcher; branch: string; debounce?: ReturnType<typeof setTimeout> }
+const gitHeadWatches = new Map<string, GitHeadWatch>(); // gitDir → watch
+const sessionGitDir = new Map<string, string>();        // sessionId → gitDir
+
+// Resolve the dir holding HEAD: walk up to `.git`, following the worktree pointer file.
+function resolveGitDir(cwd: string): string | null {
+  let dir = cwd;
+  for (let i = 0; i < 64; i++) {
+    const dotGit = join(dir, ".git");
+    try {
+      const st = fs.statSync(dotGit);
+      if (st.isDirectory()) return dotGit;
+      if (st.isFile()) {
+        const m = fs.readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m);
+        if (m) return isAbsolute(m[1].trim()) ? m[1].trim() : resolve(dir, m[1].trim());
+      }
+    } catch { /* not here — keep walking up */ }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
+}
+
+function readGitBranch(gitDir: string): string {
+  try {
+    const head = fs.readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : "";
+  } catch { return ""; }
+}
+
+function trackGitHead(sessionId: string, cwd: string) {
+  const gitDir = cwd ? resolveGitDir(cwd) : null;
+  if (sessionGitDir.get(sessionId) === gitDir) return;
+  untrackGitHead(sessionId);
+  if (!gitDir) return;
+  sessionGitDir.set(sessionId, gitDir);
+  if (gitHeadWatches.has(gitDir)) return; // another panel already watches this repo
+
+  try {
+    // Watch the dir, not HEAD itself — git rewrites HEAD via rename, detaching a file watch.
+    const watcher = fs.watch(gitDir, (_event, filename) => {
+      if (filename && filename !== "HEAD") return;
+      const w = gitHeadWatches.get(gitDir);
+      if (!w) return;
+      if (w.debounce) clearTimeout(w.debounce);
+      w.debounce = setTimeout(() => emitGitBranch(gitDir), 80);
+    });
+    gitHeadWatches.set(gitDir, { watcher, branch: readGitBranch(gitDir) });
+  } catch { /* repo dir vanished — the next OSC update re-tracks */ }
+}
+
+function emitGitBranch(gitDir: string) {
+  const w = gitHeadWatches.get(gitDir);
+  if (!w) return;
+  w.debounce = undefined;
+  const branch = readGitBranch(gitDir);
+  if (branch === w.branch) return;
+  w.branch = branch;
+  for (const [sessionId, dir] of sessionGitDir) {
+    if (dir !== gitDir) continue;
+    const cwd = sessionCwd.get(sessionId);
+    if (cwd) send("terminal:cwd-update", sessionId, cwd, branch); // cwd is required — the renderer overwrites it
+  }
+}
+
+function untrackGitHead(sessionId: string) {
+  const gitDir = sessionGitDir.get(sessionId);
+  if (!gitDir) return;
+  sessionGitDir.delete(sessionId);
+  if ([...sessionGitDir.values()].includes(gitDir)) return; // still in use by another panel
+  const w = gitHeadWatches.get(gitDir);
+  if (w) {
+    if (w.debounce) clearTimeout(w.debounce);
+    try { w.watcher.close(); } catch {}
+    gitHeadWatches.delete(gitDir);
+  }
+}
+
+// Sessions the renderer has never measured — their view hasn't mounted, so they still carry the
+// spawn guess. Kept so a real measurement can be lent to them; a shell stuck at the wrong COLUMNS
+// line-edits against a width it doesn't have and backspace stops erasing.
+const unmeasuredSessions = new Set<string>();
+
 function createSession(
   cols: number,
   rows: number,
@@ -417,17 +827,21 @@ function createSession(
   initialCommand?: string
 ): { sessionId: string; number: number } {
   const num = panelNumber ?? ++state.terminalCounter;
-  if (!panelNumber) saveState(state);
+  if (!panelNumber) flushState(); // persist monotonic counter synchronously to avoid reuse on crash
 
   const sessionId = crypto.randomUUID();
   const shell =
     process.env.SHELL ||
     (process.platform === "win32" ? "cmd.exe" : "/bin/zsh");
 
+  // Callers can only pass a placeholder — the renderer can't measure a pane that hasn't mounted.
+  // Last run's real geometry is a far better guess than the constant it was called with.
+  const spawn = state.paneSize ?? { cols, rows };
+
   const ptyProcess = pty.spawn(shell, [], {
     name: "xterm-256color",
-    cols,
-    rows,
+    cols: spawn.cols,
+    rows: spawn.rows,
     cwd: os.homedir(),
     env: {
       ...process.env,
@@ -441,8 +855,18 @@ function createSession(
   oscBuffers.set(sessionId, "");
 
   ptyProcess.onData((rawData) => {
+    const prev = oscBuffers.get(sessionId) ?? "";
+
+    // Fast path: no pending partial and no OSC introducer → skip all OSC scanning.
+    // Normal shell output has no "\x1b]", so this avoids a regex scan per chunk.
+    if (!prev && rawData.indexOf("\x1b]") === -1) {
+      histStream.write(rawData);
+      queueOutput(sessionId, rawData);
+      return;
+    }
+
     // Prepend any previously buffered partial OSC sequence
-    let buf = (oscBuffers.get(sessionId) ?? "") + rawData;
+    let buf = prev + rawData;
 
     // Process all complete OSC 9999 sequences (CWD+git updates), strip them
     const oscRe = /\x1b\]9999;([^\x1c]*)\x1c([^\x07]*)\x07/;
@@ -450,6 +874,8 @@ function createSession(
     while ((m = oscRe.exec(buf)) !== null) {
       send("terminal:cwd-update", sessionId, m[1], m[2]);
       recordRepoVisit(sessionId, m[1]);
+      if (m[1]) sessionCwd.set(sessionId, m[1]);
+      trackGitHead(sessionId, m[1]);
       buf = buf.slice(0, m.index) + buf.slice(m.index! + m[0].length);
     }
 
@@ -463,18 +889,29 @@ function createSession(
     }
 
     histStream.write(buf);
-    send(`terminal:output:${sessionId}`, buf);
+    queueOutput(sessionId, buf);
   });
 
   ptyProcess.onExit(() => {
+    flushOutput(sessionId); // flush buffered output before the exit marker
     oscBuffers.delete(sessionId);
+    pendingOutput.delete(sessionId);
+    const timer = outputFlushTimers.get(sessionId);
+    if (timer) { clearTimeout(timer); outputFlushTimers.delete(sessionId); }
     sessionLastRepo.delete(sessionId);
+    sessionCwd.delete(sessionId);
+    sessionLastData.delete(sessionId);
+    untrackGitHead(sessionId);
+    sessionPanelNumbers.delete(sessionId);
     histStream.end();
     send(`terminal:exit:${sessionId}`);
     sessions.delete(sessionId);
+    unmeasuredSessions.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);
+  unmeasuredSessions.add(sessionId);
+  sessionPanelNumbers.set(sessionId, num);
 
   // Send initial CWD immediately so the panel title bar shows it before precmd fires
   setTimeout(() => send("terminal:cwd-update", sessionId, os.homedir(), ""), 300);
@@ -484,6 +921,365 @@ function createSession(
   }
 
   return { sessionId, number: num };
+}
+
+// ── Claude task tracking ──────────────────────────────────────────────────────
+// A tool result can arrive as an object or a JSON string; coerce both to an object.
+function coerceObj(x: unknown): Record<string, unknown> {
+  if (typeof x === "string") { try { return JSON.parse(x); } catch { return {}; } }
+  return (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+}
+
+function normTaskStatus(s: unknown): TaskStatus | undefined {
+  return s === "pending" || s === "in_progress" || s === "completed" ? s : undefined;
+}
+
+function summarizeTaskSession(s: ClaudeTaskSession): TaskSummary {
+  const tasks = s.order.map((id) => s.tasks[id]).filter(Boolean);
+  return {
+    claudeSessionId: s.claudeSessionId,
+    panelNumber: s.panelNumber,
+    cwd: s.cwd,
+    source: s.source,
+    repoRoot: s.repoRoot,
+    updatedAt: s.updatedAt,
+    tasks,
+    total: tasks.length,
+    completed: tasks.filter((t) => t.status === "completed").length,
+    inProgress: tasks.filter((t) => t.status === "in_progress").length,
+  };
+}
+
+function upsertTask(s: ClaudeTaskSession, id: string, patch: Partial<Task>) {
+  const existing = s.tasks[id];
+  if (existing) {
+    s.tasks[id] = { ...existing, ...patch, updatedAt: Date.now() };
+  } else {
+    s.tasks[id] = { id, subject: patch.subject ?? "(task)", status: patch.status ?? "pending", activeForm: patch.activeForm, updatedAt: Date.now() };
+    s.order.push(id);
+  }
+}
+
+// Bound state.json growth — keep the 50 most recently touched task sessions.
+function pruneTaskSessions() {
+  const ids = Object.keys(state.claudeTaskSessions);
+  if (ids.length <= 50) return;
+  const keep = new Set(
+    ids.map((id) => state.claudeTaskSessions[id])
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 50)
+      .map((s) => s.claudeSessionId)
+  );
+  for (const id of ids) {
+    if (keep.has(id) || state.claudeTaskSessions[id]?.source === "manual") continue; // never evict the manual list
+    delete state.claudeTaskSessions[id];
+  }
+}
+
+// Reducer for a Claude PostToolUse payload (TaskCreate/TaskUpdate/TaskList/TodoWrite).
+function ingestClaudeTaskEvent(terminalSessionId: string, payload: Record<string, unknown>) {
+  const toolName = payload.tool_name;
+  // File writes route to the todo.md parser — keyed by path, not claudeSessionId.
+  if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") {
+    ingestTodoFileEvent(payload);
+    return;
+  }
+  const claudeSessionId = payload?.session_id;
+  if (typeof claudeSessionId !== "string" || !claudeSessionId) return;
+  const toolInput = coerceObj(payload.tool_input);
+  // Result field name varies by CLI version — accept either.
+  const result = coerceObj(payload.tool_response ?? payload.tool_output);
+  const cwd = typeof payload.cwd === "string" ? payload.cwd : "";
+
+  // Resolve panel at ingest — sessionPanelNumbers is deleted on PTY exit, so a late event
+  // would otherwise lose its panel. Fall back to the already-stored value.
+  const resolvedPanel = sessionPanelNumbers.get(terminalSessionId);
+  const panelNumber = resolvedPanel ?? state.claudeTaskSessions[claudeSessionId]?.panelNumber ?? null;
+
+  let s = state.claudeTaskSessions[claudeSessionId];
+  if (!s) {
+    s = {
+      claudeSessionId,
+      panelNumber,
+      cwd,
+      source: toolName === "TodoWrite" ? "todowrite" : "task-tools",
+      tasks: {},
+      order: [],
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.claudeTaskSessions[claudeSessionId] = s;
+  }
+  if (panelNumber !== null) s.panelNumber = panelNumber;
+  if (cwd) s.cwd = cwd;
+
+  switch (toolName) {
+    case "TaskCreate": {
+      const created = result.task ? [result.task] : Array.isArray(result.tasks) ? result.tasks : result.id ? [result] : [];
+      created.forEach((raw, i) => {
+        const tk = coerceObj(raw);
+        const id = String(tk.id ?? tk.taskId ?? `tc-${Date.now()}-${i}`);
+        upsertTask(s, id, {
+          subject: String(tk.subject ?? tk.content ?? toolInput.subject ?? "(task)"),
+          status: normTaskStatus(tk.status) ?? "pending",
+        });
+      });
+      break;
+    }
+    case "TaskUpdate": {
+      const id = String(toolInput.taskId ?? toolInput.id ?? toolInput.task_id ?? "");
+      if (!id) break;
+      if (toolInput.status === "deleted") {
+        if (s.tasks[id]) { delete s.tasks[id]; s.order = s.order.filter((x) => x !== id); }
+        break;
+      }
+      const patch: Partial<Task> = {};
+      if (toolInput.subject != null) patch.subject = String(toolInput.subject);
+      const st = normTaskStatus(toolInput.status);
+      if (st) patch.status = st;
+      upsertTask(s, id, patch);
+      break;
+    }
+    case "TaskList": {
+      // Authoritative snapshot — rebuild, but guard a malformed non-array so a good list isn't wiped.
+      const arr = Array.isArray(result) ? result : Array.isArray(result.tasks) ? result.tasks : null;
+      if (!arr) break;
+      s.tasks = {};
+      s.order = [];
+      for (const raw of arr) {
+        const tk = coerceObj(raw);
+        const id = String(tk.id ?? tk.taskId ?? "");
+        if (!id) continue;
+        s.tasks[id] = { id, subject: String(tk.subject ?? tk.content ?? "(task)"), status: normTaskStatus(tk.status) ?? "pending", updatedAt: Date.now() };
+        s.order.push(id);
+      }
+      break;
+    }
+    case "TodoWrite": {
+      const todos = Array.isArray(toolInput.todos) ? toolInput.todos : [];
+      s.source = "todowrite";
+      s.tasks = {};
+      s.order = [];
+      todos.forEach((raw, i) => {
+        const td = coerceObj(raw);
+        const id = `tw-${i}`;
+        s.tasks[id] = { id, subject: String(td.content ?? td.subject ?? "(todo)"), activeForm: typeof td.activeForm === "string" ? td.activeForm : undefined, status: normTaskStatus(td.status) ?? "pending", updatedAt: Date.now() };
+        s.order.push(id);
+      });
+      break;
+    }
+    default:
+      return;
+  }
+
+  s.updatedAt = Date.now();
+  pruneTaskSessions();
+  saveState(state);
+  send("terminal:claude-tasks-updated", summarizeTaskSession(s));
+}
+
+// ── todo.md file capture ──────────────────────────────────────────────────────
+// GitHub-style task items. Markdown has no in_progress state, so items are pending or completed.
+interface ParsedTodo { subject: string; status: TaskStatus; priority?: TodoPriority; due?: string; blocked?: boolean }
+// GitHub task line: "- [ ] subject" / "- [x] subject". Shared so the parser and line-delete index items identically.
+const TODO_ITEM_RE = /^\s*[-*+]\s+\[([ xX])\]\s+(.*\S)\s*$/;
+// Inline metadata convention: leading (P0|P1|P2), @due(...), @blocked/[blocked] — parsed, then stripped from the subject.
+function parseTodoMarkdown(content: string): ParsedTodo[] {
+  const out: ParsedTodo[] = [];
+  for (const line of content.split("\n")) {
+    const m = TODO_ITEM_RE.exec(line);
+    if (!m) continue;
+    let subject = m[2];
+    let priority: TodoPriority | undefined;
+    let due: string | undefined;
+    let blocked = false;
+    const pri = /^\((P[012])\)\s*/i.exec(subject);
+    if (pri) {
+      const p = pri[1].toUpperCase();
+      priority = p === "P0" ? "high" : p === "P1" ? "medium" : "low";
+      subject = subject.slice(pri[0].length);
+    }
+    const dueM = /@due\(([^)]*)\)/i.exec(subject);
+    if (dueM) { due = dueM[1].trim() || undefined; subject = subject.replace(dueM[0], ""); }
+    const blkM = /(@blocked|\[blocked\])/i.exec(subject);
+    if (blkM) { blocked = true; subject = subject.replace(blkM[0], ""); }
+    subject = subject.replace(/\s{2,}/g, " ").trim();
+    out.push({ subject, status: m[1] === " " ? "pending" : "completed", priority, due, blocked: blocked || undefined });
+  }
+  return out;
+}
+
+const todoFileWatchers = new Map<string, fs.FSWatcher>();
+const todoFileDebounce = new Map<string, NodeJS.Timeout>();
+const MAX_TODO_WATCHERS = 50;
+
+// Resolve a file-tool payload to an absolute *todo.md path, or null if out of scope.
+function resolveTodoPath(payload: Record<string, unknown>): string | null {
+  const toolInput = coerceObj(payload.tool_input);
+  const raw = typeof toolInput.file_path === "string" ? toolInput.file_path
+    : typeof toolInput.filePath === "string" ? toolInput.filePath : "";
+  if (!raw) return null;
+  const cwd = typeof payload.cwd === "string" ? payload.cwd : "";
+  const abs = isAbsolute(raw) ? raw : cwd ? resolve(cwd, raw) : raw;
+  if (!/todo\.md$/i.test(basename(abs))) return null;
+  if (abs.includes("/node_modules/") || abs.includes("/.git/")) return null;
+  return abs;
+}
+
+// A todo.md belongs to its repo, not the terminal that wrote it — walk up to the .git root
+// (fallback: the file's own dir) so the drawer groups by repo.
+function deriveRepoRoot(absFilePath: string): string {
+  let dir = dirname(absFilePath);
+  while (true) {
+    if (fs.existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return dirname(absFilePath);
+    dir = parent;
+  }
+}
+
+// Read + parse a *todo.md, upsert its group (authoritative replace, like TaskList).
+// Returns false when the file is gone/empty so the caller can drop the group.
+// panelNumber stays null: file groups map to a repo (drawer-only), never a panel badge.
+function applyTodoFile(absPath: string): boolean {
+  let content: string;
+  try { content = fs.readFileSync(absPath, "utf8"); } catch { return false; }
+  const items = parseTodoMarkdown(content);
+  if (items.length === 0) return false;
+  const key = `file:${absPath}`;
+  const repoRoot = deriveRepoRoot(absPath);
+  let s = state.claudeTaskSessions[key];
+  if (!s) {
+    s = { claudeSessionId: key, panelNumber: null, cwd: absPath, source: "todo-file", repoRoot, tasks: {}, order: [], startedAt: Date.now(), updatedAt: Date.now() };
+    state.claudeTaskSessions[key] = s;
+  }
+  s.repoRoot = repoRoot;
+  s.tasks = {};
+  s.order = [];
+  const sess = s;
+  items.forEach((it, i) => {
+    const id = `f${i}`;
+    sess.tasks[id] = { id, subject: it.subject, status: it.status, updatedAt: Date.now(), priority: it.priority, due: it.due, blocked: it.blocked };
+    sess.order.push(id);
+  });
+  s.updatedAt = Date.now();
+  pruneTaskSessions();
+  saveState(state);
+  send("terminal:claude-tasks-updated", summarizeTaskSession(s));
+  return true;
+}
+
+function dropTodoFileGroup(absPath: string) {
+  const key = `file:${absPath}`;
+  const s = state.claudeTaskSessions[key];
+  if (s) {
+    s.tasks = {}; s.order = [];
+    send("terminal:claude-tasks-updated", summarizeTaskSession(s)); // total 0 → UI drops the card
+    delete state.claudeTaskSessions[key];
+    saveState(state);
+  }
+  unwatchTodoFile(absPath);
+}
+
+function ingestTodoFileEvent(payload: Record<string, unknown>) {
+  const absPath = resolveTodoPath(payload);
+  if (!absPath) return;
+  if (applyTodoFile(absPath)) watchTodoFile(absPath);
+  else dropTodoFileGroup(absPath);
+}
+
+function watchTodoFile(absPath: string) {
+  if (todoFileWatchers.has(absPath)) return;
+  if (todoFileWatchers.size >= MAX_TODO_WATCHERS) {
+    console.warn(`[todo-watch] cap ${MAX_TODO_WATCHERS} reached — not watching ${absPath}; hand-edits won't live-update`);
+    return;
+  }
+  try {
+    const w = fs.watch(absPath, (event) => {
+      const prev = todoFileDebounce.get(absPath);
+      if (prev) clearTimeout(prev);
+      todoFileDebounce.set(absPath, setTimeout(() => reparseTodoFile(absPath, event), 150));
+    });
+    todoFileWatchers.set(absPath, w);
+  } catch { /* file vanished between parse and watch — ignore */ }
+}
+
+function reparseTodoFile(absPath: string, event: string) {
+  todoFileDebounce.delete(absPath);
+  if (!fs.existsSync(absPath)) { dropTodoFileGroup(absPath); return; }
+  if (!applyTodoFile(absPath)) { dropTodoFileGroup(absPath); return; }
+  // Editors atomic-save via rename, detaching the watch — re-arm on the new inode.
+  if (event === "rename") { unwatchTodoFile(absPath); watchTodoFile(absPath); }
+}
+
+function unwatchTodoFile(absPath: string) {
+  const w = todoFileWatchers.get(absPath);
+  if (w) { try { w.close(); } catch {} todoFileWatchers.delete(absPath); }
+  const t = todoFileDebounce.get(absPath);
+  if (t) { clearTimeout(t); todoFileDebounce.delete(absPath); }
+}
+
+// Persisted todo-file groups load with stale parse output and no live watcher.
+// On boot, re-parse each with the current parser + re-arm its watch; drop any whose file vanished.
+function restoreTodoFileGroups() {
+  for (const key of Object.keys(state.claudeTaskSessions)) { // snapshot — safe against mid-loop deletes
+    if (state.claudeTaskSessions[key]?.source !== "todo-file") continue;
+    const absPath = key.startsWith("file:") ? key.slice(5) : state.claudeTaskSessions[key].cwd;
+    if (applyTodoFile(absPath)) watchTodoFile(absPath);
+    else dropTodoFileGroup(absPath);
+  }
+}
+
+// ── todo.md filesystem discovery ───────────────────────────────────────────────
+// Actively find *todo.md on disk (not just ones Claude writes). Bounded BFS so a deep
+// tree or symlink loop can't hang: dedup by realpath, cap depth/dirs/files, skip heavy dirs.
+const SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "build", "dist", "out", ".next", "target", "venv", ".venv", "vendor", ".cache", "coverage", "Pods"]);
+const SCAN_MAX_DEPTH = 5;
+const SCAN_MAX_DIRS = 4000;
+const SCAN_MAX_FILES = 200;
+
+async function findTodoFiles(roots: string[]): Promise<string[]> {
+  const found = new Set<string>();
+  const seen = new Set<string>();
+  const queue: Array<{ dir: string; depth: number }> = [];
+  const enqueue = (p: string, depth: number) => {
+    let real: string;
+    try { real = fs.realpathSync(p); } catch { return; } // skip missing dirs; resolve symlinks so dedup + loop-guard work
+    if (seen.has(real)) return;
+    seen.add(real);
+    queue.push({ dir: real, depth });
+  };
+  for (const r of roots) enqueue(r, 0);
+  let budget = SCAN_MAX_DIRS;
+  while (queue.length && budget > 0 && found.size < SCAN_MAX_FILES) {
+    const { dir, depth } = queue.shift()!;
+    budget--;
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        // Descend into .claude (canonical Claude tasks dir, e.g. .claude/local/tasks/todo.md); skip other dot-dirs.
+        const skipDot = e.name.startsWith(".") && e.name !== ".claude";
+        if (depth >= SCAN_MAX_DEPTH || skipDot || SCAN_SKIP_DIRS.has(e.name)) continue;
+        enqueue(join(dir, e.name), depth + 1);
+      } else if (/^todo\.md$/i.test(e.name)) {
+        found.add(join(dir, e.name));
+      }
+    }
+  }
+  return [...found];
+}
+
+// Scan the GitHub dir + open terminal CWDs, registering each *todo.md as a file group.
+// Idempotent: applyTodoFile replaces, watchTodoFile no-ops if already watched. Returns files registered.
+async function scanTodoFiles(): Promise<number> {
+  const roots = [githubDir, ...new Set([...sessionCwd.values()].filter(Boolean))];
+  const files = await findTodoFiles(roots);
+  let applied = 0;
+  for (const abs of files) {
+    if (applyTodoFile(abs)) { watchTodoFile(abs); applied++; }
+  }
+  return applied;
 }
 
 // ── HTTP server (new_terminal / nt shell command) ─────────────────────────────
@@ -504,6 +1300,36 @@ function startHttpServer() {
           const { sessionId, cwd, gitBranch } = JSON.parse(body);
           send("terminal:cwd-update", sessionId, cwd, gitBranch ?? "");
         } catch {}
+        res.writeHead(200);
+        res.end();
+      });
+    } else if (req.method === "POST" && req.url === "/claude-session") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          const { terminalSessionId, claudeSessionId, cwd } = JSON.parse(body);
+          const panelNumber = sessionPanelNumbers.get(terminalSessionId);
+          if (panelNumber !== undefined && typeof claudeSessionId === "string" && claudeSessionId) {
+            const list = state.panelClaudeSessions[panelNumber] ?? [];
+            if (!list.some((e) => e.claudeSessionId === claudeSessionId)) {
+              list.push({ claudeSessionId, cwd: typeof cwd === "string" ? cwd : "", startedAt: Date.now() });
+              // Keep only the last 20 sessions per panel
+              state.panelClaudeSessions[panelNumber] = list.slice(-20);
+              saveState(state);
+              send("terminal:claude-session-recorded", panelNumber, claudeSessionId);
+            }
+          }
+        } catch {}
+        res.writeHead(200);
+        res.end();
+      });
+    } else if (req.method === "POST" && req.url === "/claude-tasks") {
+      const tsid = String(req.headers["x-terminal-session-id"] ?? "");
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try { ingestClaudeTaskEvent(tsid, JSON.parse(body)); } catch {}
         res.writeHead(200);
         res.end();
       });
@@ -567,6 +1393,9 @@ export SAVEHIST=50000
 unset ZDOTDIR
 [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
 
+# Prepend ~/.local/bin (after sourcing so it wins); guarded to avoid duplicate PATH entries
+[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
+
 # Force-load zsh-autosuggestions if not already active (in case .zshrc failed to load it)
 (( ! \${+functions[_zsh_autosuggest_start]} )) && \
   [[ -f /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && \
@@ -594,17 +1423,31 @@ open() {
   fi
 }
 
-# Friendly exit message
 exit() {
-  echo "\\033[36mBye! 👋\\033[0m"
+  echo "\\033[36mBye\\033[0m"
   builtin exit "$@"
 }
 
-# Report CWD + git branch via OSC escape sequence (real-time, no curl needed)
+# Report CWD + git branch via OSC escape sequence (real-time, no curl needed).
+# Also sets the prompt from the same branch lookup — one git call per prompt, not two.
 _td_update_cwd() {
   local _git_branch=""
   _git_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
   printf "\\033]9999;%s\\034%s\\007" "$PWD" "$_git_branch"
+  [[ -n "$FLIGHT_DECK_KEEP_PROMPT" ]] && return
+
+  # Short prompt: the panel header already carries the full branch and sha, so the
+  # prompt only needs repo + ticket. The full bracketed path wrapped three lines per command.
+  local _d="$PWD"
+  case "$_d" in
+    "$HOME/Documents/GitHub"/*) _d="~/\${_d#$HOME/Documents/GitHub/}" ;;
+    "$HOME") _d="~" ;;
+    "$HOME"/*) _d="~/\${_d#$HOME/}" ;;
+  esac
+  local _ticket=""
+  [[ -n "$_git_branch" ]] && _ticket="  %F{#7a8291}\${_git_branch%%/*}%f"
+  PROMPT="%F{#66baff}\${_d}%f\${_ticket} %F{#008cff}›%f "
+  RPROMPT=""
 }
 precmd_functions+=(_td_update_cwd)
 chpwd_functions+=(_td_update_cwd)
@@ -621,6 +1464,14 @@ cd() {
   fi
   builtin cd "$@"
 }
+
+# Bare repo name → cd there. AUTO_CD resolves the word itself and never reaches cd(),
+# and command_not_found_handler runs in a forked child where the cd would be discarded,
+# so an alias is the only hook that lands in this shell. Never shadows a real command.
+for _td_repo in "$HOME/Documents/GitHub"/*(N/); do
+  command -v -- "\${_td_repo:t}" &>/dev/null || alias -- "\${_td_repo:t}"="builtin cd \${(q)_td_repo}"
+done
+unset _td_repo
 `
   );
 }
@@ -650,14 +1501,21 @@ function createWindow() {
 }
 
 app.setAboutPanelOptions({
-  applicationName: "Terminal Dashboard",
+  applicationName: "Flight Deck",
   applicationVersion: "0.1.0",
   copyright: "© 2026 Tung Tran <tranthaitung.inbox@gmail.com>",
   iconPath: join(__dirname, "../../build/icons/icon.icns"),
 });
 
 app.whenReady().then(() => {
+  ensureClaudeHookScript();
+  ensureClaudeTaskHookScript();
   startHttpServer(); // createWindow() is called inside once zdotdir is ready
+  restoreTodoFileGroups(); // re-parse + re-watch persisted todo.md groups so they pick up parser changes
+  scanTodoFiles().catch((e) => console.error("[todo-scan] startup scan failed:", e)); // discover todo.md on disk (fire-and-forget)
+  // Kick off an immediate Linear sync on startup, then repeat every 4 hours
+  syncLinear();
+  setInterval(() => syncLinear(), FOUR_HOURS_MS);
 
   // Watch Claude config dirs — debounce to avoid floods on bulk file saves
   let claudeConfigTimer: ReturnType<typeof setTimeout> | null = null;
@@ -693,11 +1551,24 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  for (const w of todoFileWatchers.values()) { try { w.close(); } catch {} }
+  flushState(); // ensure the debounced state write lands before exit
   if (zdotdir) fs.rmSync(zdotdir, { recursive: true, force: true });
 });
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
 ipcMain.handle("terminal:get-state", () => state);
+
+// Panel → epoch ms of its last PTY output. Polled, not pushed: a push per chunk would out-rate the
+// output batching it sits behind.
+ipcMain.handle("terminal:get-activity", (): Record<number, number> => {
+  const out: Record<number, number> = {};
+  for (const [sessionId, at] of sessionLastData) {
+    const num = sessionPanelNumbers.get(sessionId);
+    if (num !== undefined) out[num] = Math.max(out[num] ?? 0, at);
+  }
+  return out;
+});
 
 ipcMain.handle(
   "terminal:create",
@@ -720,7 +1591,7 @@ ipcMain.handle("terminal:get-history", (_, num: number): string => {
 
 ipcMain.on(
   "terminal:save-panels",
-  (_, panels: { number: number; title: string }[]) => {
+  (_, panels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[]) => {
     state.lastPanels = panels;
     for (const p of panels) {
       if (p.title && p.title !== `terminal ${p.number}`) {
@@ -752,16 +1623,38 @@ ipcMain.on("terminal:write", (_, id: string, data: string) => {
 });
 
 ipcMain.on("terminal:resize", (_, id: string, cols: number, rows: number) => {
+  unmeasuredSessions.delete(id);
   sessions.get(id)?.resize(cols, rows);
+
+  if (cols !== state.paneSize?.cols || rows !== state.paneSize?.rows) {
+    state.paneSize = { cols, rows };
+    saveState(state);
+  }
+  // Lend the measurement to panels whose view never mounted — a background or restored panel is
+  // otherwise left on the spawn guess and is already broken by the time the user first types in it.
+  for (const other of unmeasuredSessions) sessions.get(other)?.resize(cols, rows);
 });
 
 ipcMain.on("terminal:close", (_, id: string) => {
   sessions.get(id)?.kill();
   sessions.delete(id);
+  unmeasuredSessions.delete(id);
 });
 
 ipcMain.on("terminal:delete-history", (_, num: number) => {
   try { fs.unlinkSync(historyPath(num)); } catch {}
+  let changed = false;
+  if (state.panelClaudeSessions[num]) {
+    delete state.panelClaudeSessions[num];
+    changed = true;
+  }
+  for (const [sid, s] of Object.entries(state.claudeTaskSessions ?? {})) {
+    if (s.panelNumber === num) {
+      delete state.claudeTaskSessions[sid];
+      changed = true;
+    }
+  }
+  if (changed) saveState(state);
 });
 
 ipcMain.on("terminal:set-focused", (_, sessionId: string) => {
@@ -808,6 +1701,18 @@ ipcMain.handle("stats:get-data", (_, month?: string) => {
     .sort((a, b) => b.visits - a.visits)
     .slice(0, 12);
   return { claude, repos };
+});
+
+// Most-visited repos for the directory picker — cheap: terminal OSC visit counts only.
+// Filters to still-existing dirs before slicing so deleted repos don't leave dead chips.
+ipcMain.handle("fs:frequent-dirs", (): { name: string }[] => {
+  const stats = loadRepoStats();
+  return Object.entries(stats)
+    .sort((a, b) => b[1].visits - a[1].visits)
+    .map(([name]) => name)
+    .filter((name) => fs.existsSync(join(githubDir, name)))
+    .slice(0, 10)
+    .map((name) => ({ name }));
 });
 
 // ── Usage Sessions IPC (ccusage) ──────────────────────────────────────────────
@@ -1108,6 +2013,202 @@ ipcMain.handle("claude:list-skills", (): ClaudeSkill[] => {
   } catch { return []; }
 });
 
+ipcMain.handle("claude:get-panel-sessions", (_, panelNumber: number): ClaudeSessionEntry[] => {
+  return state.panelClaudeSessions[panelNumber] ?? [];
+});
+
+ipcMain.handle("claude:get-all-panel-sessions", (): Record<number, ClaudeSessionEntry[]> => {
+  return state.panelClaudeSessions ?? {};
+});
+
+// The panel's newest recorded session is the one running in it — /clear and resume both re-fire the
+// SessionStart hook, appending a fresh id.
+ipcMain.handle("claude:get-titles", (): Record<number, ClaudeTitle> => {
+  const out: Record<number, ClaudeTitle> = {};
+  for (const [num, list] of Object.entries(state.panelClaudeSessions ?? {})) {
+    const latest = list[list.length - 1];
+    if (!latest) continue;
+    const hit = readClaudeTitle(latest.claudeSessionId, latest.cwd ?? "");
+    if (hit) out[Number(num)] = hit;
+  }
+  return out;
+});
+
+ipcMain.handle("claude:hook-status", (): { scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean } => {
+  const settingsPath = join(os.homedir(), ".claude", "settings.json");
+  let installed = false;
+  let taskInstalled = false;
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    for (const entry of (settings.hooks?.SessionStart ?? []) as { hooks?: { command?: string }[] }[]) {
+      for (const h of entry.hooks ?? []) {
+        if (h.command && h.command.includes("claude-sessionstart-hook.sh")) {
+          installed = true;
+        }
+      }
+    }
+    for (const entry of (settings.hooks?.PostToolUse ?? []) as { matcher?: string; hooks?: { command?: string }[] }[]) {
+      const hasScript = (entry.hooks ?? []).some((h) => h.command?.includes("claude-posttooluse-hook.sh"));
+      // Require the current matcher too — a stale install re-shows the "Update task capture" banner.
+      if (hasScript && entry.matcher === TASK_HOOK_MATCHER) taskInstalled = true;
+    }
+  } catch {}
+  return { scriptPath: claudeHookScript, installed, taskScriptPath: claudeTaskHookScript, taskInstalled };
+});
+
+ipcMain.handle("claude:install-hook", (): { ok: boolean; error?: string } => {
+  try {
+    ensureClaudeHookScript();
+    const settingsPath = join(os.homedir(), ".claude", "settings.json");
+    let settings: { hooks?: Record<string, { matcher?: string; hooks?: { type?: string; command: string }[] }[]> } = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.SessionStart = settings.hooks.SessionStart ?? [];
+    const already = settings.hooks.SessionStart.some((e) =>
+      (e.hooks ?? []).some((h) => h.command?.includes("claude-sessionstart-hook.sh"))
+    );
+    if (!already) {
+      settings.hooks.SessionStart.push({
+        hooks: [{ type: "command", command: claudeHookScript }],
+      });
+      try { fs.copyFileSync(settingsPath, settingsPath + ".bak"); } catch {}
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("claude:install-task-hook", (): { ok: boolean; error?: string } => {
+  try {
+    ensureClaudeTaskHookScript();
+    const settingsPath = join(os.homedir(), ".claude", "settings.json");
+    let settings: { hooks?: Record<string, { matcher?: string; hooks?: { type?: string; command: string }[] }[]> } = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
+    const ours = settings.hooks.PostToolUse.find((e) =>
+      (e.hooks ?? []).some((h) => h.command?.includes("claude-posttooluse-hook.sh"))
+    );
+    // Append when absent; otherwise self-heal a stale matcher in place. Never touch the sibling Bash matcher.
+    let changed = false;
+    if (!ours) {
+      settings.hooks.PostToolUse.push({
+        matcher: TASK_HOOK_MATCHER,
+        hooks: [{ type: "command", command: claudeTaskHookScript }],
+      });
+      changed = true;
+    } else if (ours.matcher !== TASK_HOOK_MATCHER) {
+      ours.matcher = TASK_HOOK_MATCHER;
+      changed = true;
+    }
+    if (changed) {
+      try { fs.copyFileSync(settingsPath, settingsPath + ".bak"); } catch {}
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("claude:get-all-tasks", (): TaskSummary[] => {
+  return Object.values(state.claudeTaskSessions ?? {}).map(summarizeTaskSession);
+});
+
+ipcMain.handle("claude:get-panel-tasks", (_, panelNumber: number): TaskSummary[] => {
+  return Object.values(state.claudeTaskSessions ?? {})
+    .filter((s) => s.panelNumber === panelNumber)
+    .map(summarizeTaskSession);
+});
+
+// ── Manual tasks (one global list, created lazily; exempt from pruning) ────────
+const MANUAL_KEY = "manual:global";
+function manualGroup(create: boolean): ClaudeTaskSession | undefined {
+  let s = state.claudeTaskSessions[MANUAL_KEY];
+  if (!s && create) {
+    s = { claudeSessionId: MANUAL_KEY, panelNumber: null, cwd: "", source: "manual", tasks: {}, order: [], startedAt: Date.now(), updatedAt: Date.now() };
+    state.claudeTaskSessions[MANUAL_KEY] = s;
+  }
+  return s;
+}
+
+ipcMain.handle("claude:add-manual-task", (_, subject: string): TaskSummary | null => {
+  const text = String(subject ?? "").trim();
+  if (!text) return null;
+  const s = manualGroup(true)!;
+  const id = `mt-${Date.now()}`;
+  s.tasks[id] = { id, subject: text, status: "pending", updatedAt: Date.now() };
+  s.order.push(id);
+  s.updatedAt = Date.now();
+  saveState(state);
+  const summary = summarizeTaskSession(s);
+  send("terminal:claude-tasks-updated", summary);
+  return summary;
+});
+
+ipcMain.handle("claude:toggle-manual-task", (_, taskId: string): TaskSummary | null => {
+  const s = manualGroup(false);
+  const t = s?.tasks[taskId];
+  if (!s || !t) return null;
+  t.status = t.status === "completed" ? "pending" : "completed";
+  t.updatedAt = Date.now();
+  s.updatedAt = Date.now();
+  saveState(state);
+  const summary = summarizeTaskSession(s);
+  send("terminal:claude-tasks-updated", summary);
+  return summary;
+});
+
+ipcMain.handle("claude:remove-manual-task", (_, taskId: string): TaskSummary | null => {
+  const s = manualGroup(false);
+  if (!s || !s.tasks[taskId]) return null;
+  delete s.tasks[taskId];
+  s.order = s.order.filter((x) => x !== taskId);
+  s.updatedAt = Date.now();
+  saveState(state);
+  const summary = summarizeTaskSession(s);
+  send("terminal:claude-tasks-updated", summary);
+  return summary;
+});
+
+// Delete the index-th todo item from its *todo.md file. index = order of GitHub task lines,
+// matching applyTodoFile's f<i> ids. applyTodoFile refreshes state + notifies the UI.
+ipcMain.handle("claude:delete-todo-file-item", (_, filePath: string, index: number): boolean => {
+  try {
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
+    let seen = -1, target = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (TODO_ITEM_RE.test(lines[i]) && ++seen === index) { target = i; break; }
+    }
+    if (target === -1) return false;
+    lines.splice(target, 1);
+    fs.writeFileSync(filePath, lines.join("\n"));
+    if (!applyTodoFile(filePath)) dropTodoFileGroup(filePath);
+    return true;
+  } catch (e) { console.error("[todo-delete] failed:", e); return false; }
+});
+
+// Delete every completed ("- [x]") task line from a *todo.md in one rewrite. Returns count removed.
+ipcMain.handle("claude:clear-completed-todo-file-items", (_, filePath: string): number => {
+  try {
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
+    const kept = lines.filter((l) => { const m = TODO_ITEM_RE.exec(l); return !(m && m[1] !== " "); });
+    const removed = lines.length - kept.length;
+    if (removed === 0) return 0;
+    fs.writeFileSync(filePath, kept.join("\n"));
+    if (!applyTodoFile(filePath)) dropTodoFileGroup(filePath);
+    return removed;
+  } catch (e) { console.error("[todo-clear] failed:", e); return 0; }
+});
+
+// Manual rescan trigger for the Tasks drawer ↻ button. Returns the number of todo.md files registered.
+ipcMain.handle("claude:rescan-todo-files", async (): Promise<number> => {
+  try { return await scanTodoFiles(); }
+  catch (e) { console.error("[todo-scan] rescan failed:", e); return 0; }
+});
+
 ipcMain.handle("claude:list-hooks", (): ClaudeHook[] => {
   try {
     const settingsPath = join(os.homedir(), ".claude", "settings.json");
@@ -1124,6 +2225,97 @@ ipcMain.handle("claude:list-hooks", (): ClaudeHook[] => {
   } catch { return []; }
 });
 
+// ── Linear integration (via claude CLI + Linear MCP) ─────────────────────────
+interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  priority: number; // 0=none 1=urgent 2=high 3=medium 4=low
+  state: { name: string; type: string; color: string };
+  team: { name: string };
+  url: string;
+  updatedAt: string;
+}
+interface LinearState { issues: LinearIssue[]; lastSyncedAt: number | null; error: string | null }
+
+function loadLinearIssues(): LinearState {
+  try { return JSON.parse(fs.readFileSync(linearIssuesFile, "utf8")); }
+  catch { return { issues: [], lastSyncedAt: null, error: null }; }
+}
+function saveLinearIssues(s: LinearState) {
+  fs.writeFileSync(linearIssuesFile, JSON.stringify(s));
+}
+
+let _claudeBin: string | null = null;
+// Resolve claude's absolute path once via login shell — handles nvm/local installs.
+function resolveClaudeBin(): string {
+  if (_claudeBin) return _claudeBin;
+  const candidates = [
+    `${os.homedir()}/.local/bin/claude`,
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+  ];
+  for (const p of candidates) { if (fs.existsSync(p)) { _claudeBin = p; return p; } }
+  try {
+    _claudeBin = execSync("zsh -lc 'which claude'", { encoding: "utf8", timeout: 5000 }).trim();
+    return _claudeBin;
+  } catch { return "claude"; }
+}
+
+// Sentinel for a killed sync (app shutdown/restart/timeout) — distinct from a real fetch failure.
+const SYNC_ABORTED = "__sync_aborted__";
+
+// Calls claude CLI which proxies through the Linear MCP connector — no separate API key needed.
+function fetchLinearViaClaude(): Promise<LinearIssue[]> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(resolveClaudeBin(), [
+      "-p",
+      'Use Linear to list all issues assigned to me. Exclude completed and cancelled. Return ONLY a raw JSON array — no markdown fences, no explanation. Each element: {"id":"...","identifier":"...","title":"...","priority":0,"state":{"name":"...","type":"...","color":"..."},"team":{"name":"..."},"url":"...","updatedAt":"..."}',
+      // Pre-approve Linear MCP tools: headless `claude -p` can't answer permission prompts,
+      // so an unlisted tool call is blocked and it returns prose instead of the JSON array.
+      "--allowedTools",
+      "mcp__claude_ai_Linear,mcp__claude_ai_Linear__list_issues,mcp__linear,mcp__linear__list_issues",
+    ], { env: TOOL_ENV, timeout: 300000, stdio: ["ignore", "pipe", "pipe"] }); // ignore stdin (skip claude's 3s wait); 300s: sync is ~130-150s + high variance, so 180s SIGTERM-killed it → 143
+
+    let stdout = "";
+    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stderr.on("data", (chunk: Buffer) => { console.error("[linear-sync]", chunk.toString()); });
+
+    proc.on("close", (code: number | null, signal: string | null) => {
+      // Killed (shutdown/restart/timeout SIGTERMs claude → exit 143) — flag so we keep cached issues.
+      if (code === 143 || code === null || signal) { reject(new Error(SYNC_ABORTED)); return; }
+      if (code !== 0) { reject(new Error(`claude exited ${code}`)); return; }
+      const m = stdout.match(/\[[\s\S]*\]/);
+      if (!m) { reject(new Error("No JSON array in claude output")); return; }
+      try { resolve(JSON.parse(m[0])); } catch (e) { reject(e); }
+    });
+    proc.on("error", reject);
+  });
+}
+
+async function syncLinear(): Promise<LinearState> {
+  try {
+    const issues = await fetchLinearViaClaude();
+    const s: LinearState = { issues, lastSyncedAt: Date.now(), error: null };
+    saveLinearIssues(s);
+    send("linear:issues-updated", s);
+    return s;
+  } catch (e) {
+    const current = loadLinearIssues();
+    // Aborted (killed on shutdown/restart) — keep last-good state, don't persist a spurious error.
+    if (e instanceof Error && e.message === SYNC_ABORTED) return current;
+    const s: LinearState = { ...current, error: e instanceof Error ? e.message : String(e) };
+    saveLinearIssues(s);
+    send("linear:issues-updated", s);
+    return s;
+  }
+}
+
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+ipcMain.handle("linear:get-issues", () => loadLinearIssues());
+ipcMain.handle("linear:sync", async () => syncLinear());
+
 // ── PRs IPC ───────────────────────────────────────────────────────────────────
 interface PRNode {
   number: number;
@@ -1133,8 +2325,17 @@ interface PRNode {
   headRefOid: string;
   isDraft: boolean;
   createdAt: string;
+  updatedAt: string;
   reviewDecision: string | null;
+  author: { login: string };
   repository: { name: string; nameWithOwner: string };
+  additions?: number;
+  deletions?: number;
+  reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+  statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+  mergeable: string;
+  mergeStateStatus: string;
+  commentCount: number;
 }
 
 ipcMain.handle("prs:delete-branch", async (_, repo: string, branches: string[]): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> => {
@@ -1188,7 +2389,7 @@ ipcMain.handle("prs:cleanup-merged", async (_, repo: string): Promise<{ deleted:
 
 ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; branch: string; repoUrl: string }[]> => {
   const results: { repo: string; branch: string; repoUrl: string }[] = [];
-  const skipBranches = new Set(["main", "master", "develop", "dev", "HEAD"]);
+  const skipBranches = new Set(["HEAD"]);
 
   try {
     for (const dir of fs.readdirSync(githubDir)) {
@@ -1199,16 +2400,25 @@ ipcMain.handle("prs:list-local-branches", async (): Promise<{ repo: string; bran
         if (!fs.existsSync(gitEntry)) continue;
         // Worktrees have .git as a file pointing back to the main repo — skip them
         if (!fs.statSync(gitEntry).isDirectory()) continue;
-        const [branchOut, remoteOut] = await Promise.all([
+        const [branchOut, remoteBranchOut, remoteOut] = await Promise.all([
           execAsync(`git branch --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }),
+          execAsync(`git branch -r --format="%(refname:short)"`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
           execAsync(`git remote get-url origin`, { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
         ]);
         const rawUrl = remoteOut.stdout.trim();
         const match = rawUrl.match(/github\.com[/:](.+?)(?:\.git)?$/);
         const repoUrl = match ? `https://github.com/${match[1]}` : "";
+        const seen = new Set<string>();
         for (const b of branchOut.stdout.trim().split("\n")) {
           const branch = b.trim();
           if (branch && !skipBranches.has(branch)) {
+            seen.add(branch);
+            results.push({ repo: dir, branch, repoUrl });
+          }
+        }
+        for (const b of remoteBranchOut.stdout.trim().split("\n")) {
+          const branch = b.trim().replace(/^origin\//, "");
+          if (branch && branch !== "HEAD" && !skipBranches.has(branch) && !seen.has(branch)) {
             results.push({ repo: dir, branch, repoUrl });
           }
         }
@@ -1290,13 +2500,212 @@ ipcMain.handle("git:check-dirty", async (_, repoName: string): Promise<{ dirty: 
   }
 });
 
-ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
+ipcMain.handle("gh:current-user", async (): Promise<string | null> => {
   try {
-    const query = `{ viewer { pullRequests(first: 50, states: [OPEN]) { nodes { number title url headRefName headRefOid isDraft createdAt reviewDecision repository { name nameWithOwner } } } } }`;
-  
-    const { stdout } = await execAsync(`gh api graphql -f query='${query}'`, { env: TOOL_ENV });
-    const data = JSON.parse(stdout);
-    return data.data?.viewer?.pullRequests?.nodes ?? [];
+    const { stdout } = await execAsync("gh api user --jq .login", { env: TOOL_ENV, timeout: 8000 });
+    return stdout.trim() || null;
+  } catch { return null; }
+});
+
+// Teams you're actually on, as `org/slug` — needs the token's `read:org` scope.
+async function fetchMyTeams(): Promise<string[]> {
+  try {
+    const { stdout } = await execAsync(
+      `gh api user/teams --paginate --jq '.[] | "\\(.organization.login)/\\(.slug)"'`,
+      { env: TOOL_ENV, timeout: 20000 }
+    );
+    return [...new Set(stdout.trim().split("\n").filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle("gh:my-teams", fetchMyTeams);
+
+// Shared by the repo fan-out and by hydration so cached and hydrated PRs are interchangeable.
+const PR_JSON_FIELDS =
+  "number,title,url,headRefName,headRefOid,isDraft,createdAt,updatedAt,reviewDecision," +
+  "author,additions,deletions,reviewRequests,statusCheckRollup,mergeable,mergeStateStatus,comments";
+
+// `comments` arrives as full bodies — collapse to a count before the IPC hop, or 100 PRs × N bodies
+// cross the bridge for one number on a card.
+function normalisePR(raw: Omit<PRNode, "repository" | "commentCount"> & { comments?: unknown[] }) {
+  const { comments, ...rest } = raw;
+  return { ...rest, commentCount: comments?.length ?? 0 };
+}
+
+// GraphQL, not `gh pr list --json`: the json path has no comment *count* field, so it downloads full
+// bodies — measured 746 KB / 4.9 s on one repo, 97% discarded — and can overflow exec's maxBuffer,
+// which `.catch(() => [])` turns into "repo has no PRs". One query per repo; aliased multi-repo
+// batching 502s (GitHub's ~10 s gateway limit compounds per busy repo — do not retry it).
+const PR_GQL_FIELDS = `
+  number title url headRefName headRefOid isDraft createdAt updatedAt reviewDecision
+  author { login } additions deletions mergeable mergeStateStatus
+  comments { totalCount }
+  reviewRequests(first: 20) { nodes { requestedReviewer {
+    __typename
+    ... on User { login }
+    ... on Bot { login }
+    ... on Team { name slug: combinedSlug }
+  } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 60) { nodes {
+    __typename
+    ... on CheckRun { status conclusion }
+    ... on StatusContext { state }
+  } } } } } }`;
+
+interface GqlPRNode extends Omit<PRNode, "repository" | "commentCount" | "author" | "reviewRequests" | "statusCheckRollup"> {
+  author: { login: string } | null;
+  comments: { totalCount: number };
+  reviewRequests: { nodes: { requestedReviewer: PRNode["reviewRequests"][number] | null }[] };
+  commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: PRNode["statusCheckRollup"] } } | null } }[] };
+}
+
+function mapGqlPR(node: GqlPRNode, repository: { name: string; nameWithOwner: string }): PRNode {
+  const { comments, reviewRequests, commits, author, ...rest } = node;
+  return {
+    ...rest,
+    author: { login: author?.login ?? "" }, // null for ghost users
+    commentCount: comments?.totalCount ?? 0,
+    reviewRequests: (reviewRequests?.nodes ?? [])
+      .map((n) => n?.requestedReviewer)
+      .filter((r): r is PRNode["reviewRequests"][number] => !!r),
+    statusCheckRollup: commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [],
+    repository,
+  };
+}
+
+const GH_GQL_OPTS = { env: TOOL_ENV, timeout: 20000, maxBuffer: 16 * 1024 * 1024 };
+
+// `gh api graphql` exits non-zero when the response carries an `errors` array, but partial `data`
+// still lands on stdout — salvage it rather than losing the whole call to one bad alias.
+async function ghGraphQL(query: string): Promise<Record<string, unknown>> {
+  try {
+    const { stdout } = await execFileAsync("gh", ["api", "graphql", "-f", `query=${query}`], GH_GQL_OPTS);
+    return (JSON.parse(stdout).data as Record<string, unknown>) ?? {};
+  } catch (err) {
+    const stdout = (err as { stdout?: string }).stdout;
+    if (stdout) {
+      try { return (JSON.parse(stdout).data as Record<string, unknown>) ?? {}; } catch { /* not JSON */ }
+    }
+    throw err;
+  }
+}
+
+// Qualifiers must be gh *flags*: `gh search prs -- "a:b c:d"` quotes the whole string as one term.
+const PR_VIEW_FLAGS: Record<string, string> = {
+  authored: "--author=@me",
+  assigned: "--assignee=@me",
+  involves: "--involves=@me",
+  reviewRequested: "--review-requested=@me",
+};
+
+// Identity only — `gh search prs --json` can't return headRef/CI/diff fields, so the caller hydrates.
+// Deliberately not caught: a swallowed 403 secondary-rate-limit reads as "no PRs", which hid it before.
+ipcMain.handle("prs:search-refs", async (_, view: string): Promise<{ nameWithOwner: string; number: number }[]> => {
+  const flag = PR_VIEW_FLAGS[view];
+  if (!flag) throw new Error(`Unknown PR view: ${view}`);
+  try {
+    const { stdout } = await execAsync(
+      `gh search prs ${flag} --state=open --limit 100 --json repository,number`,
+      { env: TOOL_ENV, timeout: 20000 }
+    );
+    const rows = JSON.parse(stdout) as { repository: { nameWithOwner: string }; number: number }[];
+    return rows.map((r) => ({ nameWithOwner: r.repository.nameWithOwner, number: r.number }));
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim();
+    throw new Error(stderr || (err as Error).message || "GitHub search failed");
+  }
+});
+
+// Fills refs the renderer couldn't satisfy from the fan-out cache — works for repos with no local clone.
+// One aliased query per 20 refs (single-PR aliases are cheap, unlike whole-repo ones); refs a chunk
+// couldn't resolve fall back to per-PR `gh pr view`.
+ipcMain.handle("prs:hydrate", async (_, refs: { nameWithOwner: string; number: number }[]): Promise<PRNode[]> => {
+  if (!refs?.length) return [];
+  const repoOf = (nameWithOwner: string) => ({ name: nameWithOwner.split("/").pop() ?? nameWithOwner, nameWithOwner });
+
+  const hydrateOne = ({ nameWithOwner, number }: { nameWithOwner: string; number: number }) =>
+    execAsync(
+      `gh pr view ${number} --repo "${nameWithOwner}" --json ${PR_JSON_FIELDS}`,
+      { env: TOOL_ENV, timeout: 20000, maxBuffer: 16 * 1024 * 1024 }
+    )
+      .then(({ stdout }) => ({ ...normalisePR(JSON.parse(stdout)), repository: repoOf(nameWithOwner) }))
+      .catch(() => null);
+
+  const chunks: (typeof refs)[] = [];
+  for (let i = 0; i < refs.length; i += 20) chunks.push(refs.slice(i, i + 20));
+
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    let data: Record<string, unknown> = {};
+    try {
+      const parts = chunk.map((ref, i) => {
+        const [owner, name] = ref.nameWithOwner.split("/");
+        return `p${i}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${ref.number}) { ${PR_GQL_FIELDS} } }`;
+      });
+      data = await ghGraphQL(`query { ${parts.join(" ")} }`);
+    } catch { /* whole chunk failed — every ref takes the per-PR path below */ }
+    return Promise.all(chunk.map((ref, i) => {
+      const node = (data[`p${i}`] as { pullRequest: GqlPRNode | null } | null)?.pullRequest;
+      return node ? mapGqlPR(node, repoOf(ref.nameWithOwner)) : hydrateOne(ref);
+    }));
+  }));
+  return results.flat().filter((pr): pr is PRNode => pr !== null);
+});
+
+ipcMain.handle("prs:list", async (_, repoNames: string[]): Promise<PRNode[]> => {
+  try {
+    if (!repoNames || repoNames.length === 0) return [];
+
+    const repoInfos = (await Promise.all(
+      repoNames.map(async (name) => {
+        const repoPath = join(githubDir, name);
+        try {
+          if (!fs.existsSync(join(repoPath, ".git"))) return null;
+          const { stdout } = await execAsync("git remote get-url origin", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" }));
+          const match = stdout.trim().match(/github\.com[/:](.+?)(?:\.git)?$/);
+          return match ? { name, nameWithOwner: match[1] } : null;
+        } catch { return null; }
+      })
+    )).filter((r): r is { name: string; nameWithOwner: string } => r !== null);
+
+    const results = await Promise.all(
+      repoInfos.map(async ({ name, nameWithOwner }) => {
+        try {
+          const [owner, repo] = nameWithOwner.split("/");
+          // CREATED_AT DESC matches what `gh pr list` returned; unordered GraphQL is oldest-first.
+          const data = await ghGraphQL(
+            `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { pullRequests(states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ${PR_GQL_FIELDS} } } } }`
+          );
+          const nodes = (data.repository as { pullRequests: { nodes: GqlPRNode[] } } | null)?.pullRequests?.nodes ?? [];
+          return nodes.map((n) => mapGqlPR(n, { name, nameWithOwner }));
+        } catch { return [] as PRNode[]; }
+      })
+    );
+
+    return results.flat();
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("prs:get-diff", async (_, repoName: string, prNumber: number): Promise<string> => {
+  const repoPath = join(githubDir, repoName);
+  try {
+    const { stdout } = await execAsync(`gh pr diff ${prNumber}`, { cwd: repoPath, env: TOOL_ENV });
+    return stdout;
+  } catch {
+    return "";
+  }
+});
+
+ipcMain.handle("ci:get-status", async (_, repoNameWithOwner: string, prNumber: number) => {
+  try {
+    const { stdout } = await execAsync(
+      `gh pr view ${prNumber} --repo "${repoNameWithOwner}" --json statusCheckRollup`,
+      { env: TOOL_ENV, timeout: 15000 }
+    );
+    return (JSON.parse(stdout).statusCheckRollup ?? []);
   } catch {
     return [];
   }
@@ -1304,6 +2713,634 @@ ipcMain.handle("prs:list", async (): Promise<PRNode[]> => {
 
 ipcMain.handle("shell:open-external", (_, url: string) => {
   shell.openExternal(url);
+});
+
+ipcMain.handle("shell:open-folder", (_, repoOrPath: string) => {
+  shell.openPath(resolveRoot(repoOrPath));
+});
+
+const TREE_HIDDEN = new Set(["node_modules", "out", "build", "dist", ".gradle", ".cache", ".next", ".nuxt", "__pycache__", ".turbo", ".DS_Store"]);
+
+// Recursive walks only: dirs that are cheap to browse lazily but ruinous to enumerate from $HOME
+const WALK_SKIP = new Set([...TREE_HIDDEN, ".git", "Library", ".Trash", ".npm", ".rustup", ".cargo", ".m2", ".pyenv", ".nvm", ".docker", ".ollama"]);
+const WALK_LIMIT = 50_000;
+
+// A bare name resolves under ~/Documents/GitHub; an absolute or ~-prefixed root is used as-is
+function resolveRoot(repoOrPath: string): string {
+  if (repoOrPath.startsWith("~")) return join(os.homedir(), repoOrPath.slice(1));
+  if (repoOrPath.startsWith("/")) return repoOrPath;
+  return join(githubDir, repoOrPath);
+}
+
+ipcMain.handle("repo:list-dir", async (_, repoOrPath: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> => {
+  try {
+    const base = join(resolveRoot(repoOrPath), subdir);
+    const entries = await fs.promises.readdir(base, { withFileTypes: true });
+    return entries
+      .filter((e) => e.name !== ".git" && !TREE_HIDDEN.has(e.name))
+      .map((e) => ({
+        name: e.name,
+        isDir: entryIsDir(base, e),
+        path: subdir ? `${subdir}/${e.name}` : e.name,
+      }))
+      .sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  } catch {
+    return [];
+  }
+});
+
+// Resolve symlinked dirs too, so linked folders in $HOME still show as navigable.
+function entryIsDir(dir: string, e: fs.Dirent): boolean {
+  if (e.isDirectory()) return true;
+  if (e.isSymbolicLink()) { try { return fs.statSync(join(dir, e.name)).isDirectory(); } catch { return false; } }
+  return false;
+}
+
+// General filesystem directory browser (Warp-style new-terminal picker). Dirs only.
+ipcMain.handle("fs:list-dirs", async (_, inputPath?: string, showHidden?: boolean): Promise<{
+  path: string; parent: string | null; home: string; entries: { name: string; path: string; count: number | null }[];
+}> => {
+  const home = os.homedir();
+  let dir = inputPath && inputPath.length ? inputPath : home;
+  if (dir.startsWith("~")) dir = join(home, dir.slice(1));
+  dir = join(dir); // normalise trailing slash / . / ..
+  const parent = dir === "/" ? null : dirname(dir);
+  try {
+    const raw = await fs.promises.readdir(dir, { withFileTypes: true });
+    const dirs = raw
+      .filter((e) => entryIsDir(dir, e) && (showHidden || (!e.name.startsWith(".") && e.name !== "__pycache__")))
+      .map((e) => ({ name: e.name, path: join(dir, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    // Item count per subdir; skip when the list is huge to avoid a file-descriptor storm.
+    const doCounts = dirs.length <= 300;
+    const entries = await Promise.all(dirs.map(async (d): Promise<{ name: string; path: string; count: number | null }> => {
+      if (!doCounts) return { ...d, count: null };
+      try { return { ...d, count: (await fs.promises.readdir(d.path)).length }; }
+      catch { return { ...d, count: null }; }
+    }));
+    return { path: dir, parent, home, entries };
+  } catch {
+    return { path: dir, parent, home, entries: [] };
+  }
+});
+
+async function walkDir(dir: string, base: string, results: string[] = []): Promise<string[]> {
+  if (results.length >= WALK_LIMIT) return results;
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return results; }
+  for (const e of entries) {
+    if (WALK_SKIP.has(e.name)) continue;
+    if (results.length >= WALK_LIMIT) break;
+    const rel = base ? `${base}/${e.name}` : e.name;
+    if (e.isDirectory()) await walkDir(join(dir, e.name), rel, results);
+    else results.push(rel);
+  }
+  return results;
+}
+
+ipcMain.handle("repo:list-files", async (_, repoOrPath: string): Promise<string[]> => {
+  try {
+    return await walkDir(resolveRoot(repoOrPath), "");
+  } catch {
+    return [];
+  }
+});
+
+interface GrepHit { file: string; count: number; line: number; preview: string; }
+
+const GREP_DEADLINE_MS = 15_000;
+
+/** Streams grep and kills it once `cap` files are in. A full scan of a large root takes minutes
+ *  (~57s under $HOME), and waiting for one meant every such search reported zero matches. */
+function grepFiles(root: string, args: string[], cap: number): Promise<{ files: string[]; truncated: boolean; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    // spawn, not exec — a shell would expand $ and backticks inside the query
+    const child = spawn("grep", args, { cwd: root, env: TOOL_ENV });
+    const files: string[] = [];
+    let carry = "";
+    let truncated = false;
+    let timedOut = false;
+    let done = false;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);
+      child.kill("SIGTERM");
+      resolve({ files, truncated, timedOut });
+    };
+    const deadline = setTimeout(() => { timedOut = true; finish(); }, GREP_DEADLINE_MS);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      carry += chunk.toString();
+      const lines = carry.split("\n");
+      carry = lines.pop() ?? ""; // last piece may be a partial path
+      for (const line of lines) {
+        if (!line) continue;
+        files.push(line.replace(/^\.\//, ""));
+        if (files.length >= cap) { truncated = true; finish(); return; }
+      }
+    });
+    child.stdout.on("error", () => { /* EPIPE once we've killed it */ });
+    child.on("error", finish); // grep missing or not executable
+    child.on("close", () => {
+      if (carry.trim()) files.push(carry.trim().replace(/^\.\//, ""));
+      finish();
+    });
+  });
+}
+
+// Fixed-string (-F) so the per-file counts computed below can't disagree with grep's file list
+ipcMain.handle("repo:grep-matches", async (_, repoOrPath: string, query: string, limit = 40, mode: { caseSensitive?: boolean; regex?: boolean } = {}): Promise<{ hits: GrepHit[]; totalFiles: number; badPattern?: boolean; truncated?: boolean; timedOut?: boolean }> => {
+  const { caseSensitive = false, regex = false } = mode;
+
+  // Counts come from this, so it has to agree with the flags handed to grep below
+  let matches: (line: string) => boolean;
+  if (regex) {
+    let re: RegExp;
+    try { re = new RegExp(query, caseSensitive ? "" : "i"); } catch { return { hits: [], totalFiles: 0, badPattern: true }; }
+    matches = (line) => re.test(line); // no /g — .test must stay stateless across lines
+  } else if (caseSensitive) {
+    matches = (line) => line.includes(query);
+  } else {
+    const needle = query.toLowerCase();
+    matches = (line) => line.toLowerCase().includes(needle);
+  }
+
+  try {
+    const root = resolveRoot(repoOrPath);
+    // grep -E is POSIX ERE and has no \d\w\s — translate them so candidates aren't lost to the dialect gap
+    const pattern = regex ? query.replace(/\\d/g, "[0-9]").replace(/\\w/g, "[_[:alnum:]]").replace(/\\s/g, "[[:space:]]") : query;
+    const args = [
+      `-rIl${regex ? "E" : "F"}${caseSensitive ? "" : "i"}`,
+      ...[...WALK_SKIP].map((d) => `--exclude-dir=${d}`),
+      "-e", pattern, ".",
+    ];
+    // Headroom over the rendered slice so the "N more files" tail is meaningful without a full scan
+    const { files, truncated, timedOut } = await grepFiles(root, args, Math.max(limit * 5, 300));
+
+    // Only the rendered slice is read for counts + preview — scanning every hit under $HOME is unbounded
+    const hits: GrepHit[] = [];
+    for (const file of files.slice(0, limit)) {
+      try {
+        const full = join(root, file);
+        if (fs.statSync(full).size > 2_000_000) continue;
+        const lines = fs.readFileSync(full, "utf8").split("\n");
+        let count = 0;
+        let first = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (!matches(lines[i])) continue;
+          count++;
+          if (first < 0) first = i;
+        }
+        if (first < 0) continue;
+        hits.push({ file, count, line: first + 1, preview: lines[first].replace(/\t/g, "  ").trim().slice(0, 240) });
+      } catch { /* the grep list is advisory — an unreadable file just drops out */ }
+    }
+    return { hits, totalFiles: files.length, truncated, timedOut };
+  } catch {
+    return { hits: [], totalFiles: 0 };
+  }
+});
+
+ipcMain.handle("repo:open-file", (_, repoOrPath: string, filePath: string) => {
+  shell.openPath(join(resolveRoot(repoOrPath), filePath));
+});
+
+ipcMain.handle("repo:read-file", async (_, repoOrPath: string, filePath: string): Promise<string | null> => {
+  try {
+    return fs.readFileSync(join(resolveRoot(repoOrPath), filePath), "utf8");
+  } catch {
+    return null; // distinct from an empty file, so the editor can refuse to save over it
+  }
+});
+
+ipcMain.handle("repo:write-file", async (_, repoOrPath: string, filePath: string, content: string): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const root = resolveRoot(repoOrPath);
+    const full = resolve(root, filePath);
+    // A "../" in filePath must not let a write land outside the root the renderer asked for
+    if (full !== root && !full.startsWith(root + sep)) return { ok: false, error: "path escapes the root" };
+    // Editing only — a missing file means a stale or mistyped path, not a file to create
+    if (!fs.existsSync(full)) return { ok: false, error: "file no longer exists" };
+    selfWrite = { path: full, content }; // set before the write so the watcher can't beat us to it
+    fs.writeFileSync(full, content, "utf8");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+});
+
+// ── Open-file watch ────────────────────────────────────────────────────────────
+// The viewer shows one file at a time, so a single stat-poll watch covers it.
+// Polling rather than fs.watch: editors save atomically via rename, which orphans
+// an inode watch.
+let watchedFile: string | null = null;
+/** Our own last write, so the watcher doesn't echo an autosave back as an external edit. */
+let selfWrite: { path: string; content: string } | null = null;
+
+function stopWatchingFile() {
+  if (!watchedFile) return;
+  fs.unwatchFile(watchedFile);
+  watchedFile = null;
+}
+
+ipcMain.handle("repo:watch-file", (_, repoOrPath: string, filePath: string) => {
+  const full = join(resolveRoot(repoOrPath), filePath);
+  if (watchedFile === full) return;
+  stopWatchingFile();
+  watchedFile = full;
+  fs.watchFile(full, { interval: 700 }, (curr) => {
+    if (curr.nlink === 0) return; // deleted — leave the buffer alone rather than blanking it
+    let content: string;
+    try {
+      content = fs.readFileSync(full, "utf8");
+    } catch {
+      return;
+    }
+    if (selfWrite?.path === full && selfWrite.content === content) return;
+    mainWindow?.webContents.send("terminal:file-changed", repoOrPath, filePath, content);
+  });
+});
+
+ipcMain.handle("repo:unwatch-file", () => stopWatchingFile());
+
+ipcMain.handle("repo:open-in-editor", (_, repoOrPath: string, filePath: string, editor: string) => {
+  const fullPath = join(resolveRoot(repoOrPath), filePath);
+  const appName = editor === "cursor" ? "Cursor" : "Visual Studio Code";
+  const proc = spawn("/usr/bin/open", ["-a", appName, fullPath]);
+  proc.on("error", (e) => console.error("[open-in-editor] spawn error:", e));
+  proc.on("close", (code) => { if (code !== 0) console.error("[open-in-editor] exit", code); });
+  proc.unref();
+});
+
+ipcMain.handle("repo:show-in-finder", (_, repoOrPath: string, filePath: string) => {
+  shell.showItemInFolder(join(resolveRoot(repoOrPath), filePath));
+});
+
+ipcMain.handle("git:current-branch", async (_, repoOrPath: string): Promise<string | null> => {
+  try {
+    // resolveRoot, not join(githubDir, …) — the Files panel roots at `~` or an arbitrary path too
+    const repoPath = resolveRoot(repoOrPath);
+    const { stdout } = await execAsync("git branch --show-current", { cwd: repoPath, env: TOOL_ENV });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+});
+
+// A panel can sit in a subdirectory, a linked worktree, or a repo outside ~/Documents/GitHub —
+// only git can say where the checkout it belongs to actually starts.
+ipcMain.handle("git:repo-root", async (_, cwd: string): Promise<string | null> => {
+  try {
+    const { stdout } = await execAsync("git rev-parse --show-toplevel", { cwd: resolveRoot(cwd), env: TOOL_ENV, timeout: 5_000 });
+    return stdout.trim() || null;
+  } catch { return null; }
+});
+
+ipcMain.on("git:clone", (event, { url, requestId }: { url: string; requestId: string }) => {
+  const repoName = url.replace(/\.git$/, "").split("/").pop() ?? "repo";
+  const destPath = join(githubDir, repoName);
+
+  // Already exists as a git repo — nothing to clone, just surface it
+  if (fs.existsSync(join(destPath, ".git"))) {
+    event.sender.send("git:clone-done", requestId, repoName);
+    return;
+  }
+
+  const proc = spawn("git", ["clone", "--progress", url, destPath], { env: TOOL_ENV });
+  proc.stderr.on("data", (chunk: Buffer) => {
+    event.sender.send("git:clone-progress", requestId, chunk.toString());
+  });
+  proc.stdout.on("data", (chunk: Buffer) => {
+    event.sender.send("git:clone-progress", requestId, chunk.toString());
+  });
+  proc.on("close", (code) => {
+    if (code === 0) {
+      event.sender.send("git:clone-done", requestId, repoName);
+    } else {
+      event.sender.send("git:clone-error", requestId, `git clone exited with code ${code}`);
+    }
+  });
+  proc.on("error", (err) => {
+    event.sender.send("git:clone-error", requestId, err.message);
+  });
+});
+
+type WTFileResult = { path: string; filename: string; dir: string; status: string; additions: number; deletions: number };
+
+ipcMain.handle("git:working-tree", async (_, repoName: string): Promise<{ staged: WTFileResult[]; unstaged: WTFileResult[] }> => {
+  const repoPath = resolveRoot(repoName);
+  try {
+    const [statusRes, stagedNumRes, unstagedNumRes] = await Promise.all([
+      execAsync("git status --porcelain", { cwd: repoPath, env: TOOL_ENV }),
+      execAsync("git diff --numstat --cached", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
+      execAsync("git diff --numstat", { cwd: repoPath, env: TOOL_ENV }).catch(() => ({ stdout: "" })),
+    ]);
+    const parseNumstat = (raw: string) => {
+      const m = new Map<string, { additions: number; deletions: number }>();
+      for (const line of raw.trim().split("\n")) {
+        const parts = line.split("\t");
+        if (parts.length < 3) continue;
+        const a = parseInt(parts[0]); const d = parseInt(parts[1]);
+        if (!isNaN(a) && !isNaN(d)) m.set(parts[2].trim(), { additions: a, deletions: d });
+      }
+      return m;
+    };
+    const stagedNums = parseNumstat(stagedNumRes.stdout);
+    const unstagedNums = parseNumstat(unstagedNumRes.stdout);
+    const makeFile = (path: string, status: string, nums: { additions: number; deletions: number }): WTFileResult => {
+      const segs = path.split("/"); const filename = segs.pop() ?? path; const dir = segs.join("/");
+      return { path, filename, dir, status, ...nums };
+    };
+    const staged: WTFileResult[] = [], unstaged: WTFileResult[] = [];
+    for (const line of statusRes.stdout.split("\n")) {
+      if (line.length < 3) continue;
+      const x = line[0], y = line[1];
+      const filePath = line.slice(3).trim();
+      if (!filePath) continue;
+      if (x !== " " && x !== "?") staged.push(makeFile(filePath, x, stagedNums.get(filePath) ?? { additions: 0, deletions: 0 }));
+      if (y === "?") unstaged.push(makeFile(filePath, "?", { additions: 0, deletions: 0 }));
+      else if (y !== " ") unstaged.push(makeFile(filePath, y, unstagedNums.get(filePath) ?? { additions: 0, deletions: 0 }));
+    }
+    return { staged, unstaged };
+  } catch { return { staged: [], unstaged: [] }; }
+});
+
+ipcMain.handle("git:change-count", async (_, repoName: string): Promise<number> => {
+  try {
+    const { stdout } = await execAsync("git status --porcelain", { cwd: resolveRoot(repoName), env: TOOL_ENV });
+    return stdout.trim().split("\n").filter(Boolean).length;
+  } catch { return 0; }
+});
+
+// One round trip for the status bar. `resolveRoot` so it works for arbitrary roots, not just ~/Documents/GitHub.
+ipcMain.handle("git:repo-status", async (_, repoOrPath: string): Promise<{ branch: string; ahead: number; behind: number; changed: number } | null> => {
+  const cwd = resolveRoot(repoOrPath);
+  try {
+    const [branch, status] = await Promise.all([
+      execAsync("git rev-parse --abbrev-ref HEAD", { cwd, env: TOOL_ENV, timeout: 5_000 }).then((r) => r.stdout.trim()),
+      execAsync("git status --porcelain", { cwd, env: TOOL_ENV, timeout: 5_000 }).then((r) => r.stdout),
+    ]);
+    // No upstream is normal on a fresh branch — ahead/behind just stay at zero
+    const counts = await execAsync("git rev-list --left-right --count @{u}...HEAD", { cwd, env: TOOL_ENV, timeout: 5_000 })
+      .then((r) => r.stdout.trim().split(/\s+/).map(Number))
+      .catch(() => [0, 0]);
+    return {
+      branch,
+      behind: counts[0] || 0,
+      ahead: counts[1] || 0,
+      changed: status.trim().split("\n").filter(Boolean).length,
+    };
+  } catch { return null; }
+});
+
+// ── Working-tree watch ────────────────────────────────────────────────────────
+// The Changes rail shows one repo at a time, so a single recursive watch covers it.
+// Any worktree edit or index/HEAD change pushes `git:working-tree-changed`.
+let wtWatch: { repo: string; watchers: fs.FSWatcher[]; debounce?: ReturnType<typeof setTimeout> } | null = null;
+
+function stopWatchingWorkingTree() {
+  if (!wtWatch) return;
+  if (wtWatch.debounce) clearTimeout(wtWatch.debounce);
+  for (const w of wtWatch.watchers) { try { w.close(); } catch {} }
+  wtWatch = null;
+}
+
+/** Only index/HEAD/refs move `git status`; locks and packfiles are noise — and `git status`
+ *  itself rewrites the index, so an unfiltered watch would self-trigger. */
+function movesGitStatus(inner: string): boolean {
+  if (inner.endsWith(".lock")) return false;
+  return inner === "index" || inner === "HEAD" || inner === "MERGE_HEAD" || inner.startsWith(`refs${sep}`);
+}
+
+/** A linked worktree's `.git` is a file pointing at <main>/.git/worktrees/<name>, so its HEAD and
+ *  index live outside the worktree — watching only the worktree misses every checkout and stage. */
+function linkedGitDir(root: string): string | null {
+  try {
+    const dotGit = join(root, ".git");
+    if (fs.statSync(dotGit).isDirectory()) return null;
+    const m = fs.readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
+
+ipcMain.handle("git:watch-working-tree", (_, repoName: string) => {
+  if (wtWatch?.repo === repoName) return;
+  stopWatchingWorkingTree();
+  const bump = () => {
+    if (!wtWatch) return;
+    if (wtWatch.debounce) clearTimeout(wtWatch.debounce);
+    wtWatch.debounce = setTimeout(() => {
+      if (wtWatch) send("git:working-tree-changed", wtWatch.repo);
+    }, 400);
+  };
+  try {
+    const root = resolveRoot(repoName);
+    const watchers = [
+      fs.watch(root, { recursive: true }, (_event, filename) => {
+        if (!filename) return;
+        if (filename === ".git" || filename.startsWith(`.git${sep}`)) {
+          if (!movesGitStatus(filename.slice(5))) return;
+        }
+        bump();
+      }),
+    ];
+    const gitDir = linkedGitDir(root);
+    if (gitDir) {
+      try {
+        watchers.push(fs.watch(gitDir, { recursive: true }, (_event, filename) => {
+          if (filename && movesGitStatus(filename)) bump();
+        }));
+      } catch { /* main repo moved — the worktree watch still covers edits */ }
+    }
+    wtWatch = { repo: repoName, watchers };
+  } catch { /* repo vanished — the next watch call retries */ }
+});
+
+ipcMain.handle("git:unwatch-working-tree", () => stopWatchingWorkingTree());
+
+ipcMain.handle("git:file-diff", async (_, repoName: string, filePath: string, staged: boolean): Promise<string> => {
+  const cwd = resolveRoot(repoName);
+  const BIG = { cwd, env: TOOL_ENV, maxBuffer: 16 * 1024 * 1024 };
+  try {
+    const { stdout } = await execAsync(`git diff ${staged ? "--cached" : ""} -- "${filePath}"`, BIG);
+    if (stdout || staged) return stdout;
+    // Untracked file: plain `git diff` is empty — synthesise the add-diff against /dev/null.
+    const { stdout: st } = await execAsync(`git status --porcelain -- "${filePath}"`, { cwd, env: TOOL_ENV });
+    if (!st.startsWith("??")) return stdout;
+    // --no-index exits 1 when the files differ, so the diff arrives via the rejection.
+    return await execAsync(`git diff --no-index -- /dev/null "${filePath}"`, BIG)
+      .then((r) => r.stdout)
+      .catch((e) => (e as { stdout?: string }).stdout ?? "");
+  } catch { return ""; }
+});
+
+ipcMain.handle("git:stage-file", async (_, repoName: string, filePath: string) => {
+  await execAsync(`git add -- "${filePath}"`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:unstage-file", async (_, repoName: string, filePath: string) => {
+  await execAsync(`git restore --staged -- "${filePath}"`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:stage-all", async (_, repoName: string) => {
+  await execAsync("git add -A", { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:unstage-all", async (_, repoName: string) => {
+  await execAsync("git restore --staged .", { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+ipcMain.handle("git:discard-unstaged", async (_, repoName: string) => {
+  await execAsync("git restore .", { cwd: resolveRoot(repoName), env: TOOL_ENV }).catch(() => {});
+});
+ipcMain.handle("git:commit", async (_, repoName: string, message: string) => {
+  await execAsync(`git commit -m ${JSON.stringify(message)}`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
+});
+
+/** Branch the current work forked from. `origin/HEAD` is authoritative; the fallbacks cover clones
+ *  that never fetched it. Null → nothing to diff against, so the rail shows no branch view. */
+async function resolveBaseRef(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd, env: TOOL_ENV, timeout: 5_000 });
+    if (stdout.trim()) return stdout.trim();
+  } catch {}
+  for (const ref of ["origin/main", "origin/master", "origin/develop", "origin/dev", "main", "master"]) {
+    try {
+      await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, env: TOOL_ENV, timeout: 5_000 });
+      return ref;
+    } catch {}
+  }
+  return null;
+}
+
+ipcMain.handle("git:branch-diff", async (_, repoName: string): Promise<{ base: string | null; diff: string }> => {
+  const cwd = resolveRoot(repoName);
+  const base = await resolveBaseRef(cwd);
+  if (!base) return { base: null, diff: "" };
+  try {
+    // `...` diffs from the merge-base, so commits landed on the base since the fork stay out of it.
+    const { stdout } = await execFileAsync("git", ["diff", `${base}...HEAD`], { cwd, env: TOOL_ENV, timeout: 20_000, maxBuffer: 64 * 1024 * 1024 });
+    return { base, diff: stdout };
+  } catch { return { base, diff: "" }; }
+});
+
+ipcMain.handle("git:branch-pr", async (_, repoName: string, branch: string): Promise<number | null> => {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh", ["pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"],
+      { cwd: resolveRoot(repoName), env: TOOL_ENV, timeout: 15_000 },
+    );
+    const n = parseInt(stdout.trim(), 10);
+    return isNaN(n) ? null : n;
+  } catch { return null; }
+});
+
+interface CommitEntry { hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number; isLocal: boolean; }
+
+ipcMain.handle("git:commits", async (_, repoName: string, headRefName: string, prNumber?: number): Promise<CommitEntry[]> => {
+  const repoPath = resolveRoot(repoName);
+
+  // Helper: compute numstat additions/deletions for a commit hash from local git
+  const localStats = async (hash: string): Promise<{ additions: number; deletions: number }> => {
+    try {
+      const { stdout } = await execAsync(`git show --numstat --format="" ${hash}`, { cwd: repoPath, env: TOOL_ENV });
+      let additions = 0, deletions = 0;
+      for (const line of stdout.trim().split("\n")) {
+        const cols = line.split("\t");
+        if (cols.length < 2) continue;
+        const a = parseInt(cols[0]), d = parseInt(cols[1]);
+        if (!isNaN(a)) additions += a;
+        if (!isNaN(d)) deletions += d;
+      }
+      return { additions, deletions };
+    } catch { return { additions: 0, deletions: 0 }; }
+  };
+
+  // If no prNumber given, try to find one via gh pr list for this branch
+  if (!prNumber && headRefName) {
+    try {
+      const { stdout } = await execAsync(
+        `gh pr list --head "${headRefName}" --json number --jq '.[0].number'`,
+        { cwd: repoPath, env: TOOL_ENV }
+      );
+      const n = parseInt(stdout.trim(), 10);
+      if (!isNaN(n)) prNumber = n;
+    } catch {}
+  }
+
+  // Primary: use gh pr view when we have a prNumber — works even if branch is deleted
+  if (prNumber) {
+    try {
+      const { stdout } = await execAsync(
+        `gh pr view ${prNumber} --json commits --jq '.commits[] | [.oid, .messageHeadline, (.authors[0].name // ""), .committedDate[0:10], (if (.parents | length) > 1 then "merge" else "" end)] | join("|||")'`,
+        { cwd: repoPath, env: TOOL_ENV }
+      );
+      const commits: CommitEntry[] = [];
+      for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        const parts = line.split("|||");
+        if (parts.length < 4) continue;
+        const [hash, subject, author, date, mergeFlag = ""] = parts;
+        const isMerge = mergeFlag === "merge";
+        const stats = await localStats(hash.trim());
+        commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, isLocal: false, ...stats });
+      }
+      if (commits.length > 0) return commits;
+    } catch {}
+  }
+
+  // Fallback: git log (works when branch still exists on remote)
+  try {
+    await execAsync(`git fetch origin ${headRefName}`, { cwd: repoPath, env: TOOL_ENV }).catch(() => {});
+    let base = "origin/main";
+    try {
+      const { stdout: symRef } = await execAsync(`git symbolic-ref refs/remotes/origin/HEAD`, { cwd: repoPath, env: TOOL_ENV });
+      base = symRef.trim().replace("refs/remotes/", "");
+    } catch {
+      for (const candidate of ["origin/main", "origin/master"]) {
+        try { await execAsync(`git rev-parse ${candidate}`, { cwd: repoPath, env: TOOL_ENV }); base = candidate; break; } catch {}
+      }
+    }
+    const defaultBranchName = base.replace("origin/", "");
+    const isDefaultBranch = headRefName === defaultBranchName;
+    const range = isDefaultBranch ? `-50 ${headRefName}` : `${base}..${headRefName}`;
+    const SEP = "|||GS|||";
+    let rawOut = "";
+    const { stdout } = await execAsync(
+      `git log --numstat --pretty=tformat:"${SEP}%H|||%s|||%an|||%ad|||%P" --date=short ${range}`,
+      { cwd: repoPath, env: TOOL_ENV }
+    );
+    rawOut = stdout;
+    const pushedHashes = new Set<string>();
+    try {
+      const { stdout: pushed } = await execAsync(`git log origin/${headRefName} --format=%H`, { cwd: repoPath, env: TOOL_ENV });
+      for (const h of pushed.trim().split("\n").filter(Boolean)) pushedHashes.add(h.trim());
+    } catch {}
+    const commits: CommitEntry[] = [];
+    for (const chunk of rawOut.split(SEP).filter(Boolean)) {
+      const lines = chunk.trim().split("\n");
+      const parts = lines[0].split("|||");
+      if (parts.length < 4) continue;
+      const [hash, subject, author, date, parents = ""] = parts;
+      const isMerge = parents.trim().split(/\s+/).filter(Boolean).length > 1;
+      let additions = 0, deletions = 0;
+      for (const line of lines.slice(1)) {
+        const cols = line.split("\t");
+        if (cols.length < 2) continue;
+        const a = parseInt(cols[0]), d = parseInt(cols[1]);
+        if (!isNaN(a) && !isNaN(d)) { additions += a; deletions += d; }
+      }
+      commits.push({ hash: hash.trim(), subject: subject.trim(), author: author.trim(), date: date.trim(), isMerge, additions, deletions, isLocal: !pushedHashes.has(hash.trim()) });
+    }
+    return commits;
+  } catch { return []; }
+});
+
+ipcMain.handle("git:commit-diff", async (_, repoName: string, hash: string): Promise<string> => {
+  try {
+    const { stdout } = await execAsync(`git show ${hash}`, { cwd: resolveRoot(repoName), env: TOOL_ENV });
+    return stdout;
+  } catch { return ""; }
 });
 
 ipcMain.handle("github:list-repos", async (): Promise<{ name: string; branches: string[]; repoUrl: string }[]> => {

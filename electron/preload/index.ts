@@ -1,9 +1,23 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// Mirrors src/types/tasks.ts — inlined to keep the preload off the renderer's tsconfig.
+type PreloadTaskSummary = {
+  claudeSessionId: string;
+  panelNumber: number | null;
+  cwd: string;
+  source: "task-tools" | "todowrite" | "todo-file" | "manual";
+  repoRoot?: string;
+  updatedAt: number;
+  tasks: { id: string; subject: string; status: "pending" | "in_progress" | "completed"; activeForm?: string; updatedAt: number; priority?: "high" | "medium" | "low"; due?: string; blocked?: boolean }[];
+  total: number;
+  completed: number;
+  inProgress: number;
+};
+
 contextBridge.exposeInMainWorld("terminal", {
   getState: (): Promise<{
     terminalCounter: number;
-    lastPanels: { number: number; title: string }[];
+    lastPanels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[];
   }> => ipcRenderer.invoke("terminal:get-state"),
 
   create: (
@@ -17,11 +31,14 @@ contextBridge.exposeInMainWorld("terminal", {
   getHistory: (num: number): Promise<string> =>
     ipcRenderer.invoke("terminal:get-history", num),
 
+  getActivity: (): Promise<Record<number, number>> =>
+    ipcRenderer.invoke("terminal:get-activity"),
+
   listHistory: (): Promise<
     { number: number; size: number; lastModified: number; title?: string }[]
   > => ipcRenderer.invoke("terminal:list-history"),
 
-  savePanels: (panels: { number: number; title: string }[]): void =>
+  savePanels: (panels: { number: number; title: string; group?: string; dir?: "row" | "column"; named?: boolean }[]): void =>
     ipcRenderer.send("terminal:save-panels", panels),
 
   write: (id: string, data: string): void =>
@@ -131,6 +148,61 @@ contextBridge.exposeInMainWorld("terminal", {
   listClaudeHooks: (): Promise<{ event: string; matcher?: string; command: string }[]> =>
     ipcRenderer.invoke("claude:list-hooks"),
 
+  getPanelClaudeSessions: (panelNumber: number): Promise<{ claudeSessionId: string; cwd: string; startedAt: number }[]> =>
+    ipcRenderer.invoke("claude:get-panel-sessions", panelNumber),
+
+  getAllPanelClaudeSessions: (): Promise<Record<number, { claudeSessionId: string; cwd: string; startedAt: number }[]>> =>
+    ipcRenderer.invoke("claude:get-all-panel-sessions"),
+
+  getClaudeTitles: (): Promise<Record<number, { title: string; source: "custom" | "ai" }>> =>
+    ipcRenderer.invoke("claude:get-titles"),
+
+  getClaudeHookStatus: (): Promise<{ scriptPath: string; installed: boolean; taskScriptPath: string; taskInstalled: boolean }> =>
+    ipcRenderer.invoke("claude:hook-status"),
+
+  installClaudeHook: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("claude:install-hook"),
+
+  getAllClaudeTasks: (): Promise<PreloadTaskSummary[]> =>
+    ipcRenderer.invoke("claude:get-all-tasks"),
+
+  getPanelTasks: (panelNumber: number): Promise<PreloadTaskSummary[]> =>
+    ipcRenderer.invoke("claude:get-panel-tasks", panelNumber),
+
+  installTaskHook: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("claude:install-task-hook"),
+
+  addManualTask: (subject: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:add-manual-task", subject),
+
+  toggleManualTask: (taskId: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:toggle-manual-task", taskId),
+
+  removeManualTask: (taskId: string): Promise<PreloadTaskSummary | null> =>
+    ipcRenderer.invoke("claude:remove-manual-task", taskId),
+
+  deleteTodoFileItem: (filePath: string, index: number): Promise<boolean> =>
+    ipcRenderer.invoke("claude:delete-todo-file-item", filePath, index),
+
+  clearCompletedTodoFileItems: (filePath: string): Promise<number> =>
+    ipcRenderer.invoke("claude:clear-completed-todo-file-items", filePath),
+
+  rescanTodoFiles: (): Promise<number> =>
+    ipcRenderer.invoke("claude:rescan-todo-files"),
+
+  onClaudeSessionRecorded: (cb: (panelNumber: number, claudeSessionId: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, panelNumber: number, claudeSessionId: string) =>
+      cb(panelNumber, claudeSessionId);
+    ipcRenderer.on("terminal:claude-session-recorded", handler);
+    return () => ipcRenderer.removeListener("terminal:claude-session-recorded", handler);
+  },
+
+  onClaudeTasksUpdated: (cb: (summary: PreloadTaskSummary) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, summary: PreloadTaskSummary) => cb(summary);
+    ipcRenderer.on("terminal:claude-tasks-updated", handler);
+    return () => ipcRenderer.removeListener("terminal:claude-tasks-updated", handler);
+  },
+
   onClaudeConfigChanged: (cb: () => void): (() => void) => {
     const handler = () => cb();
     ipcRenderer.on("claude:config-changed", handler);
@@ -152,7 +224,7 @@ contextBridge.exposeInMainWorld("terminal", {
   cleanupMerged: (repo: string): Promise<{ deleted: string[]; failed: { branch: string; reason: string }[] }> =>
     ipcRenderer.invoke("prs:cleanup-merged", repo),
 
-  listPRs: (): Promise<{
+  listPRs: (repoNames: string[]): Promise<{
     number: number;
     title: string;
     url: string;
@@ -160,12 +232,174 @@ contextBridge.exposeInMainWorld("terminal", {
     headRefOid: string;
     isDraft: boolean;
     createdAt: string;
+    updatedAt: string;
     reviewDecision: string | null;
+    author: { login: string };
     repository: { name: string; nameWithOwner: string };
-  }[]> => ipcRenderer.invoke("prs:list"),
+    additions?: number;
+    deletions?: number;
+    reviewRequests: { __typename: string; login?: string; name?: string; slug?: string }[];
+    statusCheckRollup: { __typename: string; status?: string; conclusion: string | null; state?: string }[];
+    mergeable: string;
+    mergeStateStatus: string;
+  }[]> => ipcRenderer.invoke("prs:list", repoNames),
+
+  getGhLogin: (): Promise<string | null> =>
+    ipcRenderer.invoke("gh:current-user"),
+
+  getMyTeams: (): Promise<string[]> =>
+    ipcRenderer.invoke("gh:my-teams"),
+
+  searchPRRefs: (view: string): Promise<{ nameWithOwner: string; number: number }[]> =>
+    ipcRenderer.invoke("prs:search-refs", view),
+
+  hydratePRs: (refs: { nameWithOwner: string; number: number }[]): Promise<any[]> =>
+    ipcRenderer.invoke("prs:hydrate", refs),
+
+  getPRDiff: (repoName: string, prNumber: number): Promise<string> =>
+    ipcRenderer.invoke("prs:get-diff", repoName, prNumber),
+
+  getCIStatus: (repoNameWithOwner: string, prNumber: number): Promise<{
+    __typename: string;
+    name?: string;
+    context?: string;
+    status: string;
+    conclusion: string | null;
+    startedAt: string;
+    completedAt: string | null;
+    url: string;
+  }[]> => ipcRenderer.invoke("ci:get-status", repoNameWithOwner, prNumber),
 
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open-external", url),
+
+  // repoOrPath: a bare repo name (under ~/Documents/GitHub) or an absolute / ~-prefixed root
+  openFolder: (repoOrPath: string): Promise<void> =>
+    ipcRenderer.invoke("shell:open-folder", repoOrPath),
+
+  listDir: (repoOrPath: string, subdir: string): Promise<{ name: string; isDir: boolean; path: string }[]> =>
+    ipcRenderer.invoke("repo:list-dir", repoOrPath, subdir),
+
+  listDirs: (path?: string, showHidden?: boolean): Promise<{ path: string; parent: string | null; home: string; entries: { name: string; path: string; count: number | null }[] }> =>
+    ipcRenderer.invoke("fs:list-dirs", path, showHidden),
+
+  getFrequentDirs: (): Promise<{ name: string }[]> =>
+    ipcRenderer.invoke("fs:frequent-dirs"),
+
+  listFiles: (repoOrPath: string): Promise<string[]> =>
+    ipcRenderer.invoke("repo:list-files", repoOrPath),
+
+  grepMatches: (repoOrPath: string, query: string, limit?: number, mode?: { caseSensitive?: boolean; regex?: boolean }): Promise<{ hits: { file: string; count: number; line: number; preview: string }[]; totalFiles: number; badPattern?: boolean; truncated?: boolean; timedOut?: boolean }> =>
+    ipcRenderer.invoke("repo:grep-matches", repoOrPath, query, limit, mode),
+
+  openRepoFile: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-file", repoOrPath, filePath),
+
+  readRepoFile: (repoOrPath: string, filePath: string): Promise<string | null> =>
+    ipcRenderer.invoke("repo:read-file", repoOrPath, filePath),
+
+  writeRepoFile: (repoOrPath: string, filePath: string, content: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("repo:write-file", repoOrPath, filePath, content),
+
+  watchRepoFile: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:watch-file", repoOrPath, filePath),
+
+  unwatchRepoFile: (): Promise<void> => ipcRenderer.invoke("repo:unwatch-file"),
+
+  onFileChanged: (cb: (repo: string, filePath: string, content: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, repo: string, filePath: string, content: string) =>
+      cb(repo, filePath, content);
+    ipcRenderer.on("terminal:file-changed", handler);
+    return () => ipcRenderer.removeListener("terminal:file-changed", handler);
+  },
+
+  openInEditor: (repoOrPath: string, filePath: string, editor: string): Promise<void> =>
+    ipcRenderer.invoke("repo:open-in-editor", repoOrPath, filePath, editor),
+
+  showInFinder: (repoOrPath: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("repo:show-in-finder", repoOrPath, filePath),
+
+  getRepoBranch: (repoName: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:current-branch", repoName),
+  getRepoRoot: (cwd: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:repo-root", cwd),
+
+  getWorkingTree: (repoName: string): Promise<{
+    staged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+    unstaged: { path: string; filename: string; dir: string; status: string; additions: number; deletions: number }[];
+  }> => ipcRenderer.invoke("git:working-tree", repoName),
+
+  watchWorkingTree: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:watch-working-tree", repoName),
+
+  unwatchWorkingTree: (): Promise<void> => ipcRenderer.invoke("git:unwatch-working-tree"),
+
+  onWorkingTreeChanged: (cb: (repoName: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, repoName: string) => cb(repoName);
+    ipcRenderer.on("git:working-tree-changed", handler);
+    return () => ipcRenderer.removeListener("git:working-tree-changed", handler);
+  },
+
+  getChangeCount: (repoName: string): Promise<number> =>
+    ipcRenderer.invoke("git:change-count", repoName),
+
+  getRepoStatus: (repoOrPath: string): Promise<{ branch: string; ahead: number; behind: number; changed: number } | null> =>
+    ipcRenderer.invoke("git:repo-status", repoOrPath),
+
+  getFileDiff: (repoName: string, filePath: string, staged: boolean): Promise<string> =>
+    ipcRenderer.invoke("git:file-diff", repoName, filePath, staged),
+
+  stageFile: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("git:stage-file", repoName, filePath),
+
+  unstageFile: (repoName: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("git:unstage-file", repoName, filePath),
+
+  stageAll: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:stage-all", repoName),
+
+  unstageAll: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:unstage-all", repoName),
+
+  discardUnstaged: (repoName: string): Promise<void> =>
+    ipcRenderer.invoke("git:discard-unstaged", repoName),
+
+  gitCommit: (repoName: string, message: string): Promise<void> =>
+    ipcRenderer.invoke("git:commit", repoName, message),
+
+  getCommits: (repoName: string, headRefName: string, prNumber?: number): Promise<{
+    hash: string; subject: string; author: string; date: string; isMerge: boolean; additions: number; deletions: number;
+  }[]> => ipcRenderer.invoke("git:commits", repoName, headRefName, prNumber),
+
+  getCommitDiff: (repoName: string, hash: string): Promise<string> =>
+    ipcRenderer.invoke("git:commit-diff", repoName, hash),
+
+  getBranchDiff: (repoName: string): Promise<{ base: string | null; diff: string }> =>
+    ipcRenderer.invoke("git:branch-diff", repoName),
+
+  getBranchPR: (repoName: string, branch: string): Promise<number | null> =>
+    ipcRenderer.invoke("git:branch-pr", repoName, branch),
+
+  cloneRepository: (url: string, requestId: string): void =>
+    ipcRenderer.send("git:clone", { url, requestId }),
+
+  onCloneProgress: (requestId: string, cb: (text: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, text: string) => { if (id === requestId) cb(text); };
+    ipcRenderer.on("git:clone-progress", handler);
+    return () => ipcRenderer.removeListener("git:clone-progress", handler);
+  },
+
+  onCloneDone: (requestId: string, cb: (repoName: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, name: string) => { if (id === requestId) cb(name); };
+    ipcRenderer.on("git:clone-done", handler);
+    return () => ipcRenderer.removeListener("git:clone-done", handler);
+  },
+
+  onCloneError: (requestId: string, cb: (error: string) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, id: string, err: string) => { if (id === requestId) cb(err); };
+    ipcRenderer.on("git:clone-error", handler);
+    return () => ipcRenderer.removeListener("git:clone-error", handler);
+  },
 
   listNotes: (): Promise<{ id: string; title: string; command: string; description?: string; type?: "command" | "note"; body?: string }[]> =>
     ipcRenderer.invoke("notes:list"),
@@ -276,5 +510,39 @@ contextBridge.exposeInMainWorld("terminal", {
     const handler = (_: Electron.IpcRendererEvent, id: string, toolName: string) => { if (id === requestId) cb(toolName); };
     ipcRenderer.on("chat:tool-activity", handler);
     return () => ipcRenderer.removeListener("chat:tool-activity", handler);
+  },
+
+  getLinearIssues: (): Promise<{
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }> => ipcRenderer.invoke("linear:get-issues"),
+
+  syncLinear: (): Promise<{
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }> => ipcRenderer.invoke("linear:sync"),
+
+  onLinearIssuesUpdated: (cb: (state: {
+    issues: {
+      id: string; identifier: string; title: string; priority: number;
+      state: { name: string; type: string; color: string };
+      team: { name: string }; url: string; updatedAt: string;
+    }[];
+    lastSyncedAt: number | null;
+    error: string | null;
+  }) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, s: Parameters<typeof cb>[0]) => cb(s);
+    ipcRenderer.on("linear:issues-updated", handler);
+    return () => ipcRenderer.removeListener("linear:issues-updated", handler);
   },
 });
